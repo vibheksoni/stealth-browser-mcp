@@ -685,9 +685,6 @@ Web development • Mobile apps • Bots & automation • E-commerce • UI/UX d
 If this browser automation MCP saved you time or made you money, consider supporting the development:
 
 - **☕ Buy me a coffee**: [buymeacoffee.com/vibheksoni](https://buymeacoffee.com/vibheksoni)
-- **₿ Bitcoin**: `3QaS5hq2416Gd3386M6c9g5Dgc5RgvP3o2`
-- **Ł Litecoin**: `MM35KN1wUXREpwjj2RsmiKHM1ZWKDmeqDz`  
-- **◎ Solana**: `3LkBXDKLZXAgCRzAApa6dQG3ba7zRkUK82Bvmd9JWMdi`
 
 *Every contribution helps maintain and improve this project! 🚀*
 
