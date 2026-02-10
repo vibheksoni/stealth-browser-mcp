@@ -241,3 +241,8 @@ element_clones/
 testing/
 .claude
 requirements_frozen.txt
+ignore/
+.oclaude/
+CLAUDE.md
+AGENTS.md
+.mcp.json
