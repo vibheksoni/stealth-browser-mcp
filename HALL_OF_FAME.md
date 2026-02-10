@@ -18,6 +18,7 @@ See the full list on [GitHub Contributors](https://github.com/vibheksoni/stealth
 
 ## Notable Use Cases
 
+- **Marketplace automation** — Automating registrations and workflows on a German marketplace
 - **Compliance reporting** — Automating data collection across multiple portals for regulatory workflows
 - **Price monitoring** — Real-time price tracking across e-commerce sites
 - **UI prototyping** — Cloning production UI elements for rapid design iteration
