@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -46,16 +47,16 @@ class NetworkInterceptor:
                     
                     if resource_type.lower() in resource_patterns:
                         url_patterns.extend(resource_patterns[resource_type.lower()])
-                        print(f"[DEBUG] Added URL patterns for {resource_type}: {resource_patterns[resource_type.lower()]}")
+                        print(f"[DEBUG] Added URL patterns for {resource_type}: {resource_patterns[resource_type.lower()]}", file=sys.stderr)
                     else:
                         # Assume it's already a URL pattern
                         url_patterns.append(resource_type)
-                        print(f"[DEBUG] Added custom URL pattern: {resource_type}")
+                        print(f"[DEBUG] Added custom URL pattern: {resource_type}", file=sys.stderr)
                 
                 # Use network.set_blocked_ur_ls to block the URL patterns
                 if url_patterns:
                     await tab.send(uc.cdp.network.set_blocked_ur_ls(urls=url_patterns))
-                    print(f"[DEBUG] Blocked {len(url_patterns)} URL patterns: {url_patterns}")
+                    print(f"[DEBUG] Blocked {len(url_patterns)} URL patterns: {url_patterns}", file=sys.stderr)
             
             tab.add_handler(
                 uc.cdp.network.RequestWillBeSent,
@@ -70,7 +71,7 @@ class NetworkInterceptor:
                 if instance_id not in self._instance_requests:
                     self._instance_requests[instance_id] = []
         except Exception as e:
-            print(f"[DEBUG] Error in setup_interception: {e}")
+            print(f"[DEBUG] Error in setup_interception: {e}", file=sys.stderr)
             raise Exception(f"Failed to setup network interception: {str(e)}")
 
     async def _on_request(self, event, instance_id: str):

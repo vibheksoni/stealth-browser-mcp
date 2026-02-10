@@ -2707,7 +2707,7 @@ if __name__ == "__main__":
         DISABLED_SECTIONS.add("dynamic-hooks")
     
     if DISABLED_SECTIONS:
-        print(f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}")
+        print(f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}", file=sys.stderr)
     
     if args.transport == "http":
         mcp.run(transport="http", host=args.host, port=args.port)
