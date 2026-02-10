@@ -13,7 +13,7 @@ from debug_logger import debug_logger
 from models import BrowserInstance, BrowserState, BrowserOptions, PageState
 from persistent_storage import persistent_storage
 from dynamic_hook_system import dynamic_hook_system
-from platform_utils import get_platform_info, check_browser_executable
+from platform_utils import get_platform_info, check_browser_executable, merge_browser_args
 from process_cleanup import process_cleanup
 
 
@@ -70,7 +70,8 @@ class BrowserManager:
                 headless=options.headless,
                 user_data_dir=options.user_data_dir,
                 sandbox=options.sandbox,
-                browser_executable_path=browser_executable
+                browser_executable_path=browser_executable,
+                browser_args=merge_browser_args()
             )
 
             browser = await uc.start(config=config)

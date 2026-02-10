@@ -1,6 +1,7 @@
 """DOM manipulation and element interaction utilities."""
 
 import asyncio
+import json
 import time
 from typing import List, Optional, Dict, Any
 
@@ -58,7 +59,7 @@ class DOMHandler:
                               'limit': limit, 'processed_limit': processed_limit})
         try:
             if selector.startswith('//'):
-                elements = await tab.select_all(f'xpath={selector}')
+                elements = await tab.xpath(selector)
                 debug_logger.log_info('DOMHandler', 'query_elements',
                                      f'XPath query returned {len(elements)} elements')
             else:
@@ -69,20 +70,12 @@ class DOMHandler:
             results = []
             for idx, elem in enumerate(elements):
                 try:
-                    debug_logger.log_info('DOMHandler', 'query_elements',
-                                         f'Processing element {idx+1}/{len(elements)}')
-
                     if hasattr(elem, 'update'):
                         await elem.update()
-                        debug_logger.log_info('DOMHandler', 'query_elements',
-                                             f'Element {idx+1} updated')
 
                     tag_name = elem.tag_name if hasattr(elem, 'tag_name') else 'unknown'
                     text_content = elem.text_all if hasattr(elem, 'text_all') else ''
                     attrs = elem.attrs if hasattr(elem, 'attrs') else {}
-
-                    debug_logger.log_info('DOMHandler', 'query_elements',
-                                         f'Element {idx+1}: tag={tag_name}, text_len={len(text_content)}, attrs={len(attrs)}')
 
                     if text_filter and text_filter.lower() not in text_content.lower():
                         continue
@@ -113,11 +106,8 @@ class DOMHandler:
                                 'width': position.width,
                                 'height': position.height
                             }
-                            debug_logger.log_info('DOMHandler', 'query_elements',
-                                                 f'Element {idx+1} position: {bbox}')
-                    except Exception as pos_error:
-                        debug_logger.log_warning('DOMHandler', 'query_elements',
-                                                f'Could not get position for element {idx+1}: {pos_error}')
+                    except Exception:
+                        pass
 
                     is_clickable = False
 
@@ -397,20 +387,24 @@ class DOMHandler:
                 return True
 
             if value is not None:
+                safe_selector = json.dumps(selector)
+                safe_value = json.dumps(value)
                 await tab.evaluate(f"""
-                    const select = document.querySelector('{selector}');
+                    const select = document.querySelector({safe_selector});
                     if (select) {{
-                        select.value = '{value}';
+                        select.value = {safe_value};
                         select.dispatchEvent(new Event('change', {{bubbles: true}}));
                     }}
                 """)
                 return True
 
             elif index is not None:
+                safe_selector = json.dumps(selector)
+                safe_index = int(index)
                 await tab.evaluate(f"""
-                    const select = document.querySelector('{selector}');
-                    if (select && {index} >= 0 && {index} < select.options.length) {{
-                        select.selectedIndex = {index};
+                    const select = document.querySelector({safe_selector});
+                    if (select && {safe_index} >= 0 && {safe_index} < select.options.length) {{
+                        select.selectedIndex = {safe_index};
                         select.dispatchEvent(new Event('change', {{bubbles: true}}));
                     }}
                 """)
@@ -547,7 +541,8 @@ class DOMHandler:
         """
         try:
             if args:
-                result = await tab.evaluate(f'(function() {{ {script} }})({",".join(map(str, args))})')
+                serialized_args = ",".join(json.dumps(a) for a in args)
+                result = await tab.evaluate(f'(function() {{ {script} }})({serialized_args})')
             else:
                 result = await tab.evaluate(script)
 

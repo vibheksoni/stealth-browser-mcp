@@ -3,7 +3,7 @@
 import ctypes
 import os
 import platform
-import subprocess
+import shutil
 import sys
 from typing import List, Optional
 
@@ -38,13 +38,28 @@ def is_running_in_container() -> bool:
     Returns:
         bool: True if likely running in a container
     """
+    def _check_cgroup_for_docker() -> bool:
+        """
+        Check /proc/1/cgroup for docker indicators.
+
+        Returns:
+            bool: True if docker indicator found in cgroup file.
+        """
+        try:
+            if not os.path.exists('/proc/1/cgroup'):
+                return False
+            with open('/proc/1/cgroup', 'r') as f:
+                return 'docker' in f.read()
+        except (OSError, PermissionError):
+            return False
+
     container_indicators = [
         os.path.exists('/.dockerenv'),
-        os.path.exists('/proc/1/cgroup') and 'docker' in open('/proc/1/cgroup', 'r').read(),
+        _check_cgroup_for_docker(),
         os.environ.get('container') is not None,
         os.environ.get('KUBERNETES_SERVICE_HOST') is not None,
     ]
-    
+
     return any(container_indicators)
 
 
@@ -201,13 +216,10 @@ def check_browser_executable() -> Optional[str]:
     ]
     for name in browser_names:
         try:
-            result = subprocess.run(['which', name], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0 and result.stdout.strip():
-                found_path = result.stdout.strip()
-                # Verify the found executable is actually executable
-                if os.path.isfile(found_path) and os.access(found_path, os.X_OK):
-                    return found_path
-        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+            found_path = shutil.which(name)
+            if found_path and os.path.isfile(found_path) and os.access(found_path, os.X_OK):
+                return found_path
+        except Exception:
             continue
     
     return None

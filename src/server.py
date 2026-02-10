@@ -174,8 +174,6 @@ async def spawn_browser(
             await network_interceptor.setup_interception(
                 tab, instance.instance_id, block_resources
             )
-            await dynamic_hook_system.setup_interception(tab, instance.instance_id)
-            dynamic_hook_system.add_instance(instance.instance_id)
         return {
             "instance_id": instance.instance_id,
             "state": instance.state,
@@ -276,8 +274,8 @@ async def navigate(
         raise Exception(f"Instance not found: {instance_id}")
     try:
         if referrer:
-            await tab.send(uc.cdp.page.set_referrer_policy(
-                referrerPolicy='origin-when-cross-origin'
+            await tab.send(uc.cdp.network.set_extra_http_headers(
+                headers={"Referer": referrer}
             ))
         await tab.get(url)
         if wait_until == "domcontentloaded":
@@ -1553,9 +1551,9 @@ async def hot_reload() -> str:
                 elif module_name == 'debug_logger':
                     global debug_logger
                     from debug_logger import debug_logger
-        return f"✅ Hot reload completed! Reloaded modules: {', '.join(reloaded_modules)}"
+        return f"Hot reload completed. Reloaded modules: {', '.join(reloaded_modules)}"
     except Exception as e:
-        return f"❌ Hot reload failed: {str(e)}"
+        return f"Hot reload failed: {str(e)}"
 
 
 @section_tool("debugging")

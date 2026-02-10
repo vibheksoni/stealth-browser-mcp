@@ -85,9 +85,11 @@ class DynamicHookAIInterface:
             hooks = self.hook_system.list_hooks()
             
             if instance_id:
+                instance_hook_ids = self.hook_system.instance_hooks.get(instance_id, [])
                 filtered_hooks = []
                 for hook in hooks:
-                    if instance_id in self.hook_system.instance_hooks.get(instance_id, []):
+                    hook_id = hook.get("hook_id") or hook.get("id")
+                    if hook_id and hook_id in instance_hook_ids:
                         filtered_hooks.append(hook)
                 hooks = filtered_hooks
             
@@ -314,7 +316,8 @@ def process_request(request):
             elif action == "log":
                 function_code = '''
 def process_request(request):
-    print(f"[HOOK LOG] {request['method']} {request['url']}")
+    import sys
+    print(f"[HOOK LOG] {request['method']} {request['url']}", file=sys.stderr)
     return HookAction(action="continue")
 '''
             else:
