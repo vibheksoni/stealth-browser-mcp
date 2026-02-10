@@ -621,26 +621,22 @@ class DOMHandler:
             bool: True if scroll succeeded, False otherwise.
         """
         try:
+            behavior = "'smooth'" if smooth else "'instant'"
+
             if direction == "down":
-                script = f"window.scrollBy(0, {amount})"
+                script = f"window.scrollBy({{top: {amount}, left: 0, behavior: {behavior}}})"
             elif direction == "up":
-                script = f"window.scrollBy(0, -{amount})"
+                script = f"window.scrollBy({{top: -{amount}, left: 0, behavior: {behavior}}})"
             elif direction == "right":
-                script = f"window.scrollBy({amount}, 0)"
+                script = f"window.scrollBy({{top: 0, left: {amount}, behavior: {behavior}}})"
             elif direction == "left":
-                script = f"window.scrollBy(-{amount}, 0)"
+                script = f"window.scrollBy({{top: 0, left: -{amount}, behavior: {behavior}}})"
             elif direction == "top":
-                script = "window.scrollTo(0, 0)"
+                script = f"window.scrollTo({{top: 0, left: 0, behavior: {behavior}}})"
             elif direction == "bottom":
-                script = "window.scrollTo(0, document.body.scrollHeight)"
+                script = f"window.scrollTo({{top: document.body.scrollHeight, left: 0, behavior: {behavior}}})"
             else:
                 raise ValueError(f"Invalid scroll direction: {direction}")
-
-            if smooth:
-                script = script.replace("scrollBy", "scrollBy({behavior: 'smooth'}, ")
-                script = script.replace("scrollTo", "scrollTo({behavior: 'smooth', top: ")
-                if "scrollTo" in script:
-                    script = script.replace(")", "})")
 
             await tab.evaluate(script)
             await asyncio.sleep(0.5 if smooth else 0.1)
