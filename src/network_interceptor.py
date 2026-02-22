@@ -2,8 +2,10 @@
 
 import asyncio
 import base64
+import json
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import nodriver as uc
@@ -19,6 +21,7 @@ class NetworkInterceptor:
         self._requests: Dict[str, NetworkRequest] = {}
         self._responses: Dict[str, NetworkResponse] = {}
         self._instance_requests: Dict[str, List[str]] = {}
+        self._instance_filters: Dict[str, Dict[str, List[str]]] = {}
         self._lock = asyncio.Lock()
 
     async def setup_interception(self, tab: Tab, instance_id: str, block_resources: List[str] = None):
@@ -64,7 +67,7 @@ class NetworkInterceptor:
             )
             tab.add_handler(
                 uc.cdp.network.ResponseReceived,
-                lambda event: asyncio.create_task(self._on_response(event, instance_id)),
+                lambda event: asyncio.create_task(self._on_response(event, instance_id, tab)),
             )
             
             async with self._lock:
@@ -84,6 +87,18 @@ class NetworkInterceptor:
         try:
             request_id = event.request_id
             request = event.request
+            resource_type = event.type.value if hasattr(event, "type") else None
+
+            async with self._lock:
+                filters = self._instance_filters.get(instance_id, {})
+                include = filters.get("include", [])
+                exclude = filters.get("exclude", [])
+
+                if include and resource_type and resource_type.lower() not in [t.lower() for t in include]:
+                    return
+                if exclude and resource_type and resource_type.lower() in [t.lower() for t in exclude]:
+                    return
+
             cookies = {}
             if hasattr(request, "headers") and "Cookie" in request.headers:
                 cookie_str = request.headers["Cookie"]
@@ -91,6 +106,7 @@ class NetworkInterceptor:
                     if "=" in cookie:
                         key, value = cookie.split("=", 1)
                         cookies[key] = value
+
             network_request = NetworkRequest(
                 request_id=request_id,
                 instance_id=instance_id,
@@ -99,7 +115,7 @@ class NetworkInterceptor:
                 headers=dict(request.headers) if hasattr(request, "headers") else {},
                 cookies=cookies,
                 post_data=request.post_data if hasattr(request, "post_data") else None,
-                resource_type=event.type if hasattr(event, "type") else None,
+                resource_type=resource_type,
             )
             async with self._lock:
                 self._requests[request_id] = network_request
@@ -107,27 +123,146 @@ class NetworkInterceptor:
         except Exception:
             pass
 
-    async def _on_response(self, event, instance_id: str):
+    async def _on_response(self, event, instance_id: str, tab: Tab = None):
         """
         Handle response event.
 
         event: Any - The event object containing response data.
         instance_id: str - The browser instance identifier.
+        tab: Tab - The browser tab (optional, for body capture).
         """
         try:
             request_id = event.request_id
             response = event.response
+
+            body = None
+            if tab:
+                try:
+                    result = await tab.send(uc.cdp.network.get_response_body(request_id=request_id))
+                    if result:
+                        body_str, base64_encoded = result
+                        if base64_encoded:
+                            body = base64.b64decode(body_str)
+                        else:
+                            body = body_str.encode("utf-8")
+                except Exception:
+                    pass
+
             network_response = NetworkResponse(
                 request_id=request_id,
                 status=response.status,
                 headers=dict(response.headers) if hasattr(response, "headers") else {},
                 content_type=response.mime_type if hasattr(response, "mime_type") else None,
+                body=body,
             )
             async with self._lock:
                 self._responses[request_id] = network_response
         except Exception:
             pass
 
+
+    async def set_capture_filters(
+        self,
+        instance_id: str,
+        include_types: Optional[List[str]] = None,
+        exclude_types: Optional[List[str]] = None,
+    ):
+        """
+        Set resource type filters for network capture.
+
+        instance_id: str - The browser instance identifier.
+        include_types: Optional[List[str]] - Only capture these types (Document, Stylesheet, Image, Media, Font, Script, XHR, Fetch, etc).
+        exclude_types: Optional[List[str]] - Exclude these types from capture.
+        """
+        async with self._lock:
+            self._instance_filters[instance_id] = {
+                "include": include_types or [],
+                "exclude": exclude_types or [],
+            }
+
+    async def get_capture_filters(self, instance_id: str) -> Dict[str, List[str]]:
+        """
+        Get current capture filters.
+
+        instance_id: str - The browser instance identifier.
+        Returns: Dict[str, List[str]] - Current filters.
+        """
+        async with self._lock:
+            return self._instance_filters.get(instance_id, {"include": [], "exclude": []})
+
+    async def search_requests(
+        self,
+        instance_id: str,
+        url_pattern: Optional[str] = None,
+        method: Optional[str] = None,
+        status_code: Optional[int] = None,
+        response_contains: Optional[str] = None,
+        payload_contains: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Search requests with advanced filters and pagination.
+
+        instance_id: str - The browser instance identifier.
+        url_pattern: Optional[str] - Filter by URL pattern (substring match).
+        method: Optional[str] - Filter by HTTP method.
+        status_code: Optional[int] - Filter by response status code.
+        response_contains: Optional[str] - Search in response body.
+        payload_contains: Optional[str] - Search in request payload.
+        resource_type: Optional[str] - Filter by resource type.
+        limit: int - Max results per page.
+        offset: int - Starting index for pagination.
+        Returns: Dict[str, Any] - Paginated results with metadata.
+        """
+        async with self._lock:
+            request_ids = self._instance_requests.get(instance_id, [])
+            matches = []
+
+            for req_id in request_ids:
+                if req_id not in self._requests:
+                    continue
+
+                request = self._requests[req_id]
+                response = self._responses.get(req_id)
+
+                if url_pattern and url_pattern.lower() not in request.url.lower():
+                    continue
+                if method and request.method.upper() != method.upper():
+                    continue
+                if resource_type and (not request.resource_type or resource_type.lower() not in request.resource_type.lower()):
+                    continue
+                if status_code and (not response or response.status != status_code):
+                    continue
+                if payload_contains and (not request.post_data or payload_contains.lower() not in request.post_data.lower()):
+                    continue
+                if response_contains and response and response.body:
+                    try:
+                        body_str = response.body.decode('utf-8', errors='ignore')
+                        if response_contains.lower() not in body_str.lower():
+                            continue
+                    except:
+                        continue
+
+                matches.append({
+                    "request_id": req_id,
+                    "url": request.url,
+                    "method": request.method,
+                    "status": response.status if response else None,
+                    "resource_type": request.resource_type,
+                })
+
+            total = len(matches)
+            paginated = matches[offset:offset + limit]
+
+            return {
+                "results": paginated,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + limit < total,
+            }
 
     async def list_requests(self, instance_id: str, filter_type: Optional[str] = None) -> List[NetworkRequest]:
         """
@@ -221,6 +356,89 @@ class NetworkInterceptor:
             return True
         except Exception as e:
             raise Exception(f"Failed to set user agent: {str(e)}")
+
+    async def export_to_json(self, instance_id: str, filepath: str) -> bool:
+        """
+        Export network data to JSON file.
+
+        instance_id: str - The browser instance identifier.
+        filepath: str - Path to save JSON file.
+        Returns: bool - True if successful.
+        """
+        async with self._lock:
+            request_ids = self._instance_requests.get(instance_id, [])
+            data = {"requests": [], "responses": []}
+
+            for req_id in request_ids:
+                if req_id in self._requests:
+                    req = self._requests[req_id]
+                    data["requests"].append({
+                        "request_id": req.request_id,
+                        "url": req.url,
+                        "method": req.method,
+                        "headers": req.headers,
+                        "cookies": req.cookies,
+                        "post_data": req.post_data,
+                        "resource_type": req.resource_type,
+                        "timestamp": req.timestamp.isoformat(),
+                    })
+
+                if req_id in self._responses:
+                    resp = self._responses[req_id]
+                    data["responses"].append({
+                        "request_id": resp.request_id,
+                        "status": resp.status,
+                        "headers": resp.headers,
+                        "content_type": resp.content_type,
+                        "body": base64.b64encode(resp.body).decode('utf-8') if resp.body else None,
+                        "timestamp": resp.timestamp.isoformat(),
+                    })
+
+            Path(filepath).write_text(json.dumps(data, indent=2))
+            return True
+
+    async def import_from_json(self, instance_id: str, filepath: str) -> bool:
+        """
+        Import network data from JSON file.
+
+        instance_id: str - The browser instance identifier.
+        filepath: str - Path to JSON file.
+        Returns: bool - True if successful.
+        """
+        data = json.loads(Path(filepath).read_text())
+
+        async with self._lock:
+            if instance_id not in self._instance_requests:
+                self._instance_requests[instance_id] = []
+
+            for req_data in data.get("requests", []):
+                req = NetworkRequest(
+                    request_id=req_data["request_id"],
+                    instance_id=instance_id,
+                    url=req_data["url"],
+                    method=req_data["method"],
+                    headers=req_data["headers"],
+                    cookies=req_data["cookies"],
+                    post_data=req_data.get("post_data"),
+                    resource_type=req_data.get("resource_type"),
+                    timestamp=datetime.fromisoformat(req_data["timestamp"]),
+                )
+                self._requests[req.request_id] = req
+                if req.request_id not in self._instance_requests[instance_id]:
+                    self._instance_requests[instance_id].append(req.request_id)
+
+            for resp_data in data.get("responses", []):
+                resp = NetworkResponse(
+                    request_id=resp_data["request_id"],
+                    status=resp_data["status"],
+                    headers=resp_data["headers"],
+                    content_type=resp_data.get("content_type"),
+                    body=base64.b64decode(resp_data["body"]) if resp_data.get("body") else None,
+                    timestamp=datetime.fromisoformat(resp_data["timestamp"]),
+                )
+                self._responses[resp.request_id] = resp
+
+            return True
 
     async def enable_cache(self, tab: Tab, enabled: bool = True):
         """

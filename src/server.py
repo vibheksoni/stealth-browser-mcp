@@ -820,6 +820,123 @@ async def get_response_content(
 
 
 @section_tool("network-debugging")
+async def search_network_requests(
+    instance_id: str,
+    url_pattern: Optional[str] = None,
+    method: Optional[str] = None,
+    status_code: Optional[int] = None,
+    response_contains: Optional[str] = None,
+    payload_contains: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """
+    Search network requests with advanced filters and pagination.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        url_pattern (Optional[str]): Filter by URL pattern (substring match).
+        method (Optional[str]): Filter by HTTP method.
+        status_code (Optional[int]): Filter by response status code.
+        response_contains (Optional[str]): Search in response body.
+        payload_contains (Optional[str]): Search in request payload.
+        resource_type (Optional[str]): Filter by resource type.
+        limit (int): Max results per page.
+        offset (int): Starting index for pagination.
+
+    Returns:
+        Dict[str, Any]: Paginated results with metadata.
+    """
+    return await network_interceptor.search_requests(
+        instance_id,
+        url_pattern,
+        method,
+        status_code,
+        response_contains,
+        payload_contains,
+        resource_type,
+        limit,
+        offset,
+    )
+
+
+@section_tool("network-debugging")
+async def export_network_data(
+    instance_id: str,
+    filepath: str
+) -> bool:
+    """
+    Export network data to JSON file.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        filepath (str): Path to save JSON file.
+
+    Returns:
+        bool: True if successful.
+    """
+    return await network_interceptor.export_to_json(instance_id, filepath)
+
+
+@section_tool("network-debugging")
+async def import_network_data(
+    instance_id: str,
+    filepath: str
+) -> bool:
+    """
+    Import network data from JSON file.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        filepath (str): Path to JSON file.
+
+    Returns:
+        bool: True if successful.
+    """
+    return await network_interceptor.import_from_json(instance_id, filepath)
+
+
+@section_tool("network-debugging")
+async def set_network_capture_filters(
+    instance_id: str,
+    include_types: Optional[List[str]] = None,
+    exclude_types: Optional[List[str]] = None,
+) -> bool:
+    """
+    Set resource type filters for network capture to reduce memory usage.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        include_types (Optional[List[str]]): Only capture these types (e.g., ['XHR', 'Fetch', 'Document']).
+        exclude_types (Optional[List[str]]): Exclude these types (e.g., ['Image', 'Stylesheet', 'Font', 'Script']).
+
+    Common resource types: Document, Stylesheet, Image, Media, Font, Script, XHR, Fetch, WebSocket, Manifest, Other
+
+    Returns:
+        bool: True if successful.
+    """
+    await network_interceptor.set_capture_filters(instance_id, include_types, exclude_types)
+    return True
+
+
+@section_tool("network-debugging")
+async def get_network_capture_filters(
+    instance_id: str
+) -> Dict[str, List[str]]:
+    """
+    Get current network capture filters.
+
+    Args:
+        instance_id (str): Browser instance ID.
+
+    Returns:
+        Dict[str, List[str]]: Current filters with 'include' and 'exclude' lists.
+    """
+    return await network_interceptor.get_capture_filters(instance_id)
+
+
+@section_tool("network-debugging")
 async def modify_headers(
     instance_id: str,
     headers: Dict[str, str]
