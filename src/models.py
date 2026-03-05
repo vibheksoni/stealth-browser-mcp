@@ -89,6 +89,8 @@ class BrowserOptions(BaseModel):
     viewport_width: int = Field(default=1920, description="Viewport width in pixels")
     viewport_height: int = Field(default=1080, description="Viewport height in pixels")
     proxy: Optional[str] = Field(default=None, description="Proxy server URL")
+    browser_args: List[str] = Field(default_factory=list, description="Additional browser launch arguments")
+    timezone_id: Optional[str] = Field(default=None, description="IANA timezone ID applied via TZ for browser spawn")
     block_resources: List[str] = Field(default_factory=list, description="Resource types to block")
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     user_data_dir: Optional[str] = Field(default=None, description="Path to user data directory")

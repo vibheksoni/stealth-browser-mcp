@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import tempfile
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -41,19 +42,36 @@ from platform_utils import validate_browser_environment, get_platform_info
 from process_cleanup import process_cleanup
 
 DISABLED_SECTIONS = set()
+SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
+
+
+def parse_bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 def is_section_enabled(section: str) -> bool:
     """Check if a tool section is enabled."""
     return section not in DISABLED_SECTIONS
 
 def section_tool(section: str):
-    """Decorator to conditionally register tools based on section status."""
+    """Decorator that registers tools and tracks section membership."""
     def decorator(func):
-        if is_section_enabled(section):
-            return mcp.tool(func)
-        else:
-            return func
+        SECTION_TOOLS[section].append(func.__name__)
+        return mcp.tool(func)
     return decorator
+
+
+def apply_disabled_sections() -> None:
+    """Apply section disable rules by unregistering tools from FastMCP."""
+    for section in sorted(DISABLED_SECTIONS):
+        for tool_name in SECTION_TOOLS.get(section, []):
+            try:
+                mcp.remove_tool(tool_name)
+            except Exception:
+                # Tool may already be removed by another section policy.
+                continue
 
 @asynccontextmanager
 async def app_lifespan(server):
@@ -123,6 +141,8 @@ async def spawn_browser(
     viewport_width: int = 1920,
     viewport_height: int = 1080,
     proxy: Optional[str] = None,
+    browser_args: List[str] = None,
+    timezone_id: Optional[str] = None,
     block_resources: List[str] = None,
     extra_headers: Dict[str, str] = None,
     user_data_dir: Optional[str] = None,
@@ -137,6 +157,8 @@ async def spawn_browser(
         viewport_width (int): Viewport width in pixels.
         viewport_height (int): Viewport height in pixels.
         proxy (Optional[str]): Proxy server URL.
+        browser_args (List[str]): Additional browser launch args.
+        timezone_id (Optional[str]): IANA timezone ID for browser spawn TZ.
         block_resources (List[str]): List of resource types to block (e.g., ['image', 'font', 'stylesheet']).
         extra_headers (Dict[str, str]): Additional HTTP headers.
         user_data_dir (Optional[str]): Path to user data directory for persistent sessions.
@@ -163,6 +185,8 @@ async def spawn_browser(
             viewport_width=viewport_width,
             viewport_height=viewport_height,
             proxy=proxy,
+            browser_args=browser_args or [],
+            timezone_id=timezone_id,
             block_resources=block_resources or [],
             extra_headers=extra_headers or {},
             user_data_dir=user_data_dir,
@@ -174,11 +198,13 @@ async def spawn_browser(
             await network_interceptor.setup_interception(
                 tab, instance.instance_id, block_resources
             )
+        spawn_diagnostics = await browser_manager.get_spawn_diagnostics(instance.instance_id)
         return {
             "instance_id": instance.instance_id,
             "state": instance.state,
             "headless": instance.headless,
-            "viewport": instance.viewport
+            "viewport": instance.viewport,
+            "spawn_diagnostics": spawn_diagnostics or {},
         }
     except Exception as e:
         raise Exception(f"Failed to spawn browser: {str(e)}")
@@ -2732,6 +2758,10 @@ def validate_hook_function(function_code: str) -> Dict[str, Any]:
     return dynamic_hook_ai.validate_hook_function(function_code=function_code)
 
 
+if parse_bool_env("XPOOL_SAFE_MODE", default=False):
+    DISABLED_SECTIONS.add("cdp-functions")
+    apply_disabled_sections()
+
 
 if __name__ == "__main__":
     import argparse
@@ -2771,6 +2801,12 @@ if __name__ == "__main__":
                       help="Enable only core browser management and element interaction (disable everything else)")
     parser.add_argument("--list-sections", action="store_true",
                       help="List all available tool sections and exit")
+    parser.add_argument(
+        "--xpool-safe",
+        action="store_true",
+        default=parse_bool_env("XPOOL_SAFE_MODE", default=False),
+        help="Enable xpool-safe surface (disables cdp-functions tools that trigger Runtime.enable)",
+    )
     
     args = parser.parse_args()
     
@@ -2820,6 +2856,11 @@ if __name__ == "__main__":
         DISABLED_SECTIONS.add("debugging")
     if args.disable_dynamic_hooks:
         DISABLED_SECTIONS.add("dynamic-hooks")
+
+    if args.xpool_safe:
+        DISABLED_SECTIONS.add("cdp-functions")
+
+    apply_disabled_sections()
     
     if DISABLED_SECTIONS:
         print(f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}", file=sys.stderr)
