@@ -3,7 +3,7 @@
 import asyncio
 import sys
 import uuid
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
 
 import nodriver as uc
@@ -15,6 +15,14 @@ from persistent_storage import persistent_storage
 from dynamic_hook_system import dynamic_hook_system
 from platform_utils import get_platform_info, check_browser_executable, merge_browser_args
 from process_cleanup import process_cleanup
+from proxy_forwarder import AuthenticatedProxyForwarder
+from proxy_utils import (
+    ProxyConfig,
+    ProxyConfigError,
+    merge_proxy_server_arg,
+    parse_proxy_config,
+    redact_launch_arg,
+)
 
 
 class BrowserManager:
@@ -23,6 +31,71 @@ class BrowserManager:
     def __init__(self):
         self._instances: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
+        self._spawn_diagnostics: Dict[str, Dict[str, Any]] = {}
+        self._proxy_forwarders: Dict[str, AuthenticatedProxyForwarder] = {}
+
+    @staticmethod
+    def _append_user_agent_arg(args: List[str], user_agent: Optional[str]) -> List[str]:
+        """Merge a user agent override into launch arguments."""
+        if not user_agent:
+            return args
+        ua_prefix = "--user-agent="
+        filtered = [arg for arg in args if not arg.startswith(ua_prefix)]
+        filtered.append(f"{ua_prefix}{user_agent}")
+        return filtered
+
+    @staticmethod
+    def _build_spawn_diagnostics(
+        *,
+        launch_args: List[str],
+        proxy_server: Optional[str],
+        launch_proxy_server: Optional[str],
+        timezone_id: Optional[str],
+        sandbox: bool,
+        headless: bool,
+        user_data_dir: Optional[str],
+    ) -> Dict[str, Any]:
+        """Build redacted diagnostics for a spawned browser instance."""
+        return {
+            "effective_browser_args": [redact_launch_arg(arg) for arg in launch_args],
+            "proxy_server": proxy_server,
+            "launch_proxy_server": launch_proxy_server,
+            "timezone_id": timezone_id,
+            "sandbox": sandbox,
+            "headless": headless,
+            "user_data_dir": user_data_dir,
+        }
+
+    @staticmethod
+    async def _apply_timezone_override(
+        *,
+        tab: Tab,
+        timezone_id: Optional[str],
+    ) -> Optional[str]:
+        """Apply a CDP timezone override to a browser tab."""
+        if not timezone_id:
+            return None
+
+        trimmed_timezone = timezone_id.strip()
+        if not trimmed_timezone:
+            return None
+
+        await tab.send(uc.cdp.emulation.set_timezone_override(timezone_id=trimmed_timezone))
+        return trimmed_timezone
+
+    @staticmethod
+    async def _stop_browser(browser: Browser) -> None:
+        """Stop a nodriver browser regardless of sync or async stop semantics."""
+        stop_result = browser.stop()
+        if asyncio.iscoroutine(stop_result):
+            await stop_result
+
+    async def _close_proxy_forwarder(self, instance_id: str) -> None:
+        """Close and forget any authenticated proxy forwarder for an instance."""
+        proxy_forwarder = self._proxy_forwarders.pop(instance_id, None)
+        if proxy_forwarder is None:
+            return
+        await proxy_forwarder.close()
 
     async def spawn_browser(self, options: BrowserOptions) -> BrowserInstance:
         """
@@ -43,8 +116,23 @@ class BrowserManager:
             viewport={"width": options.viewport_width, "height": options.viewport_height}
         )
 
+        browser: Optional[Browser] = None
+        proxy_forwarder: Optional[AuthenticatedProxyForwarder] = None
         try:
             platform_info = get_platform_info()
+            proxy_config: Optional[ProxyConfig] = None
+            launch_proxy_server: Optional[str] = None
+            if options.proxy:
+                try:
+                    proxy_config = parse_proxy_config(options.proxy)
+                except ProxyConfigError as error:
+                    raise Exception(str(error))
+                if proxy_config.username is not None:
+                    proxy_forwarder = AuthenticatedProxyForwarder(options.proxy)
+                    await proxy_forwarder.start()
+                    launch_proxy_server = proxy_forwarder.proxy_server
+                else:
+                    launch_proxy_server = proxy_config.server
             
             # Detect the best available browser executable (Chrome, Chromium, or Edge)
             browser_executable = check_browser_executable()
@@ -65,13 +153,21 @@ class BrowserManager:
                 "spawn_browser",
                 f"Platform: {platform_info['system']} | Root: {platform_info['is_root']} | Container: {platform_info['is_container']} | Sandbox: {options.sandbox} | Browser: {browser_type} ({browser_executable})"
             )
+
+            caller_args = list(options.browser_args or [])
+            caller_args = self._append_user_agent_arg(caller_args, options.user_agent)
+            caller_args = merge_proxy_server_arg(
+                caller_args,
+                launch_proxy_server,
+            )
+            launch_args = merge_browser_args(caller_args)
             
             config = uc.Config(
                 headless=options.headless,
                 user_data_dir=options.user_data_dir,
                 sandbox=options.sandbox,
                 browser_executable_path=browser_executable,
-                browser_args=merge_browser_args()
+                browser_args=launch_args
             )
 
             browser = await uc.start(config=config)
@@ -82,11 +178,6 @@ class BrowserManager:
             else:
                 debug_logger.log_warning("browser_manager", "spawn_browser", 
                                        f"Browser {instance_id} has no process to track")
-
-            if options.user_agent:
-                await tab.send(uc.cdp.emulation.set_user_agent_override(
-                    user_agent=options.user_agent
-                ))
 
             if options.extra_headers:
                 await tab.send(uc.cdp.network.set_extra_http_headers(
@@ -101,7 +192,25 @@ class BrowserManager:
             )
             print(f"[DEBUG] Set viewport to {options.viewport_width}x{options.viewport_height}", file=sys.stderr)
 
+            applied_timezone_id = await self._apply_timezone_override(
+                tab=tab,
+                timezone_id=options.timezone_id,
+            )
+
             await self._setup_dynamic_hooks(tab, instance_id)
+
+            spawn_diagnostics = self._build_spawn_diagnostics(
+                launch_args=launch_args,
+                proxy_server=proxy_config.server if proxy_config else None,
+                launch_proxy_server=launch_proxy_server,
+                timezone_id=applied_timezone_id,
+                sandbox=options.sandbox,
+                headless=options.headless,
+                user_data_dir=options.user_data_dir,
+            )
+            self._spawn_diagnostics[instance_id] = spawn_diagnostics
+            if proxy_forwarder is not None:
+                self._proxy_forwarders[instance_id] = proxy_forwarder
 
             async with self._lock:
                 self._instances[instance_id] = {
@@ -109,6 +218,7 @@ class BrowserManager:
                     'tab': tab,
                     'instance': instance,
                     'options': options,
+                    'spawn_diagnostics': spawn_diagnostics,
                     'network_data': []
                 }
 
@@ -123,22 +233,47 @@ class BrowserManager:
             })
 
         except Exception as e:
+            if browser is not None:
+                try:
+                    await self._stop_browser(browser)
+                except Exception:
+                    pass
+            if proxy_forwarder is not None:
+                try:
+                    await proxy_forwarder.close()
+                except Exception:
+                    pass
+            try:
+                process_cleanup.kill_browser_process(instance_id)
+            except Exception:
+                pass
             instance.state = BrowserState.ERROR
             raise Exception(f"Failed to spawn browser: {str(e)}")
 
         return instance
     
-    async def _setup_dynamic_hooks(self, tab: Tab, instance_id: str):
+    async def _setup_dynamic_hooks(self, tab: Tab, instance_id: str) -> bool:
         """Setup dynamic hook system for browser instance."""
         try:
             dynamic_hook_system.add_instance(instance_id)
-            
+
             await dynamic_hook_system.setup_interception(tab, instance_id)
-            
-            debug_logger.log_info("browser_manager", "_setup_dynamic_hooks", f"Dynamic hook system setup complete for instance {instance_id}")
-            
+
+            debug_logger.log_info(
+                "browser_manager",
+                "_setup_dynamic_hooks",
+                f"Dynamic hook system setup complete for instance {instance_id}",
+            )
+
+            return True
+
         except Exception as e:
-            debug_logger.log_error("browser_manager", "_setup_dynamic_hooks", f"Failed to setup dynamic hooks for {instance_id}: {e}")
+            debug_logger.log_error(
+                "browser_manager",
+                "_setup_dynamic_hooks",
+                f"Failed to setup dynamic hooks for {instance_id}: {e}",
+            )
+            return False
 
     async def get_instance(self, instance_id: str) -> Optional[dict]:
         """
@@ -226,7 +361,12 @@ class BrowserManager:
                                            f"Process cleanup failed for {instance_id}: {e}")
 
                 try:
-                    await browser.stop()
+                    await self._stop_browser(browser)
+                except Exception:
+                    pass
+
+                try:
+                    await self._close_proxy_forwarder(instance_id)
                 except Exception:
                     pass
 
@@ -267,6 +407,7 @@ class BrowserManager:
                     pass
 
                 del self._instances[instance_id]
+                self._spawn_diagnostics.pop(instance_id, None)
 
                 persistent_storage.remove_instance(instance_id)
 
@@ -282,6 +423,10 @@ class BrowserManager:
                         data = self._instances[instance_id]
                         data['instance'].state = BrowserState.CLOSED
                         del self._instances[instance_id]
+                        self._spawn_diagnostics.pop(instance_id, None)
+                        proxy_forwarder = self._proxy_forwarders.pop(instance_id, None)
+                        if proxy_forwarder is not None:
+                            asyncio.create_task(proxy_forwarder.close())
                         persistent_storage.remove_instance(instance_id)
             except Exception:
                 pass
@@ -289,6 +434,10 @@ class BrowserManager:
         except Exception as e:
             debug_logger.log_error("browser_manager", "close_instance", e)
             return False
+
+    async def get_spawn_diagnostics(self, instance_id: str) -> Optional[Dict[str, Any]]:
+        """Get spawn diagnostics for an instance."""
+        return self._spawn_diagnostics.get(instance_id)
 
     async def get_tab(self, instance_id: str) -> Optional[Tab]:
         """
