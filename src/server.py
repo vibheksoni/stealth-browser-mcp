@@ -295,31 +295,13 @@ async def navigate(
     """
     if isinstance(timeout, str):
         timeout = int(timeout)
-    tab = await browser_manager.get_tab(instance_id)
-    if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    try:
-        if referrer:
-            await tab.send(uc.cdp.network.set_extra_http_headers(
-                headers={"Referer": referrer}
-            ))
-        await tab.get(url)
-        if wait_until == "domcontentloaded":
-            await tab.wait(uc.cdp.page.DomContentEventFired)
-        elif wait_until == "networkidle":
-            await asyncio.sleep(2)
-        else:
-            await tab.wait(uc.cdp.page.LoadEventFired)
-        final_url = await tab.evaluate("window.location.href")
-        title = await tab.evaluate("document.title")
-        await browser_manager.update_instance_state(instance_id, final_url, title)
-        return {
-            "url": final_url,
-            "title": title,
-            "success": True
-        }
-    except Exception as e:
-        raise
+    return await browser_manager.navigate(
+        instance_id=instance_id,
+        url=url,
+        wait_until=wait_until,
+        timeout=timeout,
+        referrer=referrer,
+    )
 
 @section_tool("browser-management")
 async def go_back(instance_id: str) -> bool:

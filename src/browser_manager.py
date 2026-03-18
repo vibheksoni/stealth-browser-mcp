@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+import time
 import uuid
 from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
@@ -27,6 +28,8 @@ from proxy_utils import (
 
 class BrowserManager:
     """Manages multiple browser instances."""
+
+    NAVIGATION_RECYCLE_THRESHOLD = 25
 
     def __init__(self):
         self._instances: Dict[str, dict] = {}
@@ -218,6 +221,7 @@ class BrowserManager:
                     'tab': tab,
                     'instance': instance,
                     'options': options,
+                    'navigation_count': 0,
                     'spawn_diagnostics': spawn_diagnostics,
                     'network_data': []
                 }
@@ -438,6 +442,271 @@ class BrowserManager:
     async def get_spawn_diagnostics(self, instance_id: str) -> Optional[Dict[str, Any]]:
         """Get spawn diagnostics for an instance."""
         return self._spawn_diagnostics.get(instance_id)
+
+    @staticmethod
+    def _get_tab_target_id(tab: Optional[Tab]) -> Optional[str]:
+        """Get a stable target id string for a tab when available."""
+        if tab is None:
+            return None
+        target = getattr(tab, "target", None)
+        target_id = getattr(target, "target_id", None)
+        if target_id is None:
+            return None
+        return str(target_id)
+
+    @staticmethod
+    def _is_recoverable_navigation_error(error: Exception) -> bool:
+        """Return whether a navigation error should trigger one stale-tab recovery attempt."""
+        if isinstance(error, asyncio.TimeoutError):
+            return True
+
+        message = f"{type(error).__name__}: {error}".lower()
+        recoverable_markers = (
+            "connection dropped",
+            "connection closed",
+            "connection lost",
+            "websocket",
+            "target closed",
+            "target crashed",
+            "session closed",
+            "invalid state",
+            "not attached",
+        )
+        return any(marker in message for marker in recoverable_markers)
+
+    async def _replace_main_tab(
+        self,
+        instance_id: str,
+        reason: str,
+        close_existing: bool = True,
+    ) -> Optional[Tab]:
+        """
+        Replace the tracked main tab for an instance with a fresh about:blank tab.
+
+        Args:
+            instance_id (str): Browser instance id.
+            reason (str): Diagnostic reason for replacement.
+            close_existing (bool): Whether to close the previously tracked tab.
+
+        Returns:
+            Optional[Tab]: The fresh tab, or None if the instance was missing.
+        """
+        data = await self.get_instance(instance_id)
+        if not data:
+            return None
+
+        browser = data["browser"]
+        previous_tab = data.get("tab")
+        new_tab = await browser.get("about:blank", new_tab=True)
+        await new_tab
+
+        if close_existing and previous_tab:
+            previous_target_id = self._get_tab_target_id(previous_tab)
+            new_target_id = self._get_tab_target_id(new_tab)
+            if previous_target_id and previous_target_id != new_target_id:
+                try:
+                    await previous_tab.close()
+                except Exception:
+                    pass
+
+        async with self._lock:
+            if instance_id in self._instances:
+                self._instances[instance_id]["tab"] = new_tab
+                self._instances[instance_id]["navigation_count"] = 0
+
+        debug_logger.log_info(
+            "browser_manager",
+            "_replace_main_tab",
+            f"Replaced main tab for {instance_id}: {reason}",
+        )
+        return new_tab
+
+    async def get_navigation_tab(self, instance_id: str) -> Optional[Tab]:
+        """
+        Get a healthy tab for navigation, recovering from stale tracked tabs when needed.
+
+        Args:
+            instance_id (str): Browser instance id.
+
+        Returns:
+            Optional[Tab]: A valid navigation tab, or None if the instance does not exist.
+        """
+        data = await self.get_instance(instance_id)
+        if not data:
+            return None
+
+        browser = data["browser"]
+        tracked_tab = data.get("tab")
+        navigation_count = data.get("navigation_count", 0)
+
+        if (
+            self.NAVIGATION_RECYCLE_THRESHOLD > 0
+            and navigation_count >= self.NAVIGATION_RECYCLE_THRESHOLD
+        ):
+            return await self._replace_main_tab(
+                instance_id,
+                reason=f"navigation recycle threshold {self.NAVIGATION_RECYCLE_THRESHOLD} reached",
+            )
+
+        try:
+            await browser.update_targets()
+            tracked_target_id = self._get_tab_target_id(tracked_tab)
+            if tracked_target_id:
+                for candidate_tab in browser.tabs:
+                    if self._get_tab_target_id(candidate_tab) == tracked_target_id:
+                        await candidate_tab
+                        return candidate_tab
+
+            if browser.tabs:
+                fallback_tab = browser.tabs[0]
+                await fallback_tab
+                async with self._lock:
+                    if instance_id in self._instances:
+                        self._instances[instance_id]["tab"] = fallback_tab
+                return fallback_tab
+        except Exception as error:
+            debug_logger.log_warning(
+                "browser_manager",
+                "get_navigation_tab",
+                f"Tab health check failed for {instance_id}: {error}",
+            )
+
+        return await self._replace_main_tab(
+            instance_id,
+            reason="tracked tab missing or invalid",
+            close_existing=False,
+        )
+
+    @staticmethod
+    async def _wait_for_navigation_condition(
+        tab: Tab,
+        wait_until: str,
+        timeout_seconds: float,
+    ) -> None:
+        """
+        Wait for a navigation milestone within the remaining timeout budget.
+
+        Args:
+            tab (Tab): Browser tab.
+            wait_until (str): Desired wait condition.
+            timeout_seconds (float): Remaining timeout budget in seconds.
+        """
+        if timeout_seconds <= 0:
+            raise asyncio.TimeoutError("Navigation wait budget exhausted")
+
+        if wait_until == "domcontentloaded":
+            await asyncio.wait_for(
+                tab.wait(uc.cdp.page.DomContentEventFired),
+                timeout=timeout_seconds,
+            )
+            return
+
+        if wait_until == "networkidle":
+            await asyncio.sleep(min(timeout_seconds, 2.0))
+            return
+
+        await asyncio.wait_for(
+            tab.wait(uc.cdp.page.LoadEventFired),
+            timeout=timeout_seconds,
+        )
+
+    async def navigate(
+        self,
+        instance_id: str,
+        url: str,
+        wait_until: str = "load",
+        timeout: int = 30000,
+        referrer: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Navigate with timeout enforcement and one automatic tab-recovery retry.
+
+        Args:
+            instance_id (str): Browser instance id.
+            url (str): Target URL.
+            wait_until (str): Wait condition after navigation.
+            timeout (int): Timeout in milliseconds.
+            referrer (Optional[str]): Optional referrer header.
+
+        Returns:
+            Dict[str, Any]: Navigation result payload.
+        """
+        timeout_seconds = max(timeout, 1) / 1000
+        last_error: Optional[Exception] = None
+
+        for attempt in range(2):
+            if attempt == 0:
+                tab = await self.get_navigation_tab(instance_id)
+            else:
+                tab = await self._replace_main_tab(
+                    instance_id,
+                    reason=f"recovering after navigation failure: {type(last_error).__name__ if last_error else 'unknown'}",
+                )
+
+            if not tab:
+                raise Exception(f"Instance not found: {instance_id}")
+
+            start_time = time.monotonic()
+
+            try:
+                if referrer:
+                    await tab.send(
+                        uc.cdp.network.set_extra_http_headers(
+                            headers={"Referer": referrer}
+                        )
+                    )
+
+                await asyncio.wait_for(tab.get(url), timeout=timeout_seconds)
+
+                elapsed = time.monotonic() - start_time
+                await self._wait_for_navigation_condition(
+                    tab,
+                    wait_until,
+                    timeout_seconds - elapsed,
+                )
+
+                elapsed = time.monotonic() - start_time
+                remaining = timeout_seconds - elapsed
+                if remaining <= 0:
+                    raise asyncio.TimeoutError("Navigation result budget exhausted")
+
+                final_url = await asyncio.wait_for(
+                    tab.evaluate("window.location.href"),
+                    timeout=remaining,
+                )
+                title = await asyncio.wait_for(
+                    tab.evaluate("document.title"),
+                    timeout=remaining,
+                )
+
+                await self.update_instance_state(instance_id, final_url, title)
+
+                async with self._lock:
+                    if instance_id in self._instances:
+                        self._instances[instance_id]["tab"] = tab
+                        self._instances[instance_id]["navigation_count"] = (
+                            self._instances[instance_id].get("navigation_count", 0) + 1
+                        )
+
+                return {
+                    "url": final_url,
+                    "title": title,
+                    "success": True,
+                }
+            except Exception as error:
+                last_error = error
+                debug_logger.log_warning(
+                    "browser_manager",
+                    "navigate",
+                    f"Navigation attempt {attempt + 1} failed for {instance_id}: {error}",
+                    {"url": url, "attempt": attempt + 1},
+                )
+                if attempt == 1 or not self._is_recoverable_navigation_error(error):
+                    if isinstance(error, asyncio.TimeoutError):
+                        raise Exception(
+                            f"Navigation to {url} timed out after {timeout}ms"
+                        ) from error
+                    raise
 
     async def get_tab(self, instance_id: str) -> Optional[Tab]:
         """
