@@ -193,7 +193,11 @@ class BrowserManager:
                 width=options.viewport_width,
                 height=options.viewport_height
             )
-            print(f"[DEBUG] Set viewport to {options.viewport_width}x{options.viewport_height}", file=sys.stderr)
+            debug_logger.log_info(
+                "browser_manager",
+                "spawn_browser",
+                f"Set viewport to {options.viewport_width}x{options.viewport_height}",
+            )
 
             applied_timezone_id = await self._apply_timezone_override(
                 tab=tab,

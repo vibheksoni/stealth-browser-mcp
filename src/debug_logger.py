@@ -39,6 +39,21 @@ class DebugLogger:
         self._lock_acquired_time = 0
         self._seen_errors: set = set()
 
+    def _emit_stderr(self, message: str, force: bool = False):
+        """
+        Emit a debug line to stderr only when logging is enabled unless forced.
+
+        Args:
+            message (str): Message to emit.
+            force (bool): Whether to emit regardless of current debug state.
+        """
+        if not force and not self._enabled:
+            return
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
+
     def log_error(self, component: str, method: str, error: Exception, context: Optional[Dict[str, Any]] = None):
         """
         Log an error with full context.
@@ -72,7 +87,7 @@ class DebugLogger:
             }
             self._errors.append(error_entry)
             self._stats[f'{component}.{method}.errors'] += 1
-            print(f"[DEBUG ERROR] {component}.{method}: {error}", file=sys.stderr)
+            self._emit_stderr(f"[DEBUG ERROR] {component}.{method}: {error}")
 
     def log_warning(self, component: str, method: str, message: str, context: Optional[Dict[str, Any]] = None):
         """
@@ -97,7 +112,7 @@ class DebugLogger:
             }
             self._warnings.append(warning_entry)
             self._stats[f'{component}.{method}.warnings'] += 1
-            print(f"[DEBUG WARN] {component}.{method}: {message}", file=sys.stderr)
+            self._emit_stderr(f"[DEBUG WARN] {component}.{method}: {message}")
 
     def log_info(self, component: str, method: str, message: str, data: Optional[Any] = None):
         """
@@ -122,9 +137,9 @@ class DebugLogger:
             }
             self._info.append(info_entry)
             self._stats[f'{component}.{method}.calls'] += 1
-            print(f"[DEBUG INFO] {component}.{method}: {message}", file=sys.stderr)
+            self._emit_stderr(f"[DEBUG INFO] {component}.{method}: {message}")
             if data:
-                print(f"  Data: {data}", file=sys.stderr)
+                self._emit_stderr(f"  Data: {data}")
 
     def get_debug_view(self) -> Dict[str, Any]:
         """
@@ -243,13 +258,13 @@ class DebugLogger:
                     self._warnings.clear() 
                     self._info.clear()
                     self._stats.clear()
-                    print("[DEBUG] Debug logs cleared", file=sys.stderr)
+                    self._emit_stderr("[DEBUG] Debug logs cleared")
                 finally:
                     self._lock.release()
             else:
-                print("[DEBUG] Failed to clear logs - timeout acquiring lock", file=sys.stderr)
+                self._emit_stderr("[DEBUG] Failed to clear logs - timeout acquiring lock")
         except Exception as e:
-            print(f"[DEBUG] Error clearing logs: {e}", file=sys.stderr)
+            self._emit_stderr(f"[DEBUG] Error clearing logs: {e}")
     
     def clear_debug_view_safe(self):
         """
@@ -262,7 +277,7 @@ class DebugLogger:
             self._warnings = []
             self._info = []
             self._stats = defaultdict(int)
-            print("[DEBUG] Debug logs force-cleared (lock bypass)", file=sys.stderr)
+            self._emit_stderr("[DEBUG] Debug logs force-cleared (lock bypass)")
 
     def enable(self):
         """
@@ -272,7 +287,7 @@ class DebugLogger:
             self._enabled (bool): Set to True.
         """
         self._enabled = True
-        print("[DEBUG] Debug logging enabled", file=sys.stderr)
+        self._emit_stderr("[DEBUG] Debug logging enabled", force=True)
 
     def disable(self):
         """
@@ -281,8 +296,8 @@ class DebugLogger:
         Variables:
             self._enabled (bool): Set to False.
         """
+        self._emit_stderr("[DEBUG] Debug logging disabled")
         self._enabled = False
-        print("[DEBUG] Debug logging disabled", file=sys.stderr)
 
     def get_lock_status(self) -> Dict[str, Any]:
         """Get current lock status for debugging."""
@@ -328,18 +343,18 @@ class DebugLogger:
         """
         import time
         try:
-            print(f"[DEBUG] export_debug_logs attempting lock acquisition...", file=sys.stderr)
+            self._emit_stderr("[DEBUG] export_debug_logs attempting lock acquisition...")
             current_status = self.get_lock_status()
-            print(f"[DEBUG] Current lock status: {current_status}", file=sys.stderr)
+            self._emit_stderr(f"[DEBUG] Current lock status: {current_status}")
             
             acquired = self._lock.acquire(timeout=5.0)
             if not acquired:
-                print("[DEBUG] Lock timeout - falling back to lock-free export", file=sys.stderr)
+                self._emit_stderr("[DEBUG] Lock timeout - falling back to lock-free export")
                 return self._export_lockfree(filepath, max_errors, max_warnings, max_info, format)
             
             self._lock_owner = "export_debug_logs"
             self._lock_acquired_time = time.time()
-            print("[DEBUG] Lock acquired by export_debug_logs", file=sys.stderr)
+            self._emit_stderr("[DEBUG] Lock acquired by export_debug_logs")
             
             try:
                 debug_data = self.get_debug_view_paginated(
@@ -351,9 +366,9 @@ class DebugLogger:
                 self._lock_owner = "none"
                 self._lock_acquired_time = 0
                 self._lock.release()
-                print("[DEBUG] Lock released by export_debug_logs", file=sys.stderr)
+                self._emit_stderr("[DEBUG] Lock released by export_debug_logs")
         except Exception as e:
-            print(f"[DEBUG] Exception in export: {e}", file=sys.stderr)
+            self._emit_stderr(f"[DEBUG] Exception in export: {e}")
             return self._export_lockfree(filepath, max_errors, max_warnings, max_info, format)
             
         if format == "auto":
@@ -427,10 +442,12 @@ class DebugLogger:
             pickle.dump(debug_data, f, protocol=pickle.HIGHEST_PROTOCOL)
         
         file_size = os.path.getsize(filepath)
-        print(f"[DEBUG] Exported {debug_data['summary']['returned_errors']} errors, "
-              f"{debug_data['summary']['returned_warnings']} warnings, "
-              f"{debug_data['summary']['returned_info']} info logs to {filepath} "
-              f"({file_size} bytes, gzip-pickle format)", file=sys.stderr)
+        self._emit_stderr(
+            f"[DEBUG] Exported {debug_data['summary']['returned_errors']} errors, "
+            f"{debug_data['summary']['returned_warnings']} warnings, "
+            f"{debug_data['summary']['returned_info']} info logs to {filepath} "
+            f"({file_size} bytes, gzip-pickle format)"
+        )
         return filepath
     
     def _export_pickle(self, debug_data: Dict[str, Any], filepath: str) -> str:
@@ -442,10 +459,12 @@ class DebugLogger:
             pickle.dump(debug_data, f, protocol=pickle.HIGHEST_PROTOCOL)
         
         file_size = os.path.getsize(filepath)
-        print(f"[DEBUG] Exported {debug_data['summary']['returned_errors']} errors, "
-              f"{debug_data['summary']['returned_warnings']} warnings, "
-              f"{debug_data['summary']['returned_info']} info logs to {filepath} "
-              f"({file_size} bytes, pickle format)", file=sys.stderr)
+        self._emit_stderr(
+            f"[DEBUG] Exported {debug_data['summary']['returned_errors']} errors, "
+            f"{debug_data['summary']['returned_warnings']} warnings, "
+            f"{debug_data['summary']['returned_info']} info logs to {filepath} "
+            f"({file_size} bytes, pickle format)"
+        )
         return filepath
     
     def _export_json(self, debug_data: Dict[str, Any], filepath: str) -> str:
@@ -454,10 +473,12 @@ class DebugLogger:
             json.dump(debug_data, f, separators=(',', ':'), default=str)
         
         file_size = os.path.getsize(filepath)
-        print(f"[DEBUG] Exported {debug_data['summary']['returned_errors']} errors, "
-              f"{debug_data['summary']['returned_warnings']} warnings, "
-              f"{debug_data['summary']['returned_info']} info logs to {filepath} "
-              f"({file_size} bytes, JSON format)", file=sys.stderr)
+        self._emit_stderr(
+            f"[DEBUG] Exported {debug_data['summary']['returned_errors']} errors, "
+            f"{debug_data['summary']['returned_warnings']} warnings, "
+            f"{debug_data['summary']['returned_info']} info logs to {filepath} "
+            f"({file_size} bytes, JSON format)"
+        )
         return filepath
 
 

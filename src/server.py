@@ -51,6 +51,12 @@ def parse_bool_env(name: str, default: bool = False) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
+
+DEBUG_LOGGING_ENABLED = (
+    parse_bool_env("STEALTH_BROWSER_DEBUG", default=False)
+    or parse_bool_env("DEBUG", default=False)
+)
+
 def is_section_enabled(section: str) -> bool:
     """Check if a tool section is enabled."""
     return section not in DISABLED_SECTIONS
@@ -133,6 +139,9 @@ browser_manager = BrowserManager()
 network_interceptor = NetworkInterceptor()
 dom_handler = DOMHandler()
 cdp_function_executor = CDPFunctionExecutor()
+
+if DEBUG_LOGGING_ENABLED:
+    debug_logger.enable()
 
 @section_tool("browser-management")
 async def spawn_browser(
@@ -2784,6 +2793,12 @@ if __name__ == "__main__":
     parser.add_argument("--list-sections", action="store_true",
                       help="List all available tool sections and exit")
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=DEBUG_LOGGING_ENABLED,
+        help="Enable debug logging to stderr",
+    )
+    parser.add_argument(
         "--xpool-safe",
         action="store_true",
         default=parse_bool_env("XPOOL_SAFE_MODE", default=False),
@@ -2791,6 +2806,9 @@ if __name__ == "__main__":
     )
     
     args = parser.parse_args()
+
+    if args.debug and not debug_logger._enabled:
+        debug_logger.enable()
     
     if args.list_sections:
         print("Available tool sections:")
@@ -2845,7 +2863,11 @@ if __name__ == "__main__":
     apply_disabled_sections()
     
     if DISABLED_SECTIONS:
-        print(f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}", file=sys.stderr)
+        debug_logger.log_info(
+            "server",
+            "startup",
+            f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}",
+        )
     
     if args.transport == "http":
         mcp.run(transport="http", host=args.host, port=args.port)
