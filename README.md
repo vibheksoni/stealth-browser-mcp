@@ -182,6 +182,72 @@ Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnost
 - Tune the background reaper cadence with `BROWSER_IDLE_REAPER_INTERVAL`.
 - Tune startup cleanup of abandoned temp profiles with `BROWSER_ORPHAN_PROFILE_MAX_AGE` (seconds).
 
+### Browser Lifecycle Environment Variables
+
+These are regular environment variables for the MCP server process itself. Set them wherever you launch `src/server.py`:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `BROWSER_IDLE_TIMEOUT` | `600` | Global idle timeout in seconds before an unused browser instance is auto-closed. Set `0` to disable idle reaping globally. |
+| `BROWSER_IDLE_REAPER_INTERVAL` | `60` | Background reaper check interval in seconds. |
+| `BROWSER_ORPHAN_PROFILE_MAX_AGE` | `21600` | Startup cleanup threshold in seconds for stale `uc_*` temp profiles that are not in use by live browser processes. Set `0` to disable this startup sweep. |
+| `STEALTH_BROWSER_DEBUG` | `0` | Enable verbose debug logging to `stderr` when set to `1`. |
+
+**Where to set them**
+
+- **Shell / local terminal**
+```bash
+# macOS / Linux
+export BROWSER_IDLE_TIMEOUT=900
+export BROWSER_IDLE_REAPER_INTERVAL=30
+export BROWSER_ORPHAN_PROFILE_MAX_AGE=43200
+python src/server.py
+```
+
+```powershell
+# Windows PowerShell
+$env:BROWSER_IDLE_TIMEOUT='900'
+$env:BROWSER_IDLE_REAPER_INTERVAL='30'
+$env:BROWSER_ORPHAN_PROFILE_MAX_AGE='43200'
+python src/server.py
+```
+
+- **MCP client config**
+  Put them in the server `env` block for your client.
+
+```json
+{
+  "mcpServers": {
+    "stealth-browser-mcp": {
+      "command": "C:\\path\\to\\stealth-browser-mcp\\venv\\Scripts\\python.exe",
+      "args": ["C:\\path\\to\\stealth-browser-mcp\\src\\server.py"],
+      "env": {
+        "BROWSER_IDLE_TIMEOUT": "900",
+        "BROWSER_IDLE_REAPER_INTERVAL": "30",
+        "BROWSER_ORPHAN_PROFILE_MAX_AGE": "43200"
+      }
+    }
+  }
+}
+```
+
+- **systemd / long-running service**
+```ini
+[Service]
+Environment="BROWSER_IDLE_TIMEOUT=900"
+Environment="BROWSER_IDLE_REAPER_INTERVAL=30"
+Environment="BROWSER_ORPHAN_PROFILE_MAX_AGE=43200"
+ExecStart=/path/to/venv/bin/python /path/to/stealth-browser-mcp/src/server.py --transport http
+```
+
+**Per-instance override**
+
+If you want a single browser instance to live longer or shorter than the server default, pass `idle_timeout_seconds` in `spawn_browser(...)`.
+
+Examples:
+- `spawn_browser(idle_timeout_seconds=1800)` keeps that instance for 30 minutes of inactivity.
+- `spawn_browser(idle_timeout_seconds=0)` disables idle reaping for that one instance.
+
 **Available sections:**
 
 | Section | Tools | Description |
