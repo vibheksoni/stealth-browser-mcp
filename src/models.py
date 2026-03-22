@@ -91,6 +91,7 @@ class BrowserOptions(BaseModel):
     proxy: Optional[str] = Field(default=None, description="Proxy server URL")
     browser_args: List[str] = Field(default_factory=list, description="Additional browser launch arguments")
     timezone_id: Optional[str] = Field(default=None, description="IANA timezone ID applied via CDP Emulation.setTimezoneOverride")
+    idle_timeout_seconds: Optional[int] = Field(default=None, ge=0, description="Idle timeout override in seconds for automatic instance cleanup")
     block_resources: List[str] = Field(default_factory=list, description="Resource types to block")
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     user_data_dir: Optional[str] = Field(default=None, description="Path to user data directory")

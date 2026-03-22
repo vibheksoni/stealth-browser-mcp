@@ -1,6 +1,7 @@
 """Browser instance management with nodriver."""
 
 import asyncio
+import os
 import sys
 import time
 import uuid
@@ -26,16 +27,56 @@ from proxy_utils import (
 )
 
 
+def _parse_nonnegative_int_env(
+    name: str,
+    default: int,
+    minimum: int = 0,
+) -> int:
+    """
+    Parse a non-negative integer environment variable with a fallback default.
+
+    Args:
+        name (str): Environment variable name.
+        default (int): Fallback value if parsing fails.
+        minimum (int): Minimum accepted value.
+
+    Returns:
+        int: Parsed integer or the provided default.
+    """
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value.strip())
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
 class BrowserManager:
     """Manages multiple browser instances."""
 
     NAVIGATION_RECYCLE_THRESHOLD = 25
+    DEFAULT_IDLE_TIMEOUT_SECONDS = 600
+    DEFAULT_IDLE_REAPER_INTERVAL_SECONDS = 60
 
     def __init__(self):
         self._instances: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
         self._spawn_diagnostics: Dict[str, Dict[str, Any]] = {}
         self._proxy_forwarders: Dict[str, AuthenticatedProxyForwarder] = {}
+        self._idle_timeout_seconds_default = _parse_nonnegative_int_env(
+            "BROWSER_IDLE_TIMEOUT",
+            self.DEFAULT_IDLE_TIMEOUT_SECONDS,
+        )
+        self._idle_reaper_interval_seconds = _parse_nonnegative_int_env(
+            "BROWSER_IDLE_REAPER_INTERVAL",
+            self.DEFAULT_IDLE_REAPER_INTERVAL_SECONDS,
+            minimum=1,
+        )
+        self._idle_reaper_task: Optional[asyncio.Task] = None
 
     @staticmethod
     def _append_user_agent_arg(args: List[str], user_agent: Optional[str]) -> List[str]:
@@ -54,6 +95,7 @@ class BrowserManager:
         proxy_server: Optional[str],
         launch_proxy_server: Optional[str],
         timezone_id: Optional[str],
+        idle_timeout_seconds: int,
         sandbox: bool,
         headless: bool,
         user_data_dir: Optional[str],
@@ -64,6 +106,7 @@ class BrowserManager:
             "proxy_server": proxy_server,
             "launch_proxy_server": launch_proxy_server,
             "timezone_id": timezone_id,
+            "idle_timeout_seconds": idle_timeout_seconds,
             "sandbox": sandbox,
             "headless": headless,
             "user_data_dir": user_data_dir,
@@ -100,6 +143,117 @@ class BrowserManager:
             return
         await proxy_forwarder.close()
 
+    def _resolve_idle_timeout_seconds(
+        self,
+        override: Optional[int],
+    ) -> int:
+        """
+        Resolve the effective idle timeout for a browser instance.
+
+        Args:
+            override (Optional[int]): Optional per-instance override.
+
+        Returns:
+            int: Effective idle timeout in seconds. Zero disables reaping.
+        """
+        if self._idle_timeout_seconds_default == 0:
+            return 0
+        if override is None:
+            return self._idle_timeout_seconds_default
+        return max(int(override), 0)
+
+    async def touch_instance(self, instance_id: str) -> bool:
+        """
+        Update the last-activity timestamp for a browser instance.
+
+        Args:
+            instance_id (str): Browser instance id.
+
+        Returns:
+            bool: True if the instance exists and was touched.
+        """
+        async with self._lock:
+            if instance_id not in self._instances:
+                return False
+            self._instances[instance_id]["instance"].update_activity()
+            return True
+
+    async def _run_idle_reaper(self) -> None:
+        """Periodically close idle browser instances until cancelled."""
+        try:
+            while True:
+                await asyncio.sleep(self._idle_reaper_interval_seconds)
+                try:
+                    closed_count = await self.cleanup_inactive()
+                    finalized_profiles = process_cleanup.cleanup_deferred_profiles()
+                    if closed_count:
+                        debug_logger.log_info(
+                            "browser_manager",
+                            "idle_reaper",
+                            f"Closed {closed_count} idle browser instance(s)",
+                        )
+                    if finalized_profiles:
+                        debug_logger.log_info(
+                            "browser_manager",
+                            "idle_reaper",
+                            f"Finalized {finalized_profiles} deferred temp profile cleanup entrie(s)",
+                        )
+                except Exception as error:
+                    debug_logger.log_error(
+                        "browser_manager",
+                        "idle_reaper",
+                        error,
+                    )
+        except asyncio.CancelledError:
+            debug_logger.log_info(
+                "browser_manager",
+                "idle_reaper",
+                "Idle reaper task cancelled",
+            )
+            raise
+
+    async def start_idle_reaper(self) -> None:
+        """
+        Start the background idle reaper task when globally enabled.
+
+        Returns:
+            None
+        """
+        if self._idle_timeout_seconds_default == 0:
+            debug_logger.log_info(
+                "browser_manager",
+                "start_idle_reaper",
+                "Idle reaper disabled by BROWSER_IDLE_TIMEOUT=0",
+            )
+            return
+        if self._idle_reaper_task and not self._idle_reaper_task.done():
+            return
+        self._idle_reaper_task = asyncio.create_task(self._run_idle_reaper())
+        debug_logger.log_info(
+            "browser_manager",
+            "start_idle_reaper",
+            f"Idle reaper started with timeout={self._idle_timeout_seconds_default}s interval={self._idle_reaper_interval_seconds}s",
+        )
+
+    async def stop_idle_reaper(self) -> None:
+        """
+        Stop the background idle reaper task if it is running.
+
+        Returns:
+            None
+        """
+        if not self._idle_reaper_task:
+            return
+        if self._idle_reaper_task.done():
+            self._idle_reaper_task = None
+            return
+        self._idle_reaper_task.cancel()
+        try:
+            await self._idle_reaper_task
+        except asyncio.CancelledError:
+            pass
+        self._idle_reaper_task = None
+
     async def spawn_browser(self, options: BrowserOptions) -> BrowserInstance:
         """
         Spawn a new browser instance with given options.
@@ -125,6 +279,9 @@ class BrowserManager:
             platform_info = get_platform_info()
             proxy_config: Optional[ProxyConfig] = None
             launch_proxy_server: Optional[str] = None
+            idle_timeout_seconds = self._resolve_idle_timeout_seconds(
+                options.idle_timeout_seconds,
+            )
             if options.proxy:
                 try:
                     proxy_config = parse_proxy_config(options.proxy)
@@ -175,9 +332,21 @@ class BrowserManager:
 
             browser = await uc.start(config=config)
             tab = browser.main_tab
+            config_obj = getattr(browser, "config", None)
+            actual_user_data_dir = getattr(config_obj, "user_data_dir", options.user_data_dir)
+            uses_custom_data_dir = getattr(
+                config_obj,
+                "uses_custom_data_dir",
+                bool(options.user_data_dir),
+            )
 
             if hasattr(browser, '_process') and browser._process:
-                process_cleanup.track_browser_process(instance_id, browser._process)
+                process_cleanup.track_browser_process(
+                    instance_id,
+                    browser._process,
+                    user_data_dir=actual_user_data_dir,
+                    uses_custom_data_dir=uses_custom_data_dir,
+                )
             else:
                 debug_logger.log_warning("browser_manager", "spawn_browser", 
                                        f"Browser {instance_id} has no process to track")
@@ -211,9 +380,10 @@ class BrowserManager:
                 proxy_server=proxy_config.server if proxy_config else None,
                 launch_proxy_server=launch_proxy_server,
                 timezone_id=applied_timezone_id,
+                idle_timeout_seconds=idle_timeout_seconds,
                 sandbox=options.sandbox,
                 headless=options.headless,
-                user_data_dir=options.user_data_dir,
+                user_data_dir=actual_user_data_dir,
             )
             self._spawn_diagnostics[instance_id] = spawn_diagnostics
             if proxy_forwarder is not None:
@@ -226,6 +396,7 @@ class BrowserManager:
                     'instance': instance,
                     'options': options,
                     'navigation_count': 0,
+                    'idle_timeout_seconds': idle_timeout_seconds,
                     'spawn_diagnostics': spawn_diagnostics,
                     'network_data': []
                 }
@@ -414,6 +585,16 @@ class BrowserManager:
                 except Exception:
                     pass
 
+                try:
+                    process_cleanup.finalize_browser_process(instance_id)
+                    process_cleanup.cleanup_deferred_profiles()
+                except Exception as e:
+                    debug_logger.log_warning(
+                        "browser_manager",
+                        "close_instance",
+                        f"Post-stop cleanup failed for {instance_id}: {e}",
+                    )
+
                 del self._instances[instance_id]
                 self._spawn_diagnostics.pop(instance_id, None)
 
@@ -430,6 +611,9 @@ class BrowserManager:
                     if instance_id in self._instances:
                         data = self._instances[instance_id]
                         data['instance'].state = BrowserState.CLOSED
+                        process_cleanup.kill_browser_process(instance_id)
+                        process_cleanup.finalize_browser_process(instance_id)
+                        process_cleanup.cleanup_deferred_profiles()
                         del self._instances[instance_id]
                         self._spawn_diagnostics.pop(instance_id, None)
                         proxy_forwarder = self._proxy_forwarders.pop(instance_id, None)
@@ -639,6 +823,7 @@ class BrowserManager:
         last_error: Optional[Exception] = None
 
         for attempt in range(2):
+            await self.touch_instance(instance_id)
             if attempt == 0:
                 tab = await self.get_navigation_tab(instance_id)
             else:
@@ -712,33 +897,47 @@ class BrowserManager:
                         ) from error
                     raise
 
-    async def get_tab(self, instance_id: str) -> Optional[Tab]:
+    async def get_tab(
+        self,
+        instance_id: str,
+        touch_activity: bool = True,
+    ) -> Optional[Tab]:
         """
         Get the main tab for a browser instance.
 
         Args:
             instance_id (str): The ID of the browser instance.
+            touch_activity (bool): Whether retrieving the tab should refresh last activity.
 
         Returns:
             Optional[Tab]: The main tab if found, else None.
         """
         data = await self.get_instance(instance_id)
         if data:
+            if touch_activity:
+                await self.touch_instance(instance_id)
             return data['tab']
         return None
 
-    async def get_browser(self, instance_id: str) -> Optional[Browser]:
+    async def get_browser(
+        self,
+        instance_id: str,
+        touch_activity: bool = True,
+    ) -> Optional[Browser]:
         """
         Get the browser object for an instance.
 
         Args:
             instance_id (str): The ID of the browser instance.
+            touch_activity (bool): Whether retrieving the browser should refresh last activity.
 
         Returns:
             Optional[Browser]: The browser object if found, else None.
         """
         data = await self.get_instance(instance_id)
         if data:
+            if touch_activity:
+                await self.touch_instance(instance_id)
             return data['browser']
         return None
 
@@ -864,7 +1063,7 @@ class BrowserManager:
                     instance.current_url = url
                 if title:
                     instance.title = title
-                instance.update_activity()
+        await self.touch_instance(instance_id)
 
     async def get_page_state(self, instance_id: str) -> Optional[PageState]:
         """
@@ -925,25 +1124,36 @@ class BrowserManager:
         except Exception as e:
             raise Exception(f"Failed to get page state: {str(e)}")
 
-    async def cleanup_inactive(self, timeout_minutes: int = 30):
+    async def cleanup_inactive(self, timeout_seconds: Optional[int] = None) -> int:
         """
         Clean up inactive browser instances.
 
         Args:
-            timeout_minutes (int, optional): Timeout in minutes to consider an instance inactive. Defaults to 30.
+            timeout_seconds (Optional[int]): Override timeout in seconds for all instances. Uses per-instance values when None.
+
+        Returns:
+            int: Number of instances selected for idle cleanup.
         """
         now = datetime.now()
-        timeout = timedelta(minutes=timeout_minutes)
 
         to_close = []
         async with self._lock:
             for instance_id, data in self._instances.items():
                 instance = data['instance']
-                if now - instance.last_activity > timeout:
+                effective_timeout = (
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else data.get('idle_timeout_seconds', self._idle_timeout_seconds_default)
+                )
+                if effective_timeout <= 0:
+                    continue
+                if (now - instance.last_activity).total_seconds() > effective_timeout:
                     to_close.append(instance_id)
 
         for instance_id in to_close:
             await self.close_instance(instance_id)
+
+        return len(to_close)
 
     async def close_all(self):
         """

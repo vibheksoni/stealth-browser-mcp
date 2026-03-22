@@ -89,9 +89,14 @@ async def app_lifespan(server):
     """
     debug_logger.log_info("server", "startup", "Starting Browser Automation MCP Server...")
     try:
+        await browser_manager.start_idle_reaper()
         yield
     finally:
         debug_logger.log_info("server", "shutdown", "Shutting down Browser Automation MCP Server...")
+        try:
+            await browser_manager.stop_idle_reaper()
+        except Exception as e:
+            debug_logger.log_error("server", "cleanup", e)
         try:
             await browser_manager.close_all()
             debug_logger.log_info("server", "cleanup", "All browser instances closed")
@@ -152,6 +157,7 @@ async def spawn_browser(
     proxy: Optional[str] = None,
     browser_args: List[str] = None,
     timezone_id: Optional[str] = None,
+    idle_timeout_seconds: Optional[int] = None,
     block_resources: List[str] = None,
     extra_headers: Dict[str, str] = None,
     user_data_dir: Optional[str] = None,
@@ -168,6 +174,7 @@ async def spawn_browser(
         proxy (Optional[str]): Proxy server URL.
         browser_args (List[str]): Additional browser launch args.
         timezone_id (Optional[str]): IANA timezone ID applied via CDP timezone override.
+        idle_timeout_seconds (Optional[int]): Idle timeout override in seconds for automatic instance cleanup.
         block_resources (List[str]): List of resource types to block (e.g., ['image', 'font', 'stylesheet']).
         extra_headers (Dict[str, str]): Additional HTTP headers.
         user_data_dir (Optional[str]): Path to user data directory for persistent sessions.
@@ -196,6 +203,7 @@ async def spawn_browser(
             proxy=proxy,
             browser_args=browser_args or [],
             timezone_id=timezone_id,
+            idle_timeout_seconds=idle_timeout_seconds,
             block_resources=block_resources or [],
             extra_headers=extra_headers or {},
             user_data_dir=user_data_dir,

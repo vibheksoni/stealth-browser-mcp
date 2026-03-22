@@ -175,6 +175,13 @@ python src/server.py --debug
 
 Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnostics on `stderr`. In normal MCP `stdio` usage, debug logging stays quiet by default to avoid noisy transport output.
 
+**Browser lifecycle defaults**
+- Idle browser instances are reaped automatically after 10 minutes by default.
+- Override per instance with `spawn_browser(idle_timeout_seconds=...)`.
+- Disable idle reaping globally with `BROWSER_IDLE_TIMEOUT=0`.
+- Tune the background reaper cadence with `BROWSER_IDLE_REAPER_INTERVAL`.
+- Tune startup cleanup of abandoned temp profiles with `BROWSER_ORPHAN_PROFILE_MAX_AGE` (seconds).
+
 **Available sections:**
 
 | Section | Tools | Description |
@@ -400,6 +407,9 @@ Use `python src/server.py --debug` or set `STEALTH_BROWSER_DEBUG=1`. Debug logs 
 
 **Browser crashes on Linux / Docker / CI**
 Run with `--sandbox=false` or ensure your environment supports sandboxing. The server auto-detects root and container environments and adjusts accordingly.
+
+**Orphan Chromium processes or `uc_*` temp profiles accumulate on long-running hosts**
+The server now reaps idle browser instances automatically and performs startup cleanup of tracked orphan browser processes plus stale `uc_*` temp profiles. Set `BROWSER_IDLE_TIMEOUT=0` to disable idle reaping if you want fully manual browser lifetime management.
 
 **Too many tools cluttering the AI chat**
 Use `--minimal` for 22 core tools, or selectively disable sections:
