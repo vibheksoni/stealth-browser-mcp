@@ -24,7 +24,7 @@ class ResponseHandler:
             self.clone_dir = Path(__file__).parent.parent / "element_clones"
         else:
             self.clone_dir = Path(clone_dir)
-        self.clone_dir.mkdir(exist_ok=True)
+        self.clone_dir.mkdir(parents=True, exist_ok=True)
     
     def estimate_tokens(self, data: Any) -> int:
         """
