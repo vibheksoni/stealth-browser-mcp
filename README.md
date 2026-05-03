@@ -53,8 +53,8 @@ Bypass Cloudflare, antibot systems, and social media blocks with real browser in
 ## Features
 
 - **Antibot bypass** — Works on Cloudflare, Queue-It, and other protection systems that block traditional automation
-- **90 tools across 11 sections** — From basic navigation to advanced CDP function execution
-- **Modular loading** — Run the full 90-tool arsenal or a minimal 22-tool core; disable what you don't need
+- **96 tools across 11 sections** — From basic navigation to advanced CDP function execution
+- **Modular loading** — Run the full 96-tool arsenal or a minimal 20-tool core; disable what you don't need
 - **Pixel-accurate element cloning** — Extract complete elements with all CSS, DOM structure, events, and assets via CDP
 - **Network interception** — Inspect every request, response, header, and payload through your AI agent
 - **Dynamic hook system** — AI-generated Python functions that intercept and modify network traffic in real-time
@@ -158,12 +158,12 @@ Restart your MCP client and ask your agent:
 
 ## Modular Architecture
 
-Choose exactly what functionality you need. Run the full 90-tool suite or strip it down to 22 core tools.
+Choose exactly what functionality you need. Run the full 96-tool suite or strip it down to 20 core tools.
 
 | Mode | Tools | Use Case |
 |------|-------|----------|
-| **Full** (default) | 90 | Complete browser automation and debugging |
-| **Minimal** (`--minimal`) | 22 | Core browser automation only |
+| **Full** (default) | 96 | Complete browser automation and debugging |
+| **Minimal** (`--minimal`) | 20 | Core browser automation only |
 | **Custom** (`--disable-*`) | Your choice | Disable specific sections |
 
 ```bash
@@ -181,6 +181,7 @@ Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnost
 - Disable idle reaping globally with `BROWSER_IDLE_TIMEOUT=0`.
 - Tune the background reaper cadence with `BROWSER_IDLE_REAPER_INTERVAL`.
 - Tune startup cleanup of abandoned temp profiles with `BROWSER_ORPHAN_PROFILE_MAX_AGE` (seconds).
+- Restrict local file uploads with `BROWSER_FILE_UPLOAD_ALLOWED_DIRS`.
 
 ### Browser Lifecycle Environment Variables
 
@@ -191,6 +192,7 @@ These are regular environment variables for the MCP server process itself. Set t
 | `BROWSER_IDLE_TIMEOUT` | `600` | Global idle timeout in seconds before an unused browser instance is auto-closed. Set `0` to disable idle reaping globally. |
 | `BROWSER_IDLE_REAPER_INTERVAL` | `60` | Background reaper check interval in seconds. |
 | `BROWSER_ORPHAN_PROFILE_MAX_AGE` | `21600` | Startup cleanup threshold in seconds for stale `uc_*` temp profiles that are not in use by live browser processes. Set `0` to disable this startup sweep. |
+| `BROWSER_FILE_UPLOAD_ALLOWED_DIRS` | repo root | Directories that `file_upload()` may read from. Separate multiple roots with `;` on Windows or `:` on macOS/Linux. |
 | `STEALTH_BROWSER_DEBUG` | `0` | Enable verbose debug logging to `stderr` when set to `1`. |
 
 **Where to set them**
@@ -201,6 +203,7 @@ These are regular environment variables for the MCP server process itself. Set t
 export BROWSER_IDLE_TIMEOUT=900
 export BROWSER_IDLE_REAPER_INTERVAL=30
 export BROWSER_ORPHAN_PROFILE_MAX_AGE=43200
+export BROWSER_FILE_UPLOAD_ALLOWED_DIRS="/Users/me/uploads:/Users/me/Documents"
 python src/server.py
 ```
 
@@ -209,6 +212,7 @@ python src/server.py
 $env:BROWSER_IDLE_TIMEOUT='900'
 $env:BROWSER_IDLE_REAPER_INTERVAL='30'
 $env:BROWSER_ORPHAN_PROFILE_MAX_AGE='43200'
+$env:BROWSER_FILE_UPLOAD_ALLOWED_DIRS='C:\Users\me\uploads;C:\Users\me\Documents'
 python src/server.py
 ```
 
@@ -224,7 +228,8 @@ python src/server.py
       "env": {
         "BROWSER_IDLE_TIMEOUT": "900",
         "BROWSER_IDLE_REAPER_INTERVAL": "30",
-        "BROWSER_ORPHAN_PROFILE_MAX_AGE": "43200"
+        "BROWSER_ORPHAN_PROFILE_MAX_AGE": "43200",
+        "BROWSER_FILE_UPLOAD_ALLOWED_DIRS": "C:\\Users\\me\\uploads;C:\\Users\\me\\Documents"
       }
     }
   }
@@ -237,6 +242,7 @@ python src/server.py
 Environment="BROWSER_IDLE_TIMEOUT=900"
 Environment="BROWSER_IDLE_REAPER_INTERVAL=30"
 Environment="BROWSER_ORPHAN_PROFILE_MAX_AGE=43200"
+Environment="BROWSER_FILE_UPLOAD_ALLOWED_DIRS=/srv/stealth-browser/uploads:/srv/stealth-browser/shared"
 ExecStart=/path/to/venv/bin/python /path/to/stealth-browser-mcp/src/server.py --transport http
 ```
 
@@ -252,16 +258,16 @@ Examples:
 
 | Section | Tools | Description |
 |---------|-------|-------------|
-| `browser-management` | 11 | Core browser operations |
-| `element-interaction` | 11 | Page interaction and manipulation |
+| `browser-management` | 8 | Core browser operations |
+| `element-interaction` | 12 | Page interaction and manipulation |
 | `element-extraction` | 9 | Element cloning and extraction |
 | `file-extraction` | 9 | File-based extraction tools |
-| `network-debugging` | 5 | Network monitoring and interception |
+| `network-debugging` | 10 | Network monitoring and interception |
 | `cdp-functions` | 13 | Chrome DevTools Protocol execution |
 | `progressive-cloning` | 10 | Advanced element cloning |
 | `cookies-storage` | 3 | Cookie and storage management |
 | `tabs` | 5 | Tab management |
-| `debugging` | 6 | Debug and system tools |
+| `debugging` | 7 | Debug and system tools |
 | `dynamic-hooks` | 10 | AI-powered network hooks |
 
 ---
@@ -281,9 +287,6 @@ Examples:
 | `go_back()` | Navigate back in history |
 | `go_forward()` | Navigate forward in history |
 | `reload_page()` | Reload current page |
-| `hot_reload()` | Reload modules without restart |
-| `reload_status()` | Check module reload status |
-
 </details>
 
 <details>
@@ -295,11 +298,14 @@ Examples:
 | `click_element()` | Natural clicking |
 | `type_text()` | Human-like typing with newline support |
 | `paste_text()` | Instant text pasting via CDP |
+| `file_upload()` | Upload allowlisted local files to file inputs |
 | `scroll_page()` | Natural scrolling |
 | `wait_for_element()` | Smart waiting |
 | `execute_script()` | Run JavaScript |
 | `select_option()` | Dropdown selection |
 | `get_element_state()` | Element properties |
+| `get_page_content()` | Full page HTML and text |
+| `take_screenshot()` | Optimized page screenshots |
 
 </details>
 
@@ -436,6 +442,8 @@ Examples:
 | `clear_debug_view()` | Clear debug logs |
 | `export_debug_logs()` | Export logs (JSON/pickle/gzip) |
 | `get_debug_lock_status()` | Debug lock status |
+| `hot_reload()` | Reload modules without restart |
+| `reload_status()` | Check module reload status |
 | `validate_browser_environment_tool()` | Diagnose platform issues and browser compatibility |
 
 </details>
@@ -453,8 +461,8 @@ Examples:
 | Network debugging | Full request/response inspection via AI | Basic |
 | API reverse engineering | Payload inspection through chat | Manual tools only |
 | Dynamic hook system | AI-generated Python functions for real-time interception | Not available |
-| Modular architecture | 11 sections, 22–90 tools | Fixed ~20 tools |
-| Total tools | 90 (customizable) | ~20 |
+| Modular architecture | 11 sections, 20–96 tools | Fixed ~20 tools |
+| Total tools | 96 (customizable) | ~20 |
 
 Tested on: LinkedIn, Instagram, Twitter/X, Amazon, banking portals, government sites, Cloudflare-protected APIs, Nike SNKRS, Ticketmaster, Supreme.
 
@@ -478,7 +486,7 @@ Run with `--sandbox=false` or ensure your environment supports sandboxing. The s
 The server now reaps idle browser instances automatically and performs startup cleanup of tracked orphan browser processes plus stale `uc_*` temp profiles. Set `BROWSER_IDLE_TIMEOUT=0` to disable idle reaping if you want fully manual browser lifetime management.
 
 **Too many tools cluttering the AI chat**
-Use `--minimal` for 22 core tools, or selectively disable sections:
+Use `--minimal` for 20 core tools, or selectively disable sections:
 ```bash
 python src/server.py --disable-cdp-functions --disable-dynamic-hooks --disable-progressive-cloning
 ```

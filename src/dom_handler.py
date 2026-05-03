@@ -2,13 +2,14 @@
 
 import asyncio
 import json
-import os
 import time
-from typing import List, Optional, Dict, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from nodriver import Tab, Element
-from models import ElementInfo, ElementAction
 from debug_logger import debug_logger
+from file_upload_security import validate_upload_paths
+from models import ElementInfo, ElementAction
 
 
 
@@ -364,7 +365,7 @@ class DOMHandler:
         paths: List[str],
     ) -> Dict[str, Any]:
         """
-        Upload local files to a <input type="file"> element via CDP DOM.setFileInputFiles.
+        Upload allowed local files to a <input type="file"> element via CDP DOM.setFileInputFiles.
 
         Resolves the actual file input even when the selector matches a wrapper
         (Workday, Ashby, LinkedIn often hide the real input behind a styled button).
@@ -374,19 +375,13 @@ class DOMHandler:
         Args:
             tab (Tab): The browser tab object.
             selector (str): CSS selector for the file input or any ancestor that contains it.
-            paths (List[str]): Absolute local file paths to upload (single or multiple).
+            paths (List[str]): Absolute allowlisted local file paths to upload.
 
         Returns:
             Dict[str, Any]: { success: True, count: N, files: [basename, ...] }
         """
         try:
-            if not paths:
-                raise Exception("paths must contain at least one file")
-            for p in paths:
-                if not os.path.isabs(p):
-                    raise Exception(f"Path must be absolute: {p}")
-                if not os.path.exists(p):
-                    raise Exception(f"File does not exist: {p}")
+            resolved_paths = validate_upload_paths(paths)
 
             element = await tab.select(selector)
             if not element:
@@ -406,18 +401,18 @@ class DOMHandler:
                         f"or one of its ancestors."
                     )
 
-            if len(paths) > 1 and 'multiple' not in element.attrs:
+            if len(resolved_paths) > 1 and 'multiple' not in element.attrs:
                 raise Exception(
                     f"File input does not accept multiple files "
-                    f"(no 'multiple' attribute), but {len(paths)} paths were "
+                    f"(no 'multiple' attribute), but {len(resolved_paths)} paths were "
                     f"provided. Pass one path or upload sequentially."
                 )
 
-            await element.send_file(*paths)
+            await element.send_file(*resolved_paths)
             return {
                 "success": True,
-                "count": len(paths),
-                "files": [os.path.basename(p) for p in paths],
+                "count": len(resolved_paths),
+                "files": [Path(p).name for p in resolved_paths],
             }
 
         except Exception as e:
