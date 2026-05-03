@@ -43,6 +43,19 @@ from process_cleanup import process_cleanup
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
+SECTION_DESCRIPTIONS = {
+    "browser-management": "Core browser operations",
+    "element-interaction": "Page interaction and element manipulation",
+    "element-extraction": "Element cloning and extraction",
+    "file-extraction": "File-based extraction tools",
+    "network-debugging": "Network monitoring and interception",
+    "cdp-functions": "Chrome DevTools Protocol function execution",
+    "progressive-cloning": "Advanced element cloning system",
+    "cookies-storage": "Cookie and storage management",
+    "tabs": "Tab management",
+    "debugging": "Debug and system tools",
+    "dynamic-hooks": "AI-powered network hook system",
+}
 
 
 def parse_bool_env(name: str, default: bool = False) -> bool:
@@ -496,6 +509,32 @@ async def paste_text(
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
     return await dom_handler.paste_text(tab, selector, text, clear_first)
+
+@section_tool("element-interaction")
+async def file_upload(
+    instance_id: str,
+    selector: str,
+    paths: List[str]
+) -> Dict[str, Any]:
+    """
+    Upload allowed local files to a <input type="file"> element via CDP DOM.setFileInputFiles.
+
+    Resolves the actual file input even if the selector matches a wrapper element
+    (Workday/Ashby/LinkedIn often hide the real input behind a styled button).
+    Refuses multi-file upload when the input lacks the `multiple` attribute.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector for the file input or any ancestor that contains it.
+        paths (List[str]): Absolute allowlisted local file paths to upload.
+
+    Returns:
+        Dict[str, Any]: { success: True, count: N, files: [basename, ...] }
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise Exception(f"Instance not found: {instance_id}")
+    return await dom_handler.file_upload(tab, selector, paths)
 
 @section_tool("element-interaction")
 async def select_option(
@@ -2765,7 +2804,9 @@ if parse_bool_env("XPOOL_SAFE_MODE", default=False):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Stealth Browser MCP Server with 90 tools")
+    parser = argparse.ArgumentParser(
+        description=f"Stealth Browser MCP Server with {sum(len(tools) for tools in SECTION_TOOLS.values())} tools"
+    )
     parser.add_argument("--transport", choices=["stdio", "http"], default="stdio",
                       help="Transport protocol to use")
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", 8000)),
@@ -2820,17 +2861,8 @@ if __name__ == "__main__":
     
     if args.list_sections:
         print("Available tool sections:")
-        print("  browser-management: Core browser operations (11 tools)")
-        print("  element-interaction: Page interaction and element manipulation (8 tools)")
-        print("  element-extraction: Element cloning and extraction (10 tools)")
-        print("  file-extraction: File-based extraction tools (9 tools)")
-        print("  network-debugging: Network monitoring and interception (10 tools)")
-        print("  cdp-functions: Chrome DevTools Protocol function execution (15 tools)")
-        print("  progressive-cloning: Advanced element cloning system (10 tools)")
-        print("  cookies-storage: Cookie and storage management (3 tools)")
-        print("  tabs: Tab management (5 tools)")
-        print("  debugging: Debug and system tools (6 tools)")
-        print("  dynamic-hooks: AI-powered network hook system (12 tools)")
+        for section, description in SECTION_DESCRIPTIONS.items():
+            print(f"  {section}: {description} ({len(SECTION_TOOLS.get(section, []))} tools)")
         print("\nUse --disable-<section-name> to disable specific sections")
         print("Use --minimal to enable only core functionality")
         sys.exit(0)
