@@ -21,15 +21,20 @@ from element_cloner import element_cloner
 class FileBasedElementCloner:
     """Element cloner that saves data to files and returns file paths."""
 
-    def __init__(self, output_dir: str = "element_clones"):
+    def __init__(self, output_dir: Optional[str] = None):
         """
         Initialize with output directory for clone files.
 
         Args:
-            output_dir (str): Directory to save clone files.
+            output_dir (str | None): Directory to save clone files.
+                Defaults to <project_root>/element_clones (absolute path,
+                avoids cwd-dependent failures when launched from Claude Desktop).
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        if output_dir is None:
+            self.output_dir = Path(__file__).resolve().parent.parent / "element_clones"
+        else:
+            self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.comprehensive_cloner = ComprehensiveElementCloner()
     
     def _safe_process_framework_handlers(self, framework_handlers):
