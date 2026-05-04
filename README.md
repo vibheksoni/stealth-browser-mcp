@@ -175,6 +175,13 @@ python src/server.py --debug
 
 Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnostics on `stderr`. In normal MCP `stdio` usage, debug logging stays quiet by default to avoid noisy transport output.
 
+**HTTP transport security**
+- `stdio` transport is recommended for local MCP clients and does not require HTTP auth.
+- HTTP transport remains unauthenticated by default for backward compatibility.
+- Do not expose unauthenticated HTTP transport outside trusted local or private networks.
+- Set `STEALTH_BROWSER_MCP_AUTH_TOKEN` to enable bearer-token auth for HTTP transport.
+- Clients must send `Authorization: Bearer <token>` after HTTP auth is enabled.
+
 **Browser lifecycle defaults**
 - Idle browser instances are reaped automatically after 10 minutes by default.
 - Override per instance with `spawn_browser(idle_timeout_seconds=...)`.
@@ -183,12 +190,14 @@ Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnost
 - Tune startup cleanup of abandoned temp profiles with `BROWSER_ORPHAN_PROFILE_MAX_AGE` (seconds).
 - Restrict local file uploads with `BROWSER_FILE_UPLOAD_ALLOWED_DIRS`.
 
-### Browser Lifecycle Environment Variables
+### Server Environment Variables
 
 These are regular environment variables for the MCP server process itself. Set them wherever you launch `src/server.py`:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `STEALTH_BROWSER_MCP_AUTH_TOKEN` | unset | Optional bearer token for HTTP transport. When set, HTTP clients must send `Authorization: Bearer <token>`. |
+| `MCP_AUTH_TOKEN` | unset | Backward-compatible alias for `STEALTH_BROWSER_MCP_AUTH_TOKEN`. |
 | `BROWSER_IDLE_TIMEOUT` | `600` | Global idle timeout in seconds before an unused browser instance is auto-closed. Set `0` to disable idle reaping globally. |
 | `BROWSER_IDLE_REAPER_INTERVAL` | `60` | Background reaper check interval in seconds. |
 | `BROWSER_ORPHAN_PROFILE_MAX_AGE` | `21600` | Startup cleanup threshold in seconds for stale `uc_*` temp profiles that are not in use by live browser processes. Set `0` to disable this startup sweep. |
@@ -200,6 +209,7 @@ These are regular environment variables for the MCP server process itself. Set t
 - **Shell / local terminal**
 ```bash
 # macOS / Linux
+export STEALTH_BROWSER_MCP_AUTH_TOKEN="replace-with-a-long-random-token"
 export BROWSER_IDLE_TIMEOUT=900
 export BROWSER_IDLE_REAPER_INTERVAL=30
 export BROWSER_ORPHAN_PROFILE_MAX_AGE=43200
@@ -209,6 +219,7 @@ python src/server.py
 
 ```powershell
 # Windows PowerShell
+$env:STEALTH_BROWSER_MCP_AUTH_TOKEN='replace-with-a-long-random-token'
 $env:BROWSER_IDLE_TIMEOUT='900'
 $env:BROWSER_IDLE_REAPER_INTERVAL='30'
 $env:BROWSER_ORPHAN_PROFILE_MAX_AGE='43200'
@@ -226,6 +237,7 @@ python src/server.py
       "command": "C:\\path\\to\\stealth-browser-mcp\\venv\\Scripts\\python.exe",
       "args": ["C:\\path\\to\\stealth-browser-mcp\\src\\server.py"],
       "env": {
+        "STEALTH_BROWSER_MCP_AUTH_TOKEN": "replace-with-a-long-random-token",
         "BROWSER_IDLE_TIMEOUT": "900",
         "BROWSER_IDLE_REAPER_INTERVAL": "30",
         "BROWSER_ORPHAN_PROFILE_MAX_AGE": "43200",
@@ -239,11 +251,29 @@ python src/server.py
 - **systemd / long-running service**
 ```ini
 [Service]
+Environment="STEALTH_BROWSER_MCP_AUTH_TOKEN=replace-with-a-long-random-token"
 Environment="BROWSER_IDLE_TIMEOUT=900"
 Environment="BROWSER_IDLE_REAPER_INTERVAL=30"
 Environment="BROWSER_ORPHAN_PROFILE_MAX_AGE=43200"
 Environment="BROWSER_FILE_UPLOAD_ALLOWED_DIRS=/srv/stealth-browser/uploads:/srv/stealth-browser/shared"
-ExecStart=/path/to/venv/bin/python /path/to/stealth-browser-mcp/src/server.py --transport http
+ExecStart=/path/to/venv/bin/python /path/to/stealth-browser-mcp/src/server.py --transport http --host 0.0.0.0
+```
+
+- **Docker / container HTTP**
+```bash
+docker run --rm -p 8000:8000 \
+  -e STEALTH_BROWSER_MCP_AUTH_TOKEN="replace-with-a-long-random-token" \
+  stealth-browser-mcp
+```
+
+```python
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+
+client = Client(
+    "http://localhost:8000/mcp/",
+    auth=BearerAuth("replace-with-a-long-random-token"),
+)
 ```
 
 **Per-instance override**

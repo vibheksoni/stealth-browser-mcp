@@ -41,9 +41,13 @@ USER mcpuser
 EXPOSE 8000
 ENV PORT=8000
 
-# Health check for FastMCP HTTP server (uses PORT env var)
+# Health check for FastMCP HTTP server
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -s http://localhost:$PORT/mcp -o /dev/null || exit 1
+    CMD if [ -n "$STEALTH_BROWSER_MCP_AUTH_TOKEN" ]; then \
+        curl -fsS -H "Authorization: Bearer $STEALTH_BROWSER_MCP_AUTH_TOKEN" http://localhost:$PORT/mcp -o /dev/null || exit 1; \
+    else \
+        curl -fsS http://localhost:$PORT/mcp -o /dev/null || exit 1; \
+    fi
 
-# Start the MCP server with HTTP transport (reads PORT env var automatically)
+# Start HTTP transport. Set STEALTH_BROWSER_MCP_AUTH_TOKEN to enable bearer auth.
 CMD ["python", "src/server.py", "--transport", "http", "--host", "0.0.0.0"]

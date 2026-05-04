@@ -25,6 +25,10 @@ from debug_logger import debug_logger
 from dom_handler import DOMHandler
 from element_cloner import element_cloner
 from file_based_element_cloner import file_based_element_cloner
+from http_security import (
+    create_http_auth_provider,
+    get_http_auth_token,
+)
 from models import (
     BrowserOptions,
     NavigationOptions,
@@ -69,6 +73,7 @@ DEBUG_LOGGING_ENABLED = (
     parse_bool_env("STEALTH_BROWSER_DEBUG", default=False)
     or parse_bool_env("DEBUG", default=False)
 )
+HTTP_AUTH_TOKEN = get_http_auth_token()
 
 def is_section_enabled(section: str) -> bool:
     """Check if a tool section is enabled."""
@@ -150,6 +155,7 @@ mcp = FastMCP(
     
     All browser instances are undetectable by anti-bot systems.
     """,
+    auth=create_http_auth_provider(HTTP_AUTH_TOKEN),
     lifespan=app_lifespan,
 )
 
