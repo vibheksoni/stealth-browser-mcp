@@ -1,30 +1,29 @@
 """Response handler for managing large responses and automatic file-based fallbacks."""
 
 import json
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional
 
 
 class ResponseHandler:
     """Handle large responses by automatically falling back to file-based storage."""
     
-    def __init__(self, max_tokens: int = 20000, clone_dir: str = None):
+    def __init__(self, max_tokens: int = 20000, clone_dir: Optional[str] = None):
         """
         Initialize the response handler.
-        
+
         Args:
-            max_tokens: Maximum tokens before falling back to file storage
-            clone_dir: Directory to store large response files
+            max_tokens (int): Maximum token estimate before falling back to file storage.
+            clone_dir (Optional[str]): Directory to store large response files.
         """
         self.max_tokens = max_tokens
         if clone_dir is None:
-            self.clone_dir = Path(__file__).parent.parent / "element_clones"
+            self.clone_dir = Path(__file__).resolve().parent.parent / "element_clones"
         else:
             self.clone_dir = Path(clone_dir)
-        self.clone_dir.mkdir(exist_ok=True)
+        self.clone_dir.mkdir(parents=True, exist_ok=True)
     
     def estimate_tokens(self, data: Any) -> int:
         """

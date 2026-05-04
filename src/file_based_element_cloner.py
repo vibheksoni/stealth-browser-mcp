@@ -1,18 +1,17 @@
 import asyncio
 import json
-import os
 import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from .debug_logger import debug_logger
 except ImportError:
     from debug_logger import debug_logger
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from comprehensive_element_cloner import ComprehensiveElementCloner
@@ -21,15 +20,20 @@ from element_cloner import element_cloner
 class FileBasedElementCloner:
     """Element cloner that saves data to files and returns file paths."""
 
-    def __init__(self, output_dir: str = "element_clones"):
+    def __init__(self, output_dir: Optional[str] = None):
         """
         Initialize with output directory for clone files.
 
         Args:
-            output_dir (str): Directory to save clone files.
+            output_dir (Optional[str]): Directory to save clone files.
+                Defaults to <project_root>/element_clones (absolute path,
+                avoids startup failures when the host process uses a read-only cwd).
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        if output_dir is None:
+            self.output_dir = Path(__file__).resolve().parent.parent / "element_clones"
+        else:
+            self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.comprehensive_cloner = ComprehensiveElementCloner()
     
     def _safe_process_framework_handlers(self, framework_handlers):
