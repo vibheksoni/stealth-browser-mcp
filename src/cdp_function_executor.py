@@ -102,37 +102,63 @@ class CDPFunctionExecutor:
 
     async def list_cdp_commands(self) -> List[str]:
         """
-        Lists all available CDP Runtime commands.
+        Lists CDP commands the generic executor will accept.
+
+        Includes core Runtime methods plus a curated set of Page-domain
+        methods (notably addScriptToEvaluateOnNewDocument) that are useful
+        for pre-page-script API spoofing (WebGL renderer, navigator props).
 
         Returns:
             List[str]: List of command names.
         """
         commands = [
+            # Runtime domain
             "evaluate", "callFunctionOn", "addBinding", "removeBinding",
             "compileScript", "runScript", "awaitPromise", "getProperties",
             "getExceptionDetails", "globalLexicalScopeNames", "queryObjects",
             "releaseObject", "releaseObjectGroup", "terminateExecution",
             "setAsyncCallStackDepth", "setCustomObjectFormatterEnabled",
             "setMaxCallStackSizeToCapture", "runIfWaitingForDebugger",
-            "discardConsoleEntries", "getHeapUsage", "getIsolateId"
+            "discardConsoleEntries", "getHeapUsage", "getIsolateId",
+            # Page domain (resolved from uc.cdp.page when not found on Runtime)
+            "addScriptToEvaluateOnNewDocument",
+            "removeScriptToEvaluateOnNewDocument",
+            "reload", "navigate", "stopLoading", "getFrameTree",
+            "setBypassCSP", "setDocumentContent",
         ]
         return commands
 
+    def _resolve_cdp_method(self, command: str):
+        """
+        Resolve a CDP command name across Runtime and Page domains.
+
+        nodriver exposes each CDP domain as a submodule under uc.cdp (e.g.
+        uc.cdp.runtime, uc.cdp.page). Method names are snake_cased on the
+        Python side but the wire uses camelCase. We accept either.
+        """
+        snake = "".join(["_" + c.lower() if c.isupper() else c for c in command]).lstrip("_")
+        for domain in (uc.cdp.runtime, uc.cdp.page):
+            for name in (command, snake):
+                method = getattr(domain, name, None)
+                if callable(method):
+                    return method
+        return None
+
     async def execute_cdp_command(self, tab: Tab, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Executes any CDP Runtime command with given parameters.
+        Executes a CDP command (Runtime or Page domain) with given parameters.
 
         Args:
             tab (Tab): The browser tab.
-            command (str): CDP command name.
-            params (Dict[str, Any]): Parameters for the command.
+            command (str): CDP command name (camelCase or snake_case).
+            params (Dict[str, Any]): Parameters for the command (snake_case keys).
 
         Returns:
             Dict[str, Any]: Result of the command execution.
         """
         try:
             await self.enable_runtime(tab)
-            cdp_method = getattr(uc.cdp.runtime, command, None)
+            cdp_method = self._resolve_cdp_method(command)
             if not cdp_method:
                 raise ValueError(f"Unknown CDP command: {command}")
             result = await tab.send(cdp_method(**params))

@@ -2324,6 +2324,52 @@ async def execute_cdp_command(
 
 
 @section_tool("cdp-functions")
+async def add_script_to_evaluate_on_new_document(
+    instance_id: str,
+    source: str,
+    run_immediately: bool = True,
+) -> Dict[str, Any]:
+    """
+    Install a JavaScript snippet that runs on EVERY new document/frame BEFORE
+    any page script executes. Use this to spoof browser APIs (WebGL renderer,
+    navigator props, etc.) so values are already overridden when bot-detection
+    pages query them inline at parse time.
+
+    Wraps CDP Page.addScriptToEvaluateOnNewDocument. Auto-enables Page domain
+    first (without that, the addScript silently no-ops on a fresh tab).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        source (str): JavaScript source. Runs in the page's main world before
+                      any other script on every navigation, including iframes.
+        run_immediately (bool): If True (default), the script also runs on the
+                      current document if one is already loaded. Useful when
+                      the tab is at about:blank and you want the spoof active
+                      before any user navigation.
+
+    Returns:
+        Dict[str, Any]: { success, identifier } where identifier can be passed
+                        to Page.removeScriptToEvaluateOnNewDocument later.
+    """
+    import nodriver as uc
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        return {"success": False, "error": f"Instance not found: {instance_id}"}
+    try:
+        # CRITICAL: Page domain must be enabled before addScript will take effect.
+        # nodriver does not auto-enable it for ad-hoc Page method calls.
+        await tab.send(uc.cdp.page.enable())
+        result = await tab.send(uc.cdp.page.add_script_to_evaluate_on_new_document(
+            source=source,
+            run_immediately=run_immediately,
+        ))
+        identifier = getattr(result, "identifier", None) or (result if isinstance(result, str) else None)
+        return {"success": True, "identifier": identifier}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@section_tool("cdp-functions")
 async def get_execution_contexts(
     instance_id: str
 ) -> List[Dict[str, Any]]:
