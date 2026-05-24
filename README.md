@@ -53,8 +53,8 @@ Bypass Cloudflare, antibot systems, and social media blocks with real browser in
 ## Features
 
 - **Antibot bypass** — Works on Cloudflare, Queue-It, and other protection systems that block traditional automation
-- **96 tools across 11 sections** — From basic navigation to advanced CDP function execution
-- **Modular loading** — Run the full 96-tool arsenal or a minimal 20-tool core; disable what you don't need
+- **97 tools across 11 sections** — From basic navigation to advanced CDP function execution
+- **Modular loading** — Run the full 97-tool arsenal or a minimal 20-tool core; disable what you don't need
 - **Pixel-accurate element cloning** — Extract complete elements with all CSS, DOM structure, events, and assets via CDP
 - **Network interception** — Inspect every request, response, header, and payload through your AI agent
 - **Dynamic hook system** — AI-generated Python functions that intercept and modify network traffic in real-time
@@ -158,11 +158,11 @@ Restart your MCP client and ask your agent:
 
 ## Modular Architecture
 
-Choose exactly what functionality you need. Run the full 96-tool suite or strip it down to 20 core tools.
+Choose exactly what functionality you need. Run the full 97-tool suite or strip it down to 20 core tools.
 
 | Mode | Tools | Use Case |
 |------|-------|----------|
-| **Full** (default) | 96 | Complete browser automation and debugging |
+| **Full** (default) | 97 | Complete browser automation and debugging |
 | **Minimal** (`--minimal`) | 20 | Core browser automation only |
 | **Custom** (`--disable-*`) | Your choice | Disable specific sections |
 
@@ -293,7 +293,7 @@ Examples:
 | `element-extraction` | 9 | Element cloning and extraction |
 | `file-extraction` | 9 | File-based extraction tools |
 | `network-debugging` | 10 | Network monitoring and interception |
-| `cdp-functions` | 13 | Chrome DevTools Protocol execution |
+| `cdp-functions` | 14 | Chrome DevTools Protocol execution |
 | `progressive-cloning` | 10 | Advanced element cloning |
 | `cookies-storage` | 3 | Cookie and storage management |
 | `tabs` | 5 | Tab management |
@@ -402,6 +402,7 @@ Examples:
 | Tool | Description |
 |------|-------------|
 | `execute_cdp_command()` | Direct CDP commands (use snake_case) |
+| `add_script_to_evaluate_on_new_document()` | Install pre-document scripts for API spoofing |
 | `discover_global_functions()` | Find JavaScript functions |
 | `discover_object_methods()` | Discover object methods (93+ methods) |
 | `call_javascript_function()` | Execute any function |
@@ -491,8 +492,8 @@ Examples:
 | Network debugging | Full request/response inspection via AI | Basic |
 | API reverse engineering | Payload inspection through chat | Manual tools only |
 | Dynamic hook system | AI-generated Python functions for real-time interception | Not available |
-| Modular architecture | 11 sections, 20–96 tools | Fixed ~20 tools |
-| Total tools | 96 (customizable) | ~20 |
+| Modular architecture | 11 sections, 20–97 tools | Fixed ~20 tools |
+| Total tools | 97 (customizable) | ~20 |
 
 Tested on: LinkedIn, Instagram, Twitter/X, Amazon, banking portals, government sites, Cloudflare-protected APIs, Nike SNKRS, Ticketmaster, Supreme.
 

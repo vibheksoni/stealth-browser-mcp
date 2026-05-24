@@ -2327,45 +2327,37 @@ async def execute_cdp_command(
 async def add_script_to_evaluate_on_new_document(
     instance_id: str,
     source: str,
+    world_name: Optional[str] = None,
+    include_command_line_api: Optional[bool] = None,
     run_immediately: bool = True,
 ) -> Dict[str, Any]:
     """
-    Install a JavaScript snippet that runs on EVERY new document/frame BEFORE
-    any page script executes. Use this to spoof browser APIs (WebGL renderer,
-    navigator props, etc.) so values are already overridden when bot-detection
-    pages query them inline at parse time.
-
-    Wraps CDP Page.addScriptToEvaluateOnNewDocument. Auto-enables Page domain
-    first (without that, the addScript silently no-ops on a fresh tab).
+    Install JavaScript that runs before page scripts on each new document.
 
     Args:
         instance_id (str): Browser instance ID.
-        source (str): JavaScript source. Runs in the page's main world before
-                      any other script on every navigation, including iframes.
-        run_immediately (bool): If True (default), the script also runs on the
-                      current document if one is already loaded. Useful when
-                      the tab is at about:blank and you want the spoof active
-                      before any user navigation.
+        source (str): JavaScript source to evaluate before page scripts.
+        world_name (Optional[str]): Isolated world name, or None for the main world.
+        include_command_line_api (Optional[bool]): Whether command line API is available.
+        run_immediately (bool): Whether to run the script in existing contexts too.
 
     Returns:
-        Dict[str, Any]: { success, identifier } where identifier can be passed
-                        to Page.removeScriptToEvaluateOnNewDocument later.
+        Dict[str, Any]: Result with success state and script identifier.
     """
-    import nodriver as uc
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         return {"success": False, "error": f"Instance not found: {instance_id}"}
     try:
-        # CRITICAL: Page domain must be enabled before addScript will take effect.
-        # nodriver does not auto-enable it for ad-hoc Page method calls.
         await tab.send(uc.cdp.page.enable())
         result = await tab.send(uc.cdp.page.add_script_to_evaluate_on_new_document(
             source=source,
+            world_name=world_name,
+            include_command_line_api=include_command_line_api,
             run_immediately=run_immediately,
         ))
-        identifier = getattr(result, "identifier", None) or (result if isinstance(result, str) else None)
-        return {"success": True, "identifier": identifier}
+        return {"success": True, "identifier": str(result)}
     except Exception as e:
+        debug_logger.log_error("server", "add_script_to_evaluate_on_new_document", e)
         return {"success": False, "error": str(e)}
 
 
