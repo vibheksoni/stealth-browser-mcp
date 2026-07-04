@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/vibheksoni-stealth-browser-mcp-badge.png)](https://mseep.ai/app/vibheksoni-stealth-browser-mcp)
+
 <div align="center">
 
 <img src="media/UndetectedStealthBrowser.png" alt="Stealth Browser MCP" width="200"/>
