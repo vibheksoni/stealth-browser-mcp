@@ -46,6 +46,14 @@ class Session(Protocol):
             str: Script identifier
         """
 
+    async def launch_arguments(self) -> List[str]:
+        """
+        Command line arguments of the running browser process.
+
+        Returns:
+            List[str]: Arguments after the executable
+        """
+
     async def click(self, selector: str) -> None:
         """
         Click an element the way the click_element tool does.

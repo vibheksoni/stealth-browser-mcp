@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import nodriver as uc
+import psutil
 
 from browser_manager import BrowserManager
 from dom_handler import DOMHandler
@@ -97,6 +98,16 @@ class BrowserSession:
             str: Script identifier
         """
         return await self.manager.add_init_script(self.instance_id, source)
+
+    async def launch_arguments(self) -> List[str]:
+        """
+        Read the browser process command line.
+
+        Returns:
+            List[str]: Arguments after the executable
+        """
+        browser = await self.manager.get_browser(self.instance_id)
+        return psutil.Process(browser._process.pid).cmdline()[1:]
 
     async def click(self, selector: str) -> None:
         """

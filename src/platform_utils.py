@@ -65,38 +65,36 @@ def is_running_in_container() -> bool:
     return any(container_indicators)
 
 
+def sandbox_must_be_disabled() -> bool:
+    """
+    Check whether Chrome can only start without its sandbox here.
+
+    Only Linux needs this, when running as root or inside a container.
+    Chrome on Windows runs sandboxed under an administrator account, and
+    every extra sandbox flag shows an "unsupported command-line flag" bar
+    in headed windows, so other platforms keep the sandbox.
+
+    Returns:
+        bool: True on Linux as root or in a container
+    """
+    if platform.system().lower() != 'linux':
+        return False
+    return is_running_as_root() or is_running_in_container()
+
+
 def get_required_sandbox_args() -> List[str]:
     """
-    Get the required browser arguments for sandbox handling based on current environment.
-    
+    Get the browser arguments the current environment requires.
+
+    Only --no-sandbox is added, and only where Chrome cannot start otherwise.
+    Flags such as --disable-setuid-sandbox, --single-process, and
+    --disable-gpu are left out: they show warning bars, crash tabs, or remove
+    WebGL, which makes the browser easier to fingerprint.
+
     Returns:
         List[str]: List of browser arguments needed for current environment
     """
-    args = []
-    
-    if is_running_as_root():
-        args.extend([
-            '--no-sandbox',
-            '--disable-setuid-sandbox'
-        ])
-    
-    if is_running_in_container():
-        args.extend([
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--single-process',
-        ])
-    
-    seen = set()
-    unique_args = []
-    for arg in args:
-        if arg not in seen:
-            seen.add(arg)
-            unique_args.append(arg)
-    
-    return unique_args
+    return ['--no-sandbox'] if sandbox_must_be_disabled() else []
 
 
 def merge_browser_args(user_args: Optional[List[str]] = None) -> List[str]:

@@ -39,6 +39,7 @@ from benchmarks.stealth.targets.local_probe import (
     platform_matches,
 )
 from benchmarks.stealth.targets.input_fidelity import TYPED_TEXT, InputFidelityTarget
+from benchmarks.stealth.targets.launch_flags import LaunchFlagsTarget
 from benchmarks.stealth.targets.result_tables import SannysoftTarget
 from benchmarks.stealth.targets.tls_fingerprint import (
     CHROME_AKAMAI_FINGERPRINT,
@@ -203,6 +204,15 @@ class TargetEvaluationTests(unittest.TestCase):
         inconsistent = probe_payload(notificationPermission="denied", permissionQuery="prompt")
         self.assertEqual(status_from_checks(target.evaluate(inconsistent)[0]), Status.FAIL)
 
+    def test_launch_flags(self):
+        target = LaunchFlagsTarget()
+        clean = ["--no-first-run", "--remote-debugging-port=51234", "--headless=new"]
+        self.assertEqual(status_from_checks(target.evaluate({"arguments": clean})[0]), Status.PASS)
+        for flag in ("--no-sandbox", "--disable-setuid-sandbox", "--remote-debugging-port=0", "--enable-automation"):
+            checks = target.evaluate({"arguments": clean + [flag]})[0]
+            self.assertEqual(status_from_checks(checks), Status.FAIL, flag)
+        self.assertEqual(status_from_checks(target.evaluate({"arguments": clean + ["--disable-gpu"]})[0]), Status.DEGRADED)
+
     def test_input_fidelity(self):
         def events(trusted=True):
             recorded = [
@@ -250,7 +260,7 @@ class TargetEvaluationTests(unittest.TestCase):
 
     def test_select_targets(self):
         self.assertEqual([t.name for t in select_targets(["tls", "local_probe"])], ["local_probe", "tls"])
-        self.assertEqual(len(select_targets()), 8)
+        self.assertEqual(len(select_targets()), 9)
         with self.assertRaises(ValueError):
             select_targets(["missing"])
 

@@ -12,6 +12,7 @@ import nodriver as uc
 from nodriver import Browser, Tab
 
 import cdp_raw
+from browser_launcher import launch_browser
 from debug_logger import debug_logger
 from models import BrowserInstance, BrowserState, BrowserOptions, PageState
 from persistent_storage import persistent_storage
@@ -28,7 +29,7 @@ from proxy_utils import (
 )
 
 HEADLESS_UA_TOKEN = "HeadlessChrome/"
-HEADLESS_UA_PROBE_TIMEOUT = 20.0
+HEADLESS_UA_PROBE_TIMEOUT = 40.0
 CLOSE_STEP_TIMEOUT = 2.0
 TARGET_UPDATE_EVENTS = (
     uc.cdp.target.TargetInfoChanged,
@@ -169,7 +170,7 @@ class BrowserManager:
         user_agent: Optional[str] = None
         try:
             probe = await asyncio.wait_for(
-                uc.start(config=uc.Config(
+                launch_browser(uc.Config(
                     headless=True,
                     sandbox=sandbox,
                     browser_executable_path=browser_executable,
@@ -470,7 +471,7 @@ class BrowserManager:
                 browser_args=launch_args
             )
 
-            browser = await uc.start(config=config)
+            browser = await launch_browser(config)
             tab = browser.main_tab
             config_obj = getattr(browser, "config", None)
             actual_user_data_dir = getattr(config_obj, "user_data_dir", options.user_data_dir)

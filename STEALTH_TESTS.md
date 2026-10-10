@@ -17,6 +17,7 @@ Local runs write to `.stealth-results/` and print one line per target. Use `--ou
 
 | Target | What it measures |
 |--------|------------------|
+| Launch flags | The real Chrome command line has no automation, sandbox-disabling, or unsupported flags |
 | Local fingerprint probe | Automation tells read by a bundled page on 127.0.0.1, no network needed |
 | Init script injection | `add_script_to_evaluate_on_new_document` runs before page scripts and survives navigation |
 | Input fidelity | `click_element` and `type_text` produce trusted pointer, mouse, and key events in a real order, with nothing injected into the page |

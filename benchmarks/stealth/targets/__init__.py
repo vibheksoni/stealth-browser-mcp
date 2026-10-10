@@ -6,11 +6,13 @@ from .base import Target
 from .cloudflare import CloudflareTarget
 from .creepjs import CreepJSTarget
 from .input_fidelity import InputFidelityTarget
+from .launch_flags import LaunchFlagsTarget
 from .local_probe import InitScriptTarget, LocalProbeTarget
 from .result_tables import IntoliTarget, SannysoftTarget
 from .tls_fingerprint import TLSFingerprintTarget
 
 ALL_TARGETS: List[Target] = [
+    LaunchFlagsTarget(),
     LocalProbeTarget(),
     InitScriptTarget(),
     InputFidelityTarget(),

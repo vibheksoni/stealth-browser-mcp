@@ -51,7 +51,7 @@ class HeadlessUserAgentTests(unittest.TestCase):
 
         manager = BrowserManager()
         cleanup = mock.Mock()
-        with mock.patch.object(browser_manager_module.uc, "start", side_effect=fake_start), mock.patch.object(
+        with mock.patch.object(browser_manager_module, "launch_browser", side_effect=fake_start), mock.patch.object(
             browser_manager_module, "process_cleanup", cleanup
         ):
             first = asyncio.run(manager._resolve_headless_user_agent("/missing/chrome", True, ["--lang=en-US"]))
@@ -74,7 +74,7 @@ class HeadlessUserAgentTests(unittest.TestCase):
             raise RuntimeError("no browser")
 
         manager = BrowserManager()
-        with mock.patch.object(browser_manager_module.uc, "start", side_effect=failing_start):
+        with mock.patch.object(browser_manager_module, "launch_browser", side_effect=failing_start):
             self.assertIsNone(asyncio.run(manager._resolve_headless_user_agent("/missing/chrome", True, [])))
             self.assertIsNone(asyncio.run(manager._resolve_headless_user_agent("/missing/chrome", True, [])))
         self.assertEqual(len(calls), 2)
@@ -84,7 +84,7 @@ class HeadlessUserAgentTests(unittest.TestCase):
             return FakeBrowser(CLEAN_UA)
 
         manager = BrowserManager()
-        with mock.patch.object(browser_manager_module.uc, "start", side_effect=fake_start) as start, mock.patch.object(
+        with mock.patch.object(browser_manager_module, "launch_browser", side_effect=fake_start) as start, mock.patch.object(
             browser_manager_module, "process_cleanup", mock.Mock()
         ):
             self.assertIsNone(asyncio.run(manager._resolve_headless_user_agent("/missing/chrome", True, [])))

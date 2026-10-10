@@ -249,10 +249,10 @@ async def spawn_browser(
         Dict[str, Any]: Instance information including instance_id.
     """
     try:
-        from platform_utils import is_running_as_root, is_running_in_container
-        
+        from platform_utils import sandbox_must_be_disabled
+
         if sandbox is None:
-            sandbox = not (is_running_as_root() or is_running_in_container())
+            sandbox = not sandbox_must_be_disabled()
         elif isinstance(sandbox, str):
             sandbox = sandbox.lower() in ('true', '1', 'yes', 'on', 'enabled')
         elif isinstance(sandbox, int):
