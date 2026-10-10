@@ -1,0 +1,675 @@
+{
+  "runner": "windows-x64-headless-stable",
+  "date": "2026-10-10",
+  "started_at": "2026-10-10T19:20:50+00:00",
+  "finished_at": "2026-10-10T19:22:07+00:00",
+  "environment": {
+    "os": "windows",
+    "os_release": "Windows-10-10.0.26100-SP0",
+    "arch": "x64",
+    "python": "3.11.9",
+    "nodriver": "0.47.0",
+    "mode": "headless",
+    "chrome_channel": "stable",
+    "ci": {
+      "provider": "github-actions",
+      "run_id": "38079346160",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/38079346160",
+      "commit": "7a06b1459042f3c8453c7fb6a2bfb8c903bd151b",
+      "event": "workflow_dispatch",
+      "runner_image": "win25-vs2026"
+    },
+    "chrome_product": "Chrome/154.0.8037.58",
+    "chrome_version": "154.0.8037.58",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    "protocol_version": "1.3"
+  },
+  "targets": [
+    {
+      "name": "local_probe",
+      "title": "Local fingerprint probe",
+      "category": "Automation tells",
+      "url": "local/probe.html",
+      "status": "PASS",
+      "summary": "13/13 checks passed",
+      "checks": [
+        {
+          "name": "navigator.webdriver is not true",
+          "passed": true,
+          "critical": true,
+          "value": false
+        },
+        {
+          "name": "user agent has no HeadlessChrome",
+          "passed": true,
+          "critical": true,
+          "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+        },
+        {
+          "name": "client hints have no HeadlessChrome",
+          "passed": true,
+          "critical": true,
+          "value": [
+            "Chromium",
+            "Google Chrome",
+            "Not A(Brand"
+          ]
+        },
+        {
+          "name": "window.chrome present",
+          "passed": true,
+          "critical": true,
+          "value": true
+        },
+        {
+          "name": "plugins present",
+          "passed": true,
+          "critical": true,
+          "value": 5
+        },
+        {
+          "name": "languages consistent",
+          "passed": true,
+          "critical": true,
+          "value": [
+            "en-US",
+            "en"
+          ]
+        },
+        {
+          "name": "notification permission consistent",
+          "passed": true,
+          "critical": true,
+          "value": "default/prompt"
+        },
+        {
+          "name": "window has outer size",
+          "passed": true,
+          "critical": true,
+          "value": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "name": "iframe navigator.webdriver is not true",
+          "passed": true,
+          "critical": true,
+          "value": false
+        },
+        {
+          "name": "platform matches client hints",
+          "passed": true,
+          "critical": false,
+          "value": "Win32/Windows"
+        },
+        {
+          "name": "iframe window.chrome present",
+          "passed": true,
+          "critical": false,
+          "value": true
+        },
+        {
+          "name": "WebGL renderer is hardware",
+          "passed": true,
+          "critical": false,
+          "value": "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+        },
+        {
+          "name": "console does not read Error.stack",
+          "passed": true,
+          "critical": false,
+          "value": false
+        }
+      ],
+      "details": {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "platform": "Win32",
+        "brands": [
+          "Chromium",
+          "Google Chrome",
+          "Not A(Brand"
+        ],
+        "languages": [
+          "en-US",
+          "en"
+        ],
+        "hardware_concurrency": 4,
+        "webgl_vendor": "Google Inc. (Microsoft)",
+        "webgl_renderer": "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "outer_size": [
+          1920,
+          1080
+        ],
+        "outer_size_at_load": [
+          0,
+          0
+        ],
+        "screen": [
+          800,
+          600,
+          24
+        ]
+      },
+      "duration_seconds": 6.05,
+      "error": null
+    },
+    {
+      "name": "init_script",
+      "title": "Init script injection",
+      "category": "Capability",
+      "url": "local/probe.html",
+      "status": "PASS",
+      "summary": "4/4 checks passed",
+      "checks": [
+        {
+          "name": "script installed",
+          "passed": true,
+          "critical": true,
+          "value": "1"
+        },
+        {
+          "name": "ran before page scripts",
+          "passed": true,
+          "critical": true,
+          "value": "installed"
+        },
+        {
+          "name": "persists across navigation",
+          "passed": true,
+          "critical": true,
+          "value": "installed"
+        },
+        {
+          "name": "WebGL renderer override applied",
+          "passed": true,
+          "critical": false,
+          "value": "Stealth Benchmark Renderer"
+        }
+      ],
+      "details": {
+        "webgl_renderer": "Stealth Benchmark Renderer"
+      },
+      "duration_seconds": 7.02,
+      "error": null
+    },
+    {
+      "name": "input_fidelity",
+      "title": "Input fidelity",
+      "category": "Interaction",
+      "url": "local/input.html",
+      "status": "PASS",
+      "summary": "9/9 checks passed",
+      "checks": [
+        {
+          "name": "click is trusted",
+          "passed": true,
+          "critical": true,
+          "value": 1
+        },
+        {
+          "name": "click has pointer and mouse events",
+          "passed": true,
+          "critical": true,
+          "value": [
+            "pointerdown",
+            "mousedown",
+            "mouseup",
+            "click"
+          ]
+        },
+        {
+          "name": "mouse moved before click",
+          "passed": true,
+          "critical": false,
+          "value": 6
+        },
+        {
+          "name": "button held for a moment",
+          "passed": true,
+          "critical": false,
+          "value": 56.8
+        },
+        {
+          "name": "key events are trusted",
+          "passed": true,
+          "critical": true,
+          "value": 48
+        },
+        {
+          "name": "every character has keydown",
+          "passed": true,
+          "critical": true,
+          "value": "Probe Text 42!"
+        },
+        {
+          "name": "every keydown has keyup",
+          "passed": true,
+          "critical": true,
+          "value": 14
+        },
+        {
+          "name": "typed value is exact",
+          "passed": true,
+          "critical": true,
+          "value": "Probe Text 42!"
+        },
+        {
+          "name": "no nodes injected into the page",
+          "passed": true,
+          "critical": true,
+          "value": 0
+        }
+      ],
+      "details": {
+        "press_ms": 56.8,
+        "mouse_moves": 6,
+        "injected_nodes": 0
+      },
+      "duration_seconds": 5.7,
+      "error": null
+    },
+    {
+      "name": "sannysoft",
+      "title": "Sannysoft",
+      "category": "Bot detection suite",
+      "url": "https://bot.sannysoft.com/",
+      "status": "PASS",
+      "summary": "31/31 checks passed",
+      "checks": [
+        {
+          "name": "User Agent (Old)",
+          "passed": true,
+          "critical": true,
+          "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+        },
+        {
+          "name": "WebDriver (New)",
+          "passed": true,
+          "critical": true,
+          "value": "missing (passed)"
+        },
+        {
+          "name": "WebDriver Advanced",
+          "passed": true,
+          "critical": true,
+          "value": "passed"
+        },
+        {
+          "name": "Chrome (New)",
+          "passed": true,
+          "critical": true,
+          "value": "present (passed)"
+        },
+        {
+          "name": "Permissions (New)",
+          "passed": true,
+          "critical": true,
+          "value": "prompt"
+        },
+        {
+          "name": "Plugins Length (Old)",
+          "passed": true,
+          "critical": true,
+          "value": "5"
+        },
+        {
+          "name": "Plugins is of type PluginArray",
+          "passed": true,
+          "critical": true,
+          "value": "passed"
+        },
+        {
+          "name": "Languages (Old)",
+          "passed": true,
+          "critical": true,
+          "value": "en-US,en"
+        },
+        {
+          "name": "WebGL Vendor",
+          "passed": true,
+          "critical": true,
+          "value": "Google Inc. (Microsoft)"
+        },
+        {
+          "name": "WebGL Renderer",
+          "passed": true,
+          "critical": true,
+          "value": "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+        },
+        {
+          "name": "Broken Image Dimensions",
+          "passed": true,
+          "critical": true,
+          "value": "16x16"
+        },
+        {
+          "name": "PHANTOM_UA",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "PHANTOM_PROPERTIES",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "PHANTOM_ETSL",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "PHANTOM_LANGUAGE",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "PHANTOM_WEBSOCKET",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "MQ_SCREEN",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "PHANTOM_OVERFLOW",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "PHANTOM_WINDOW_HEIGHT",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "HEADCHR_UA",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "HEADCHR_CHROME_OBJ",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "HEADCHR_PERMISSIONS",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "HEADCHR_PLUGINS",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "HEADCHR_IFRAME",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "CHR_DEBUG_TOOLS",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "SELENIUM_DRIVER",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "CHR_BATTERY",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "CHR_MEMORY",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "TRANSPARENT_PIXEL",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "SEQUENTUM",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        },
+        {
+          "name": "VIDEO_CODECS",
+          "passed": true,
+          "critical": true,
+          "value": "ok"
+        }
+      ],
+      "details": {
+        "User Agent (Old)": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "WebDriver (New)": "missing (passed)",
+        "WebDriver Advanced": "passed",
+        "Chrome (New)": "present (passed)",
+        "Permissions (New)": "prompt",
+        "Plugins Length (Old)": "5",
+        "Plugins is of type PluginArray": "passed",
+        "Languages (Old)": "en-US,en",
+        "WebGL Vendor": "Google Inc. (Microsoft)",
+        "WebGL Renderer": "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "Broken Image Dimensions": "16x16",
+        "PHANTOM_UA": "ok",
+        "PHANTOM_PROPERTIES": "ok",
+        "PHANTOM_ETSL": "ok",
+        "PHANTOM_LANGUAGE": "ok",
+        "PHANTOM_WEBSOCKET": "ok",
+        "MQ_SCREEN": "ok",
+        "PHANTOM_OVERFLOW": "ok",
+        "PHANTOM_WINDOW_HEIGHT": "ok",
+        "HEADCHR_UA": "ok",
+        "HEADCHR_CHROME_OBJ": "ok",
+        "HEADCHR_PERMISSIONS": "ok",
+        "HEADCHR_PLUGINS": "ok",
+        "HEADCHR_IFRAME": "ok",
+        "CHR_DEBUG_TOOLS": "ok",
+        "SELENIUM_DRIVER": "ok",
+        "CHR_BATTERY": "ok",
+        "CHR_MEMORY": "ok",
+        "TRANSPARENT_PIXEL": "ok",
+        "SEQUENTUM": "ok",
+        "VIDEO_CODECS": "ok"
+      },
+      "duration_seconds": 10.08,
+      "error": null
+    },
+    {
+      "name": "intoli",
+      "title": "Intoli",
+      "category": "Headless detection",
+      "url": "https://intoli.com/blog/not-possible-to-block-chrome-headless/chrome-headless-test.html",
+      "status": "PASS",
+      "summary": "6/6 checks passed",
+      "checks": [
+        {
+          "name": "User Agent (Old)",
+          "passed": true,
+          "critical": true,
+          "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+        },
+        {
+          "name": "WebDriver (New)",
+          "passed": true,
+          "critical": true,
+          "value": "missing (passed)"
+        },
+        {
+          "name": "Chrome (New)",
+          "passed": true,
+          "critical": true,
+          "value": "present (passed)"
+        },
+        {
+          "name": "Permissions (New)",
+          "passed": true,
+          "critical": true,
+          "value": "prompt"
+        },
+        {
+          "name": "Plugins Length (Old)",
+          "passed": true,
+          "critical": true,
+          "value": "5"
+        },
+        {
+          "name": "Languages (Old)",
+          "passed": true,
+          "critical": true,
+          "value": "en-US,en"
+        }
+      ],
+      "details": {
+        "User Agent (Old)": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "WebDriver (New)": "missing (passed)",
+        "Chrome (New)": "present (passed)",
+        "Permissions (New)": "prompt",
+        "Plugins Length (Old)": "5",
+        "Languages (Old)": "en-US,en"
+      },
+      "duration_seconds": 8.5,
+      "error": null
+    },
+    {
+      "name": "creepjs",
+      "title": "CreepJS",
+      "category": "Deep fingerprinting",
+      "url": "https://abrahamjuliot.github.io/creepjs/",
+      "status": "PASS",
+      "summary": "0% headless, 0% stealth, 31% like headless",
+      "checks": [
+        {
+          "name": "headless score below 50%",
+          "passed": true,
+          "critical": true,
+          "value": 0
+        },
+        {
+          "name": "headless score is 0%",
+          "passed": true,
+          "critical": false,
+          "value": 0
+        },
+        {
+          "name": "stealth score is 0%",
+          "passed": true,
+          "critical": true,
+          "value": 0
+        }
+      ],
+      "details": {
+        "like_headless_percent": 31,
+        "headless_percent": 0,
+        "stealth_percent": 0
+      },
+      "duration_seconds": 13.78,
+      "error": null
+    },
+    {
+      "name": "cloudflare",
+      "title": "Cloudflare (nowsecure.nl)",
+      "category": "JS challenge",
+      "url": "https://nowsecure.nl/",
+      "status": "PASS",
+      "summary": "Reached protected page after 0.0s",
+      "checks": [
+        {
+          "name": "challenge cleared",
+          "passed": true,
+          "critical": true,
+          "value": "nowsecure.nl"
+        }
+      ],
+      "details": {
+        "title": "nowsecure.nl",
+        "waited_seconds": 0.0
+      },
+      "duration_seconds": 5.89,
+      "error": null
+    },
+    {
+      "name": "tls",
+      "title": "TLS and HTTP/2 fingerprint",
+      "category": "Network fingerprinting",
+      "url": "https://tls.peet.ws/api/all",
+      "status": "PASS",
+      "summary": "JA4 t13d1517h2_8daaf6152771_cb7bf5808d99, HTTP/2 52d84b11737d980aef856699f885ca86",
+      "checks": [
+        {
+          "name": "header user agent has no HeadlessChrome",
+          "passed": true,
+          "critical": true,
+          "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+        },
+        {
+          "name": "HTTP/2 negotiated",
+          "passed": true,
+          "critical": true,
+          "value": "h2"
+        },
+        {
+          "name": "TLS 1.3 negotiated",
+          "passed": true,
+          "critical": true,
+          "value": "t13d1517h2"
+        },
+        {
+          "name": "Chrome HTTP/2 fingerprint",
+          "passed": true,
+          "critical": false,
+          "value": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p"
+        },
+        {
+          "name": "Chrome JA4 cipher hash",
+          "passed": true,
+          "critical": false,
+          "value": "8daaf6152771"
+        }
+      ],
+      "details": {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "http_version": "h2",
+        "ja3_hash": "4d35336003fcec2fdefbf561fbb182c5",
+        "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+        "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
+        "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+        "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
+      },
+      "duration_seconds": 5.72,
+      "error": null
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "PASS": 8,
+    "DEGRADED": 0,
+    "FAIL": 0,
+    "UNREACHABLE": 0
+  }
+}
