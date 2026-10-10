@@ -6,6 +6,8 @@ There are two parts. The automated results come from the benchmark in `benchmark
 
 Detection results depend on site policy, region, IP reputation, Chrome version, and detector version, so treat them as measurements, not guarantees.
 
+GitHub's Linux runners have no GPU, so Chrome renders WebGL with the SwiftShader software renderer there. Sannysoft flags that renderer and the local probe marks it as a minor finding. Machines with a GPU report their real renderer and do not show this.
+
 ## Running the Benchmark
 
 ```bash
