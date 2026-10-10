@@ -18,7 +18,8 @@ description: Use this skill when operating stealth-browser-mcp from an AI agent 
 
 - Use `--minimal` when an agent only needs browser spawning, navigation, screenshots, page content, and basic interaction.
 - Use full mode for CDP execution, network debugging, cookie/storage work, dynamic hooks, and advanced element extraction.
-- Use `press_key` when a widget needs a real key event, such as Enter or arrow keys in a react-select or typeahead field. Those widgets ignore the synthetic events produced by `type_text(parse_newlines=True)` and discard the value on blur.
+- `click_element`, `type_text`, and `press_key` all send trusted input events. Use `press_key` for control keys such as Enter, Tab, Escape, or arrow keys in react-select and typeahead fields, and `paste_text` when speed matters more than per-key events.
+- Use `create_page_binding` when page JavaScript needs to ask the agent for a value. Read calls with `get_page_binding_calls` (it can wait) and answer with `resolve_page_binding_call`.
 - Use `execute_script` for normal page JavaScript.
 - Use `execute_cdp_command` only when a CDP primitive is required or when page JavaScript cannot access the needed browser state.
 - Use network tools after navigation starts: `list_network_requests`, `search_network_requests`, `get_request_details`, `get_response_details`, and `get_response_content`.

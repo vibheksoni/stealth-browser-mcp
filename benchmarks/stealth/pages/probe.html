@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>stealth probe</title>
+<script>
+window.__initMarkerAtParse = typeof window.__sbmInitMarker === "undefined" ? null : window.__sbmInitMarker;
+</script>
+</head>
+<body>
+<p>stealth probe</p>
+<script>
+(async () => {
+  const r = {};
+  r.webdriver = navigator.webdriver;
+  r.userAgent = navigator.userAgent;
+  r.appVersion = navigator.appVersion;
+  r.platform = navigator.platform;
+  r.brands = navigator.userAgentData ? navigator.userAgentData.brands.map(b => b.brand) : null;
+  r.uaPlatform = navigator.userAgentData ? navigator.userAgentData.platform : null;
+  r.hasChrome = typeof window.chrome === "object" && window.chrome !== null;
+  r.plugins = navigator.plugins.length;
+  r.pluginsIsArray = navigator.plugins instanceof PluginArray;
+  r.mimeTypes = navigator.mimeTypes.length;
+  r.languages = Array.from(navigator.languages || []);
+  r.language = navigator.language;
+  r.hardwareConcurrency = navigator.hardwareConcurrency;
+  r.outer = [window.outerWidth, window.outerHeight];
+  r.inner = [window.innerWidth, window.innerHeight];
+  r.screen = [screen.width, screen.height, screen.colorDepth];
+  try {
+    r.notificationPermission = Notification.permission;
+    r.permissionQuery = (await navigator.permissions.query({ name: "notifications" })).state;
+  } catch (e) {
+    r.permissionError = String(e);
+  }
+  try {
+    const gl = document.createElement("canvas").getContext("webgl");
+    const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+    r.webgl = !!(gl && ext);
+    r.webglVendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : null;
+    r.webglRenderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null;
+  } catch (e) {
+    r.webglError = String(e);
+  }
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<p>frame</p>";
+  document.body.appendChild(iframe);
+  r.iframeChrome = typeof iframe.contentWindow.chrome === "object" && iframe.contentWindow.chrome !== null;
+  r.iframeWebdriver = iframe.contentWindow.navigator.webdriver;
+  iframe.remove();
+  let stackRead = false;
+  const error = new Error("probe");
+  Object.defineProperty(error, "stack", { configurable: false, get() { stackRead = true; return ""; } });
+  console.debug(error);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  r.consoleStackRead = stackRead;
+  r.initMarkerAtParse = window.__initMarkerAtParse;
+  window.__stealthProbe = r;
+})();
+</script>
+</body>
+</html>

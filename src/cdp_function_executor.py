@@ -5,18 +5,22 @@ This module provides comprehensive function execution capabilities using nodrive
 1. Direct CDP command execution
 2. JavaScript function discovery and execution
 3. Dynamic script injection and execution
-4. Python-JavaScript bridge functionality
+4. Python to JavaScript translation
 """
 
 import ast
 import asyncio
 import json
-from typing import Any, Callable, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import nodriver as uc
 from nodriver import Tab
 
 from debug_logger import debug_logger
+
+CONTEXT_COLLECT_SECONDS = 0.3
+JS_IDENTIFIER = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,63}$")
 
 
 class ExecutionContext:
@@ -77,7 +81,6 @@ class CDPFunctionExecutor:
         """
         Initializes the CDPFunctionExecutor instance.
         """
-        self._python_bindings: Dict[str, Callable] = {}
         self._persistent_functions: Dict[str, Dict[str, str]] = {}
 
     async def enable_runtime(self, tab: Tab) -> bool:
@@ -214,48 +217,69 @@ class CDPFunctionExecutor:
         """
         Gets all available execution contexts.
 
+        Re-enables the Runtime domain so Chrome reports every live context
+        (main frame, iframes, isolated worlds), then collects the events.
+
         Args:
             tab (Tab): The browser tab.
 
         Returns:
-            List[ExecutionContext]: List of execution contexts.
+            List[ExecutionContext]: Execution contexts ordered by id.
         """
+        collected: Dict[int, Any] = {}
+
+        def on_created(event: uc.cdp.runtime.ExecutionContextCreated) -> None:
+            collected[int(event.context.id_)] = event.context
+
+        def on_destroyed(event: uc.cdp.runtime.ExecutionContextDestroyed) -> None:
+            collected.pop(int(event.execution_context_id), None)
+
+        handlers = (
+            (uc.cdp.runtime.ExecutionContextCreated, on_created),
+            (uc.cdp.runtime.ExecutionContextDestroyed, on_destroyed),
+        )
         try:
-            await self.enable_runtime(tab)
-            script = """
-            (function() {
-                return {
-                    location: window.location.href,
-                    title: document.title,
-                    readyState: document.readyState,
-                    contexts: [{
-                        name: 'main',
-                        origin: window.location.origin,
-                        url: window.location.href
-                    }]
-                };
-            })()
-            """
-            result = await tab.send(uc.cdp.runtime.evaluate(
-                expression=script,
-                return_by_value=True,
-                await_promise=True
-            ))
-            if result and result[0] and result[0].value:
-                context_data = result[0].value
-                contexts = []
-                for i, ctx in enumerate(context_data.get('contexts', [])):
-                    contexts.append(ExecutionContext(
-                        id=str(i),
-                        name=ctx['name'],
-                        origin=ctx['origin'],
-                        unique_id=f"{ctx['origin']}_{i}"
-                    ))
-                return contexts
-            return []
+            for event_type, handler in handlers:
+                tab.add_handler(event_type, handler)
+            await tab.send(uc.cdp.runtime.disable())
+            await tab.send(uc.cdp.runtime.enable())
+            await asyncio.sleep(CONTEXT_COLLECT_SECONDS)
+            return [
+                ExecutionContext(
+                    id=str(int(ctx.id_)),
+                    name=ctx.name,
+                    origin=ctx.origin,
+                    unique_id=ctx.unique_id,
+                    aux_data=ctx.aux_data,
+                )
+                for _, ctx in sorted(collected.items())
+            ]
         except Exception as e:
             debug_logger.log_error("cdp_function_executor", "get_execution_contexts", e)
             return []
+        finally:
+            for event_type, handler in handlers:
+                callbacks = tab.handlers.get(event_type)
+                if callbacks and handler in callbacks:
+                    callbacks.remove(handler)
+
+    @staticmethod
+    def _context_kwargs(context_id: Optional[str]) -> Dict[str, Any]:
+        """
+        Build Runtime.evaluate arguments that target an execution context.
+
+        Args:
+            context_id (Optional[str]): Numeric context id or unique id from get_execution_contexts.
+
+        Returns:
+            Dict[str, Any]: context_id or unique_context_id keyword, empty for the default context.
+        """
+        if context_id is None or str(context_id).strip() == "":
+            return {}
+        value = str(context_id).strip()
+        if value.isdigit():
+            return {"context_id": uc.cdp.runtime.ExecutionContextId(int(value))}
+        return {"unique_context_id": value}
 
     async def discover_global_functions(self, tab: Tab, context_id: Optional[str] = None) -> List[FunctionInfo]:
         """
@@ -321,7 +345,8 @@ class CDPFunctionExecutor:
             result = await tab.send(uc.cdp.runtime.evaluate(
                 expression=discovery_script,
                 return_by_value=True,
-                await_promise=True
+                await_promise=True,
+                **self._context_kwargs(context_id)
             ))
             if result and result[0] and result[0].value:
                 functions_data = result[0].value
@@ -396,7 +421,13 @@ class CDPFunctionExecutor:
             debug_logger.log_error("cdp_function_executor", "discover_object_methods", e)
             return []
 
-    async def call_discovered_function(self, tab: Tab, function_path: str, args: List[Any]) -> Dict[str, Any]:
+    async def call_discovered_function(
+        self,
+        tab: Tab,
+        function_path: str,
+        args: List[Any],
+        context_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Calls a discovered JavaScript function with arguments.
 
@@ -404,6 +435,7 @@ class CDPFunctionExecutor:
             tab (Tab): The browser tab.
             function_path (str): Path to the function.
             args (List[Any]): Arguments to pass.
+            context_id (str, optional): Execution context identifier.
 
         Returns:
             Dict[str, Any]: Result of the function call.
@@ -453,7 +485,8 @@ class CDPFunctionExecutor:
             result = await tab.send(uc.cdp.runtime.evaluate(
                 expression=call_script,
                 return_by_value=True,
-                await_promise=True
+                await_promise=True,
+                **self._context_kwargs(context_id)
             ))
             if result and result[0] and result[0].value:
                 return result[0].value
@@ -571,7 +604,8 @@ class CDPFunctionExecutor:
                 expression=wrapped_script,
                 return_by_value=True,
                 await_promise=True,
-                allow_unsafe_eval_blocked_by_csp=True
+                allow_unsafe_eval_blocked_by_csp=True,
+                **self._context_kwargs(context_id)
             ))
             if result and result[0] and result[0].value:
                 return result[0].value
@@ -587,54 +621,53 @@ class CDPFunctionExecutor:
             debug_logger.log_error("cdp_function_executor", "inject_and_execute_script", e)
             return {"success": False, "error": str(e)}
 
-    async def create_persistent_function(self, tab: Tab, function_name: str, function_code: str, instance_id: str) -> Dict[str, Any]:
+    async def prepare_persistent_function(
+        self,
+        tab: Tab,
+        function_name: str,
+        function_code: str,
+        instance_id: str,
+    ) -> str:
         """
-        Creates a persistent JavaScript function that survives page reloads.
+        Validate a persistent function and build its init script.
 
         Args:
-            tab (Tab): The browser tab.
-            function_name (str): Name of the function.
-            function_code (str): JavaScript code for the function.
+            tab (Tab): The browser tab used to check that the code is a function.
+            function_name (str): JavaScript identifier to expose on window.
+            function_code (str): JavaScript function expression.
             instance_id (str): Instance identifier.
 
         Returns:
-            Dict[str, Any]: Result of function creation.
+            str: Init script source that defines the function on every new document.
+
+        Raises:
+            ValueError: When the name is not an identifier or the code is not a function expression.
         """
-        try:
-            await self.enable_runtime(tab)
-            if instance_id not in self._persistent_functions:
-                self._persistent_functions[instance_id] = {}
-            self._persistent_functions[instance_id][function_name] = function_code
-            create_script = f"""
-            (function() {{
-                try {{
-                    window.{function_name} = {function_code};
-                    return {{
-                        success: true,
-                        function_name: '{function_name}',
-                        created_at: new Date().toISOString(),
-                        available_as: 'window.{function_name}'
-                    }};
-                }} catch (error) {{
-                    return {{
-                        success: false,
-                        error: error.message,
-                        function_name: '{function_name}'
-                    }};
-                }}
-            }})()
-            """
-            result = await tab.send(uc.cdp.runtime.evaluate(
-                expression=create_script,
-                return_by_value=True,
-                await_promise=True
-            ))
-            if result and result[0] and result[0].value:
-                return result[0].value
-            return {"success": False, "error": "Failed to create function"}
-        except Exception as e:
-            debug_logger.log_error("cdp_function_executor", "create_persistent_function", e)
-            return {"success": False, "error": str(e)}
+        if not JS_IDENTIFIER.match(function_name or ""):
+            raise ValueError(f"Invalid function name: {function_name!r}")
+        result, exception = await tab.send(uc.cdp.runtime.evaluate(
+            expression=f"(() => typeof ({function_code}))()",
+            return_by_value=True,
+        ))
+        if exception:
+            raise ValueError(f"Function code does not compile: {exception.text}")
+        if result.value != "function":
+            raise ValueError(f"Function code must evaluate to a function, got {result.value}")
+        self._persistent_functions.setdefault(instance_id, {})[function_name] = function_code
+        return (
+            "(() => { try { Object.defineProperty(window, "
+            f"{json.dumps(function_name)}, {{ value: ({function_code}), writable: true, configurable: true, enumerable: false }}"
+            "); } catch (error) {} })();"
+        )
+
+    def forget_instance(self, instance_id: str) -> None:
+        """
+        Drop state kept for a closed instance.
+
+        Args:
+            instance_id (str): Closed instance identifier.
+        """
+        self._persistent_functions.pop(instance_id, None)
 
     async def execute_function_sequence(self, tab: Tab, function_calls: List[FunctionCall]) -> List[Dict[str, Any]]:
         """
@@ -654,7 +687,8 @@ class CDPFunctionExecutor:
                 result = await self.call_discovered_function(
                     tab,
                     func_call.function_path,
-                    func_call.args
+                    func_call.args,
+                    func_call.context_id,
                 )
                 results.append({
                     "sequence_index": i,
@@ -680,62 +714,6 @@ class CDPFunctionExecutor:
                     }
                 })
         return results
-
-    async def create_python_binding(self, tab: Tab, binding_name: str, python_function: Callable) -> Dict[str, Any]:
-        """
-        Creates a binding that allows JavaScript to call Python functions.
-
-        Args:
-            tab (Tab): The browser tab.
-            binding_name (str): Name of the binding.
-            python_function (Callable): Python function to bind.
-
-        Returns:
-            Dict[str, Any]: Result of binding creation.
-        """
-        try:
-            await self.enable_runtime(tab)
-            self._python_bindings[binding_name] = python_function
-            await tab.send(uc.cdp.runtime.add_binding(name=binding_name))
-            wrapper_script = f"""
-            (function() {{
-                if (!window.{binding_name}) {{
-                    window.{binding_name} = function(...args) {{
-                        return new Promise((resolve, reject) => {{
-                            const callId = Math.random().toString(36).substr(2, 9);
-                            window.addEventListener(`{binding_name}_response_${{callId}}`, function(event) {{
-                                if (event.detail.success) {{
-                                    resolve(event.detail.result);
-                                }} else {{
-                                    reject(new Error(event.detail.error));
-                                }}
-                            }}, {{ once: true }});
-                            window.chrome.runtime.sendMessage({{
-                                binding: '{binding_name}',
-                                args: args,
-                                callId: callId
-                            }});
-                        }});
-                    }};
-                }}
-                return {{
-                    success: true,
-                    binding_name: '{binding_name}',
-                    available_as: 'window.{binding_name}'
-                }};
-            }})()
-            """
-            result = await tab.send(uc.cdp.runtime.evaluate(
-                expression=wrapper_script,
-                return_by_value=True,
-                await_promise=True
-            ))
-            if result and result[0] and result[0].value:
-                return result[0].value
-            return {"success": False, "error": "Failed to create binding"}
-        except Exception as e:
-            debug_logger.log_error("cdp_function_executor", "create_python_binding", e)
-            return {"success": False, "error": str(e)}
 
     async def execute_python_in_browser(self, tab: Tab, python_code: str) -> Dict[str, Any]:
         """
@@ -839,40 +817,6 @@ class CDPFunctionExecutor:
 
         return wrapped_code
 
-    async def call_python_from_js(self, binding_name: str, args: List[Any]) -> Dict[str, Any]:
-        """
-        Handles JavaScript calls to Python functions.
-
-        Args:
-            binding_name (str): Name of the Python binding.
-            args (List[Any]): Arguments to pass to the Python function.
-
-        Returns:
-            Dict[str, Any]: Result of the Python function call.
-        """
-        try:
-            if binding_name not in self._python_bindings:
-                return {"success": False, "error": f"Unknown binding: {binding_name}"}
-            python_function = self._python_bindings[binding_name]
-            if asyncio.iscoroutinefunction(python_function):
-                result = await python_function(*args)
-            else:
-                result = python_function(*args)
-            return {
-                "success": True,
-                "result": result,
-                "binding_name": binding_name,
-                "args": args
-            }
-        except Exception as e:
-            debug_logger.log_error("cdp_function_executor", "call_python_from_js", e)
-            return {
-                "success": False,
-                "error": str(e),
-                "binding_name": binding_name,
-                "args": args
-            }
-
     async def get_function_executor_info(self, instance_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Gets information about the function executor state.
@@ -884,7 +828,6 @@ class CDPFunctionExecutor:
             Dict[str, Any]: Information about the executor.
         """
         return {
-            "python_bindings": list(self._python_bindings.keys()),
             "persistent_functions": self._persistent_functions.get(instance_id, {}) if instance_id else self._persistent_functions,
             "available_commands": await self.list_cdp_commands(),
             "executor_version": "1.0.0",
@@ -892,6 +835,6 @@ class CDPFunctionExecutor:
                 "direct_cdp_execution",
                 "function_discovery",
                 "dynamic_script_injection",
-                "python_js_bridge"
+                "python_to_js_translation"
             ]
         }

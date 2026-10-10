@@ -29,6 +29,8 @@ pip install -r requirements.txt
 ```
 
 3. Run the server: `python src/server.py`
+4. Run the tests: `python -m unittest discover -s tests -v`. Set `STEALTH_BROWSER_TESTS=1` to include tests that launch a real browser.
+5. If your change can affect detection, run the stealth benchmark before and after: `python -m benchmarks.stealth run --mode headed`. See [STEALTH_TESTS.md](STEALTH_TESTS.md) for targets and statuses.
 
 ### Pull request guidelines
 

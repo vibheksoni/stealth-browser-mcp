@@ -7,6 +7,8 @@ import shutil
 import sys
 from typing import List, Optional
 
+BROWSER_EXECUTABLE_ENV = "STEALTH_BROWSER_EXECUTABLE"
+
 
 def is_running_as_root() -> bool:
     """
@@ -152,13 +154,20 @@ def get_platform_info() -> dict:
 def check_browser_executable() -> Optional[str]:
     """
     Find a compatible browser executable on the system.
-    Searches for Chrome, Chromium, and Microsoft Edge in order of preference.
-    
+    Uses STEALTH_BROWSER_EXECUTABLE when set, otherwise searches for Chrome,
+    Chromium, and Microsoft Edge in order of preference.
+
     Returns:
         Optional[str]: Path to browser executable or None if not found
     """
+    override = os.environ.get(BROWSER_EXECUTABLE_ENV, "").strip()
+    if override:
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            return override
+        return None
+
     system = platform.system().lower()
-    
+
     if system == 'windows':
         possible_paths = [
             # Chrome paths

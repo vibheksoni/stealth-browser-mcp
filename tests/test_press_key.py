@@ -8,12 +8,12 @@ from urllib.parse import quote
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from dom_handler import (
+from dom_handler import DOMHandler
+from key_definitions import (
     MODIFIER_ALT,
     MODIFIER_CONTROL,
     MODIFIER_META,
     MODIFIER_SHIFT,
-    DOMHandler,
     resolve_key_descriptor,
     resolve_modifiers,
 )
@@ -31,12 +31,11 @@ RECORDER_PAGE = """<!doctype html>
 <html><body><input id="target">
 <script>
 window.__events = [];
-const input = document.getElementById('target');
 for (const type of ['keydown', 'keypress', 'keyup']) {
-  input.addEventListener(type, (e) => {
+  document.addEventListener(type, (e) => {
     window.__events.push({ type: e.type, key: e.key, isTrusted: e.isTrusted,
                            shiftKey: e.shiftKey });
-  });
+  }, true);
 }
 </script>
 </body></html>"""

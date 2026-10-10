@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>input probe</title>
+</head>
+<body>
+<div style="height: 1600px"></div>
+<input id="field" autocomplete="off">
+<button id="target">target</button>
+<script>
+window.__inputProbe = { events: [], added: 0, moves: 0 };
+const probe = window.__inputProbe;
+for (const type of ["pointerdown", "mousedown", "mouseup", "click", "keydown", "keyup", "input"]) {
+  document.addEventListener(type, (event) => {
+    probe.events.push({ type, trusted: event.isTrusted, key: event.key || null, time: performance.now() });
+  }, true);
+}
+document.addEventListener("mousemove", () => { probe.moves += 1; }, true);
+new MutationObserver((records) => {
+  for (const record of records) probe.added += record.addedNodes.length;
+}).observe(document.documentElement, { childList: true, subtree: true });
+</script>
+</body>
+</html>

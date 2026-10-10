@@ -1,0 +1,139 @@
+name: Stealth benchmark
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Commit results and open an issue when a target regresses
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stealth-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: ${{ matrix.os }} ${{ matrix.mode }} ${{ matrix.chrome }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        mode: [headless, headed]
+        chrome: [stable]
+        include:
+          - os: ubuntu-latest
+            mode: headless
+            chrome: previous
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Allow the Chrome sandbox on Ubuntu
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Install Chrome ${{ matrix.chrome }}
+        if: matrix.chrome != 'stable'
+        shell: bash
+        run: |
+          executable="$(python -m benchmarks.stealth chrome --milestone '${{ matrix.chrome }}' --dest "$RUNNER_TEMP/chrome")"
+          echo "STEALTH_BROWSER_EXECUTABLE=$executable" >> "$GITHUB_ENV"
+
+      - name: Run benchmark
+        shell: bash
+        run: |
+          command=(python -m benchmarks.stealth run --mode '${{ matrix.mode }}' --channel '${{ matrix.chrome }}' --output-dir bench-out/results --raw-dir bench-out/raw)
+          if [ "$RUNNER_OS" = "Linux" ] && [ '${{ matrix.mode }}' = "headed" ]; then
+            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stealth-${{ matrix.os }}-${{ matrix.mode }}-${{ matrix.chrome }}
+          path: bench-out
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: benchmark
+    if: always() && github.ref == 'refs/heads/master' && (github.event_name == 'schedule' || inputs.publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stealth-*
+          path: artifacts
+
+      - name: Collect result files
+        run: |
+          mkdir -p incoming
+          find artifacts -path '*/results/*.json' -exec cp {} incoming/ \;
+          ls -l incoming
+
+      - name: Compare with previous results
+        id: compare
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python -m benchmarks.stealth compare --incoming incoming --issue-file regression.md --run-url "$RUN_URL"
+
+      - name: Store results and render report
+        run: |
+          mkdir -p docs/stealth-results
+          cp incoming/*.json docs/stealth-results/
+          python -m benchmarks.stealth render
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/stealth-results STEALTH_TESTS.md
+          if git diff --cached --quiet; then
+            echo "No result changes to commit"
+            exit 0
+          fi
+          git commit -m "Update stealth benchmark results"
+          git pull --rebase origin master
+          git push origin HEAD:master
+
+      - name: Report regressions
+        if: steps.compare.outputs.regressions != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.compare.outputs.title }}
+        run: |
+          gh label create stealth-regression --color B60205 --description "Stealth benchmark regression" --force
+          existing="$(gh issue list --label stealth-regression --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file regression.md
+          else
+            gh issue create --title "$TITLE" --label stealth-regression --body-file regression.md
+          fi

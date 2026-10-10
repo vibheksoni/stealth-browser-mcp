@@ -35,6 +35,15 @@ For broader syntax validation:
 Get-ChildItem src -Filter *.py | ForEach-Object { & .\venv\Scripts\python.exe -m py_compile $_.FullName }
 ```
 
+Unit tests and the stealth benchmark:
+
+```powershell
+& .\venv\Scripts\python.exe -m unittest discover -s tests -v
+& .\venv\Scripts\python.exe -m benchmarks.stealth run --mode headed
+```
+
+Set `STEALTH_BROWSER_TESTS=1` to include tests that launch a real browser. Benchmark results go to `.stealth-results/` locally. Only the weekly workflow writes to `docs/stealth-results/` and regenerates the automated section of `STEALTH_TESTS.md`.
+
 ## Git Rules
 
 - Do not include AI attribution, co-author trailers, or generated-by metadata in commits.

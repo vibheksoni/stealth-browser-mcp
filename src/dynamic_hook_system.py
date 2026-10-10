@@ -192,75 +192,146 @@ class DynamicHookSystem:
         self._lock = asyncio.Lock()
         self._request_tasks: Dict[str, set[asyncio.Task]] = {}
         self._interception_handlers: Dict[str, tuple[Any, Callable]] = {}
+        self._instance_tabs: Dict[str, Any] = {}
+        self._fetch_enabled: set[str] = set()
+
+    def _hooks_for_instance(self, instance_id: str) -> List[DynamicHook]:
+        """
+        Active hooks that apply to an instance.
+
+        Args:
+            instance_id (str): Browser instance ID.
+
+        Returns:
+            List[DynamicHook]: Instance-specific hooks followed by global hooks.
+        """
+        instance_hook_ids = self.instance_hooks.get(instance_id, [])
+        hooks = [
+            self.hooks[hook_id]
+            for hook_id in instance_hook_ids
+            if hook_id in self.hooks and self.hooks[hook_id].status == "active"
+        ]
+        hooks.extend(
+            hook
+            for hook_id, hook in self.hooks.items()
+            if hook.status == "active" and hook_id not in instance_hook_ids and not hook.instance_ids
+        )
+        return hooks
+
+    @staticmethod
+    def _request_patterns(hooks: List[DynamicHook]) -> List[Any]:
+        """
+        Build Fetch request patterns for a set of hooks.
+
+        Args:
+            hooks (List[DynamicHook]): Hooks to intercept for.
+
+        Returns:
+            List[Any]: Fetch.RequestPattern objects, request stage first.
+        """
+        request_patterns = []
+        response_patterns = []
+        for hook in hooks:
+            resource_type = hook.requirements.get('resource_type')
+            cdp_resource_type = getattr(uc.cdp.network.ResourceType, resource_type.upper()) if resource_type else None
+            is_response = hook.request_stage == 'response'
+            stage = uc.cdp.fetch.RequestStage.RESPONSE if is_response else uc.cdp.fetch.RequestStage.REQUEST
+            target = response_patterns if is_response else request_patterns
+            for url_pattern in split_alternatives(hook.requirements.get('url_pattern', '*')) or ['*']:
+                target.append(uc.cdp.fetch.RequestPattern(
+                    url_pattern=url_pattern,
+                    resource_type=cdp_resource_type,
+                    request_stage=stage
+                ))
+        return request_patterns + response_patterns
 
     async def setup_interception(self, tab, instance_id: str):
-        """Set up request and response interception for a browser tab."""
+        """
+        Attach an instance tab to the hook system.
+
+        Interception is enabled only while at least one active hook applies to
+        the instance, so pages without hooks load without a Fetch round trip
+        per request.
+
+        Args:
+            tab (Any): Browser tab for the instance.
+            instance_id (str): Browser instance ID.
+        """
+        previous_tab = self._instance_tabs.get(instance_id)
+        if previous_tab is not None and previous_tab is not tab:
+            self._remove_request_handler(instance_id)
+            self._fetch_enabled.discard(instance_id)
+        self._instance_tabs[instance_id] = tab
+        await self.refresh_interception(instance_id)
+
+    async def refresh_interception(self, instance_id: str) -> None:
+        """
+        Enable, update, or disable Fetch interception to match the current hooks.
+
+        Args:
+            instance_id (str): Browser instance ID.
+        """
+        tab = self._instance_tabs.get(instance_id)
+        if tab is None:
+            return
         try:
-            all_hooks = []
+            patterns = self._request_patterns(self._hooks_for_instance(instance_id))
+            if not patterns:
+                self._remove_request_handler(instance_id)
+                if instance_id in self._fetch_enabled:
+                    self._fetch_enabled.discard(instance_id)
+                    await tab.send(uc.cdp.fetch.disable())
+                return
 
-            instance_hook_ids = self.instance_hooks.get(instance_id, [])
-            for hook_id in instance_hook_ids:
-                hook = self.hooks.get(hook_id)
-                if hook and hook.status == "active":
-                    all_hooks.append(hook)
-
-            for hook_id, hook in self.hooks.items():
-                if hook.status == "active" and hook_id not in instance_hook_ids:
-                    if not hasattr(hook, 'instance_ids') or not hook.instance_ids:
-                        all_hooks.append(hook)
-
-            request_patterns = []
-            response_patterns = []
-
-            for hook in all_hooks:
-                resource_type = hook.requirements.get('resource_type')
-                cdp_resource_type = getattr(uc.cdp.network.ResourceType, resource_type.upper()) if resource_type else None
-                is_response = hook.request_stage == 'response'
-                stage = uc.cdp.fetch.RequestStage.RESPONSE if is_response else uc.cdp.fetch.RequestStage.REQUEST
-                target = response_patterns if is_response else request_patterns
-                for url_pattern in split_alternatives(hook.requirements.get('url_pattern', '*')) or ['*']:
-                    target.append(uc.cdp.fetch.RequestPattern(
-                        url_pattern=url_pattern,
-                        resource_type=cdp_resource_type,
-                        request_stage=stage
-                    ))
-
-            all_patterns = request_patterns + response_patterns
-
-            if not all_patterns:
-                all_patterns = [
-                    uc.cdp.fetch.RequestPattern(url_pattern='*', request_stage=uc.cdp.fetch.RequestStage.REQUEST),
-                    uc.cdp.fetch.RequestPattern(url_pattern='*', request_stage=uc.cdp.fetch.RequestStage.RESPONSE)
-                ]
-
-            await tab.send(uc.cdp.fetch.enable(patterns=all_patterns))
-
-            def schedule_request(event):
-                task = asyncio.create_task(
-                    self._on_request_paused(tab, event, instance_id)
-                )
-                tasks = self._request_tasks.setdefault(instance_id, set())
-                tasks.add(task)
-                task.add_done_callback(tasks.discard)
-
-            previous = self._interception_handlers.pop(instance_id, None)
-            if previous:
-                previous_tab, previous_handler = previous
-                try:
-                    previous_tab.remove_handler(
-                        uc.cdp.fetch.RequestPaused,
-                        previous_handler,
+            await tab.send(uc.cdp.fetch.enable(patterns=patterns))
+            self._fetch_enabled.add(instance_id)
+            if instance_id not in self._interception_handlers:
+                def schedule_request(event):
+                    task = asyncio.create_task(
+                        self._on_request_paused(tab, event, instance_id)
                     )
-                except Exception:
-                    pass
+                    tasks = self._request_tasks.setdefault(instance_id, set())
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
 
-            tab.add_handler(uc.cdp.fetch.RequestPaused, schedule_request)
-            self._interception_handlers[instance_id] = (tab, schedule_request)
+                tab.add_handler(uc.cdp.fetch.RequestPaused, schedule_request)
+                self._interception_handlers[instance_id] = (tab, schedule_request)
 
-            debug_logger.log_info("dynamic_hook_system", "setup_interception", f"Set up interception for instance {instance_id} with {len(all_patterns)} patterns ({len(request_patterns)} request, {len(response_patterns)} response)")
-
+            debug_logger.log_info("dynamic_hook_system", "refresh_interception", f"Intercepting {len(patterns)} patterns for instance {instance_id}")
         except Exception as e:
-            debug_logger.log_error("dynamic_hook_system", "setup_interception", f"Failed to setup interception: {e}")
+            debug_logger.log_error("dynamic_hook_system", "refresh_interception", f"Failed to update interception: {e}")
+
+    async def _refresh_instances(self, instance_ids: Optional[List[str]] = None) -> None:
+        """
+        Refresh interception for several instances.
+
+        Args:
+            instance_ids (Optional[List[str]]): Instances to refresh, or None for all attached instances.
+        """
+        targets = list(instance_ids) if instance_ids else list(self._instance_tabs)
+        for instance_id in targets:
+            await self.refresh_interception(instance_id)
+
+    def _remove_request_handler(self, instance_id: str) -> None:
+        """
+        Remove the RequestPaused handler for an instance.
+
+        Removes only this handler, because nodriver's remove_handler drops
+        every handler registered for the event type.
+
+        Args:
+            instance_id (str): Browser instance ID.
+        """
+        handler_entry = self._interception_handlers.pop(instance_id, None)
+        if not handler_entry:
+            return
+        tab, handler = handler_entry
+        handlers = getattr(tab, "handlers", {})
+        callbacks = handlers.get(uc.cdp.fetch.RequestPaused)
+        if callbacks and handler in callbacks:
+            callbacks.remove(handler)
+        if not callbacks:
+            handlers.pop(uc.cdp.fetch.RequestPaused, None)
 
     async def _on_request_paused(self, tab, event, instance_id: str):
         """Handle intercepted requests and responses - process hooks immediately."""
@@ -370,13 +441,9 @@ class DynamicHookSystem:
 
     def _detach_instance(self, instance_id: str) -> List[asyncio.Task]:
         """Detach interception and cancel pending request tasks for an instance."""
-        handler_entry = self._interception_handlers.pop(instance_id, None)
-        if handler_entry:
-            tab, handler = handler_entry
-            try:
-                tab.remove_handler(uc.cdp.fetch.RequestPaused, handler)
-            except Exception:
-                pass
+        self._remove_request_handler(instance_id)
+        self._instance_tabs.pop(instance_id, None)
+        self._fetch_enabled.discard(instance_id)
 
         tasks = list(self._request_tasks.pop(instance_id, set()))
         for task in tasks:
@@ -416,6 +483,7 @@ class DynamicHookSystem:
                     for instance_id in self.instance_hooks:
                         self.instance_hooks[instance_id].append(hook_id)
 
+            await self._refresh_instances(hook.instance_ids or None)
             debug_logger.log_info("dynamic_hook_system", "create_hook", f"Created hook {name} with ID {hook_id}")
             return hook_id
 
@@ -469,9 +537,13 @@ class DynamicHookSystem:
                             self.instance_hooks[instance_id].remove(hook_id)
 
                     debug_logger.log_info("dynamic_hook_system", "remove_hook", f"Removed hook {hook_id}")
-                    return True
+                    removed = True
+                else:
+                    removed = False
 
-            return False
+            if removed:
+                await self._refresh_instances()
+            return removed
 
         except Exception as e:
             debug_logger.log_error("dynamic_hook_system", "remove_hook", f"Failed to remove hook {hook_id}: {e}")

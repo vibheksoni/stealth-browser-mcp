@@ -13,6 +13,9 @@ from urllib.parse import unquote, urlparse
 
 from debug_logger import debug_logger
 
+DROPPED_HEADERS = ("proxy-authorization:",)
+HOP_BY_HOP_HEADERS = ("connection:", "proxy-connection:", "keep-alive:")
+
 
 def _free_port() -> int:
     """Return a free loopback TCP port for the local proxy listener."""
@@ -144,7 +147,12 @@ class AuthenticatedProxyForwarder:
         writer: asyncio.StreamWriter,
     ) -> None:
         """
-        Forward an HTTP CONNECT tunnel through an authenticated upstream HTTP proxy.
+        Forward one proxied request through an authenticated upstream HTTP proxy.
+
+        CONNECT requests become a tunnel. Plain HTTP requests are sent with
+        Connection: close, because only the first request on a connection
+        gets the Proxy-Authorization header and later keep-alive requests
+        would reach the upstream proxy without credentials.
 
         Args:
             reader (asyncio.StreamReader): Local client reader.
@@ -222,10 +230,11 @@ class AuthenticatedProxyForwarder:
 
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode()).decode("ascii")
+            dropped_headers = DROPPED_HEADERS if method == "CONNECT" else DROPPED_HEADERS + HOP_BY_HOP_HEADERS
             remote_writer.write(request_line)
             for header in header_lines:
                 header_text = header.decode("utf-8", errors="ignore").lower()
-                if header_text.startswith("proxy-authorization:"):
+                if header_text.startswith(dropped_headers):
                     continue
                 remote_writer.write(header)
             remote_writer.write(
@@ -233,6 +242,8 @@ class AuthenticatedProxyForwarder:
             )
             if method == "CONNECT":
                 remote_writer.write(b"Proxy-Connection: Keep-Alive\r\n")
+            else:
+                remote_writer.write(b"Connection: close\r\nProxy-Connection: close\r\n")
             remote_writer.write(b"\r\n")
             await remote_writer.drain()
 
@@ -256,8 +267,8 @@ class AuthenticatedProxyForwarder:
                     if not header or header in {b"\r\n", b"\n"}:
                         break
 
-                response_text = response_line.decode("utf-8", errors="ignore")
-                if "200" not in response_text:
+                response_parts = response_line.decode("utf-8", errors="ignore").split()
+                if len(response_parts) < 2 or response_parts[1] != "200":
                     await self._write_and_close(
                         writer,
                         b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\n"

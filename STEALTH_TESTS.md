@@ -1,15 +1,58 @@
 # Stealth Detection Test Results
 
-Verified bypass results for stealth-browser-mcp against major bot detection systems.
+Results for stealth-browser-mcp against public bot detection pages.
 
-**Test Date:** 2026-02-10
+There are two parts. The automated results come from the benchmark in `benchmarks/stealth/`, which runs every week in GitHub Actions on Linux, Windows, and macOS, in headless and headed mode, with the current and previous Chrome release. Each run writes a JSON file to `docs/stealth-results/`, and the section below is generated from those files. The manual snapshot further down is a hand-run session from 2026-02-10 and is kept for reference.
+
+Detection results depend on site policy, region, IP reputation, Chrome version, and detector version, so treat them as measurements, not guarantees.
+
+## Running the Benchmark
+
+```bash
+python -m benchmarks.stealth run --mode headed
+python -m benchmarks.stealth run --mode headless --targets local_probe,init_script
+```
+
+Local runs write to `.stealth-results/` and print one line per target. Use `--output-dir` to choose another folder, `--raw-dir` to keep the raw page data, and `STEALTH_BROWSER_EXECUTABLE` to test a specific Chrome build. `python -m benchmarks.stealth chrome --milestone previous --dest .chrome` downloads the previous Chrome release from Chrome for Testing and prints its path.
+
+| Target | What it measures |
+|--------|------------------|
+| Local fingerprint probe | Automation tells read by a bundled page on 127.0.0.1, no network needed |
+| Init script injection | `add_script_to_evaluate_on_new_document` runs before page scripts and survives navigation |
+| Input fidelity | `click_element` and `type_text` produce trusted pointer, mouse, and key events in a real order, with nothing injected into the page |
+| Sannysoft | bot.sannysoft.com headless and fingerprint table |
+| Intoli | Intoli headless Chrome detection table |
+| CreepJS | CreepJS headless and stealth scores |
+| Cloudflare (nowsecure.nl) | Getting through a Cloudflare challenge |
+| TLS and HTTP/2 fingerprint | JA3, JA4, and Akamai HTTP/2 fingerprints seen by tls.peet.ws |
+
+| Status | Meaning |
+|--------|---------|
+| PASS | Every check passed |
+| DEGRADED | Only minor checks failed |
+| FAIL | At least one critical check failed |
+| UNREACHABLE | The page could not be loaded or read, so nothing was measured |
+
+When a target that passed in the previous run of the same runner gets worse, the weekly workflow opens an issue labeled `stealth-regression`. UNREACHABLE results never open issues.
+
+<!-- stealth-benchmark:start -->
+## Automated Results
+
+No automated runs have been recorded yet.
+
+<!-- stealth-benchmark:end -->
+
+---
+
+## Manual Snapshot (2026-02-10)
+
 **Browser:** Chrome 144 (nodriver)
 **Platform:** Windows 10 (Win64)
 **Mode:** Non-headless
 
 ---
 
-## 1. Cloudflare Challenge (nowsecure.nl)
+### 1. Cloudflare Challenge (nowsecure.nl)
 
 **Result: PASSED**
 
@@ -19,7 +62,7 @@ of Cloudflare's JavaScript challenge, TLS fingerprinting, and behavioral analysi
 
 ---
 
-## 2. CreepJS Fingerprint Analysis
+### 2. CreepJS Fingerprint Analysis
 
 **Result: PASSED**
 
@@ -44,7 +87,7 @@ CreepJS performs deep browser fingerprinting across dozens of vectors. Key findi
 
 ---
 
-## 3. Sannysoft Bot Detection
+### 3. Sannysoft Bot Detection
 
 **Result: 20/20 TESTS PASSED**
 
@@ -86,7 +129,7 @@ Every single detection vector returned "ok" or consistent values.
 
 ---
 
-## 4. Intoli Headless Detection (Round II)
+### 4. Intoli Headless Detection (Round II)
 
 **Result: ALL TESTS PASSED**
 
@@ -106,25 +149,26 @@ Every single detection vector returned "ok" or consistent values.
 
 ---
 
-## 5. X.com (Twitter) Login Wall Bypass
+### 5. X.com (Twitter) Login Wall
 
-**Result: BYPASSED**
+**Result: PROFILE DATA READ BEHIND THE LOGIN WALL**
 
-Navigated to `x.com/elonmusk` which presents a login modal blocking content.
-The browser loaded the full profile data behind the modal. After removing the
-overlay via DOM manipulation, all profile data was accessible:
+Navigated to `x.com/elonmusk`, which shows a login modal over the content.
+The profile data was already loaded behind the modal. After removing the
+overlay through DOM manipulation, all profile data was readable:
 
 - Display name, handle, bio, join date
 - Follower/following counts (234.3M followers)
 - Full tweet timeline with engagement metrics
 - All data-testid attributes queryable
 
-This demonstrates real-world scraping capability against a major platform
-with aggressive bot detection (Arkose Labs/FunCaptcha integration).
+This shows logged-out reading of public profile data behind a login wall.
+No Arkose Labs or FunCaptcha challenge appeared in this flow, so this result
+says nothing about solving those challenges.
 
 ---
 
-## Summary
+### Summary
 
 | Detection System | Type | Result |
 |-----------------|------|--------|
@@ -132,7 +176,7 @@ with aggressive bot detection (Arkose Labs/FunCaptcha integration).
 | CreepJS | Deep Fingerprinting | 0% stealth / 0% headless |
 | Sannysoft | Bot Detection Suite | 20/20 tests passed |
 | Intoli | Headless Detection | All tests passed |
-| X.com | Login Wall + Arkose | Bypassed, data scraped |
+| X.com | Login Wall | Profile data read behind the modal |
 
-All tests confirm that stealth-browser-mcp running on nodriver is undetectable
-by current industry-standard bot detection systems.
+In this snapshot, stealth-browser-mcp running on nodriver was not flagged by
+any of the detection systems above. See the automated results for current numbers.

@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Coroutine, Dict, List, Optional, Set
@@ -15,7 +16,12 @@ from debug_logger import debug_logger
 from models import NetworkRequest, NetworkResponse
 
 MAX_REQUESTS_PER_INSTANCE = 1000
-MAX_CAPTURED_BODY_BYTES = 5 * 1024 * 1024
+MAX_CAPTURED_BODY_BYTES = 2 * 1024 * 1024
+MAX_STORED_BODY_BYTES = 64 * 1024 * 1024
+TEXT_RESOURCE_TYPES = {"document", "xhr", "fetch", "script", "eventsource"}
+BINARY_RESOURCE_TYPES = {"image", "media", "font", "websocket", "manifest"}
+INTERNAL_URL_PREFIXES = ("chrome://", "chrome-untrusted://", "chrome-extension://", "devtools://")
+TEXT_MIME_MARKERS = ("json", "text/", "javascript", "xml", "x-www-form-urlencoded", "graphql")
 
 
 class NetworkInterceptor:
@@ -27,6 +33,8 @@ class NetworkInterceptor:
         self._instance_requests: Dict[str, List[str]] = {}
         self._instance_filters: Dict[str, Dict[str, List[str]]] = {}
         self._tasks: Set[asyncio.Task] = set()
+        self._body_bytes: Dict[str, int] = {}
+        self._body_order: Dict[str, "OrderedDict[str, None]"] = {}
         self._lock = asyncio.Lock()
 
     def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
@@ -121,6 +129,8 @@ class NetworkInterceptor:
         try:
             request_id = event.request_id
             request = event.request
+            if request.url.startswith(INTERNAL_URL_PREFIXES):
+                return
             resource_type = event.type_.value if getattr(event, "type_", None) else None
 
             async with self._lock:
@@ -158,6 +168,7 @@ class NetworkInterceptor:
                     request_ids.append(request_id)
                 while len(request_ids) > MAX_REQUESTS_PER_INSTANCE:
                     evicted = request_ids.pop(0)
+                    self._drop_body(evicted)
                     self._requests.pop(evicted, None)
                     self._responses.pop(evicted, None)
         except Exception as e:
@@ -184,12 +195,55 @@ class NetworkInterceptor:
         except Exception as e:
             debug_logger.log_warning("network_interceptor", "on_response", f"Failed to record response: {e}")
 
+    @staticmethod
+    def _should_capture_body(request: Optional[NetworkRequest], response: NetworkResponse) -> bool:
+        """
+        Decide whether a response body is worth storing eagerly.
+
+        Text-like responses (documents, XHR, fetch, scripts, and JSON, text, or
+        XML mime types) are stored. Images, media, fonts, and other binary
+        payloads are left in the browser and can be fetched on demand.
+
+        Args:
+            request (Optional[NetworkRequest]): Captured request, if known.
+            response (NetworkResponse): Captured response metadata.
+
+        Returns:
+            bool: True when the body should be stored.
+        """
+        resource_type = ((request.resource_type if request else None) or "").lower()
+        if resource_type in BINARY_RESOURCE_TYPES:
+            return False
+        if resource_type in TEXT_RESOURCE_TYPES:
+            return True
+        content_type = (response.content_type or "").lower()
+        return any(marker in content_type for marker in TEXT_MIME_MARKERS)
+
+    def _drop_body(self, request_id: str) -> None:
+        """
+        Forget a stored body and its size accounting. Call with the lock held.
+
+        Args:
+            request_id (str): Request whose body is dropped.
+        """
+        response = self._responses.get(request_id)
+        request = self._requests.get(request_id)
+        if response is None or response.body is None:
+            return
+        if request is not None:
+            instance_id = request.instance_id
+            self._body_bytes[instance_id] = max(0, self._body_bytes.get(instance_id, 0) - len(response.body))
+            self._body_order.get(instance_id, {}).pop(request_id, None)
+        response.body = None
+
     async def _on_loading_finished(self, event, tab: Tab):
         """
-        Capture the response body once the resource has finished loading.
+        Store a text-like response body once the resource has finished loading.
 
-        Bodies larger than MAX_CAPTURED_BODY_BYTES are skipped and can still be
-        fetched on demand with get_response_body.
+        Bodies above MAX_CAPTURED_BODY_BYTES are skipped, and each instance
+        keeps at most MAX_STORED_BODY_BYTES of bodies, dropping the oldest
+        first. Skipped bodies can still be fetched with get_response_body
+        while the page holds them.
 
         event: Any - The LoadingFinished event.
         tab: Tab - The browser tab that loaded the resource.
@@ -198,16 +252,26 @@ class NetworkInterceptor:
         if (event.encoded_data_length or 0) > MAX_CAPTURED_BODY_BYTES:
             return
         async with self._lock:
-            if request_id not in self._responses:
+            response = self._responses.get(request_id)
+            request = self._requests.get(request_id)
+            if response is None or not self._should_capture_body(request, response):
                 return
-        body = await self.get_response_body(tab, request_id)
+        body = await self._fetch_body(tab, request_id)
         if body is None or len(body) > MAX_CAPTURED_BODY_BYTES:
             return
         async with self._lock:
             response = self._responses.get(request_id)
-            if response is not None:
-                response.body = body
-
+            request = self._requests.get(request_id)
+            if response is None or request is None:
+                return
+            self._drop_body(request_id)
+            instance_id = request.instance_id
+            response.body = body
+            self._body_bytes[instance_id] = self._body_bytes.get(instance_id, 0) + len(body)
+            order = self._body_order.setdefault(instance_id, OrderedDict())
+            order[request_id] = None
+            while self._body_bytes[instance_id] > MAX_STORED_BODY_BYTES and order:
+                self._drop_body(next(iter(order)))
 
     async def set_capture_filters(
         self,
@@ -354,22 +418,33 @@ class NetworkInterceptor:
 
     async def get_response_body(self, tab: Tab, request_id: str) -> Optional[bytes]:
         """
-        Get response body content.
+        Get response body content, from the capture store or the browser.
 
         tab: Tab - The browser tab.
         request_id: str - The request identifier.
         Returns: Optional[bytes] - The response body as bytes, or None.
         """
+        async with self._lock:
+            response = self._responses.get(request_id)
+            if response is not None and response.body is not None:
+                return response.body
+        return await self._fetch_body(tab, request_id)
+
+    async def _fetch_body(self, tab: Tab, request_id: str) -> Optional[bytes]:
+        """
+        Read a response body from the browser.
+
+        tab: Tab - The browser tab.
+        request_id: str - The request identifier.
+        Returns: Optional[bytes] - The response body as bytes, or None when the browser no longer has it.
+        """
         try:
-            # Convert string to RequestId object
-            request_id_obj = uc.cdp.network.RequestId(request_id)
-            result = await tab.send(uc.cdp.network.get_response_body(request_id=request_id_obj))
+            result = await tab.send(uc.cdp.network.get_response_body(request_id=uc.cdp.network.RequestId(request_id)))
             if result:
-                body, base64_encoded = result  # Result is a tuple (body, base64Encoded)
+                body, base64_encoded = result
                 if base64_encoded:
                     return base64.b64decode(body)
-                else:
-                    return body.encode("utf-8")
+                return body.encode("utf-8")
         except Exception:
             pass
         return None
@@ -609,3 +684,6 @@ class NetworkInterceptor:
                     self._requests.pop(req_id, None)
                     self._responses.pop(req_id, None)
                 del self._instance_requests[instance_id]
+            self._body_bytes.pop(instance_id, None)
+            self._body_order.pop(instance_id, None)
+            self._instance_filters.pop(instance_id, None)

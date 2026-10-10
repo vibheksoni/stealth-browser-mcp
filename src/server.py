@@ -32,6 +32,7 @@ from http_security import (
 )
 from models import BrowserOptions
 from network_interceptor import NetworkInterceptor
+from page_bindings import page_bindings
 from dynamic_hook_ai_interface import dynamic_hook_ai
 from persistent_storage import persistent_storage
 from progressive_element_cloner import progressive_element_cloner
@@ -162,7 +163,9 @@ mcp = FastMCP(
     - Execute JavaScript in page context
     - Manage cookies and storage
     
-    All browser instances are undetectable by anti-bot systems.
+    Instances are built to avoid common bot detection, with trusted input
+    events and a clean headless fingerprint. Measured results against public
+    detection pages are published in STEALTH_TESTS.md.
     """,
     auth=create_http_auth_provider(HTTP_AUTH_TOKEN),
     lifespan=app_lifespan,
@@ -172,6 +175,40 @@ browser_manager = BrowserManager()
 network_interceptor = NetworkInterceptor()
 dom_handler = DOMHandler()
 cdp_function_executor = CDPFunctionExecutor()
+
+
+async def _prepare_tab(tab, instance_id: str, options: BrowserOptions) -> None:
+    """
+    Attach network capture to a tab an instance uses.
+
+    Args:
+        tab (Any): Browser tab.
+        instance_id (str): Browser instance ID.
+        options (BrowserOptions): Spawn options.
+    """
+    await network_interceptor.setup_interception(tab, instance_id, options.block_resources)
+
+
+async def _forget_instance(instance_id: str) -> None:
+    """
+    Drop per-instance state held outside the browser manager.
+
+    Args:
+        instance_id (str): Closed browser instance ID.
+    """
+    await network_interceptor.clear_instance_data(instance_id)
+    cdp_function_executor.forget_instance(instance_id)
+
+
+def _register_manager_listeners() -> None:
+    """Connect tab preparation and close cleanup to the current browser manager."""
+    browser_manager.add_tab_listener(_prepare_tab)
+    browser_manager.add_tab_listener(page_bindings.prepare_tab)
+    browser_manager.add_close_listener(_forget_instance)
+    browser_manager.add_close_listener(page_bindings.forget_instance)
+
+
+_register_manager_listeners()
 
 if DEBUG_LOGGING_ENABLED:
     debug_logger.enable()
@@ -238,11 +275,6 @@ async def spawn_browser(
             sandbox=sandbox
         )
         instance = await browser_manager.spawn_browser(options)
-        tab = await browser_manager.get_tab(instance.instance_id)
-        if tab:
-            await network_interceptor.setup_interception(
-                tab, instance.instance_id, block_resources
-            )
         spawn_diagnostics = await browser_manager.get_spawn_diagnostics(instance.instance_id)
         return {
             "instance_id": instance.instance_id,
@@ -299,10 +331,7 @@ async def close_instance(instance_id: str) -> bool:
     Returns:
         bool: True if closed successfully.
     """
-    success = await browser_manager.close_instance(instance_id)
-    if success:
-        await network_interceptor.clear_instance_data(instance_id)
-    return success
+    return await browser_manager.close_instance(instance_id)
 
 @section_tool("browser-management")
 async def get_instance_state(instance_id: str) -> Optional[Dict[str, Any]]:
@@ -483,16 +512,18 @@ async def type_text(
     shift_enter: bool = False
 ) -> bool:
     """
-    Type text into an input field.
+    Type text into an input field with trusted keyboard events.
+
+    Every character produces keydown, keypress, input, and keyup events.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector.
         text (str): Text to type.
         clear_first (bool): Clear field before typing.
         delay_ms (int): Delay between keystrokes in milliseconds.
-        parse_newlines (bool): If True, parse \n as Enter key presses.
-        shift_enter (bool): If True, use Shift+Enter instead of Enter (for chat apps).
+        parse_newlines (bool): If True, press Enter for each \n instead of inserting a line break.
+        shift_enter (bool): If True, press Shift+Enter for each \n (for chat apps).
 
     Returns:
         bool: True if typed successfully.
@@ -541,9 +572,8 @@ async def press_key(
     Press a real key using trusted CDP key events.
 
     Sends Input.dispatchKeyEvent keyDown/keyUp pairs, so the page sees trusted
-    events. Use this instead of type_text(parse_newlines=True) for React-select,
-    typeahead and combobox widgets, which discard values set by synthetic
-    JavaScript KeyboardEvents.
+    events. Use this for control keys such as Enter, Tab, Escape, and the
+    arrow keys in React-select, typeahead, and combobox widgets.
 
     Args:
         instance_id (str): Browser instance ID.
@@ -1419,7 +1449,12 @@ async def get_active_tab(instance_id: str) -> Dict[str, Any]:
     tab = await browser_manager.get_active_tab(instance_id)
     if not tab:
         return {"error": "No active tab found"}
-    await tab
+    browser = await browser_manager.get_browser(instance_id, touch_activity=False)
+    if browser:
+        try:
+            await browser.update_targets()
+        except Exception:
+            pass
     return {
         "tab_id": str(tab.target.target_id),
         "url": getattr(tab, 'url', '') or '',
@@ -1443,12 +1478,8 @@ async def new_tab(
     Returns:
         Dict[str, Any]: New tab information.
     """
-    browser = await browser_manager.get_browser(instance_id)
-    if not browser:
-        raise Exception(f"Instance not found: {instance_id}")
     try:
-        new_tab_obj = await browser.get(url, new_tab=True)
-        await new_tab_obj
+        new_tab_obj = await browser_manager.open_tab(instance_id, url)
         return {
             "tab_id": str(new_tab_obj.target.target_id),
             "url": getattr(new_tab_obj, 'url', '') or url,
@@ -1799,6 +1830,7 @@ async def hot_reload() -> str:
                 if module_name == 'browser_manager':
                     await browser_manager.stop_idle_reaper()
                     browser_manager = sys.modules['browser_manager'].BrowserManager()
+                    _register_manager_listeners()
                     await browser_manager.start_idle_reaper()
                 elif module_name == 'network_interceptor':
                     network_interceptor = sys.modules['network_interceptor'].NetworkInterceptor()
@@ -2412,18 +2444,15 @@ async def add_script_to_evaluate_on_new_document(
     Returns:
         Dict[str, Any]: Result with success state and script identifier.
     """
-    tab = await browser_manager.get_tab(instance_id)
-    if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
     try:
-        await tab.send(uc.cdp.page.enable())
-        result = await tab.send(uc.cdp.page.add_script_to_evaluate_on_new_document(
-            source=source,
+        identifier = await browser_manager.add_init_script(
+            instance_id,
+            source,
             world_name=world_name,
             include_command_line_api=include_command_line_api,
             run_immediately=run_immediately,
-        ))
-        return {"success": True, "identifier": str(result)}
+        )
+        return {"success": True, "identifier": identifier}
     except Exception as e:
         debug_logger.log_error("server", "add_script_to_evaluate_on_new_document", e)
         return {"success": False, "error": str(e)}
@@ -2630,7 +2659,17 @@ async def create_persistent_function(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         return {"success": False, "error": f"Instance not found: {instance_id}"}
-    return await cdp_function_executor.create_persistent_function(tab, function_name, function_code, instance_id)
+    try:
+        source = await cdp_function_executor.prepare_persistent_function(tab, function_name, function_code, instance_id)
+        identifier = await browser_manager.add_init_script(instance_id, source)
+    except Exception as e:
+        return {"success": False, "error": str(e), "function_name": function_name}
+    return {
+        "success": True,
+        "function_name": function_name,
+        "available_as": f"window.{function_name}",
+        "script_identifier": identifier,
+    }
 
 
 @section_tool("cdp-functions")
@@ -2663,38 +2702,114 @@ async def execute_function_sequence(
 
 
 @section_tool("cdp-functions")
-async def create_python_binding(
+async def create_page_binding(
     instance_id: str,
     binding_name: str,
-    python_code: str
+    auto_resolve: bool = False,
+    auto_response: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
-    Create a binding that allows JavaScript to call Python functions.
+    Expose window.<binding_name>(...args) so page JavaScript can call back to you.
+
+    Each call returns a Promise in the page and is queued here. Read calls with
+    get_page_binding_calls and answer them with resolve_page_binding_call, or set
+    auto_resolve to answer every call immediately with auto_response. Nothing
+    runs on the server host. Arguments must be JSON, payloads are capped at
+    64 KB, and at most 500 calls are queued per instance. The binding is
+    installed on every tab of the instance and survives navigation. Calls are
+    delivered through Runtime events.
 
     Args:
         instance_id (str): Browser instance ID.
-        binding_name (str): Name for the binding.
-        python_code (str): Python function code (as string).
+        binding_name (str): JavaScript identifier for the function.
+        auto_resolve (bool): Resolve every call immediately with auto_response.
+        auto_response (Optional[Any]): JSON value returned to the page when auto_resolve is set.
 
     Returns:
-        Dict[str, Any]: Binding creation result.
+        Dict[str, Any]: Creation result.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         return {"success": False, "error": f"Instance not found: {instance_id}"}
     try:
-        exec_globals = {}
-        exec(python_code, exec_globals)
-        python_function = None
-        for name, obj in exec_globals.items():
-            if callable(obj) and not name.startswith('_'):
-                python_function = obj
-                break
-        if not python_function:
-            return {"success": False, "error": "No function found in Python code"}
-        return await cdp_function_executor.create_python_binding(tab, binding_name, python_function)
+        return await page_bindings.create(tab, instance_id, binding_name, auto_resolve, auto_response)
     except Exception as e:
-        return {"success": False, "error": f"Failed to create Python function: {str(e)}"}
+        return {"success": False, "error": str(e)}
+
+
+@section_tool("cdp-functions")
+async def get_page_binding_calls(
+    instance_id: str,
+    binding_name: Optional[str] = None,
+    wait_seconds: float = 0,
+    limit: int = 50
+) -> Dict[str, Any]:
+    """
+    Read calls made by page JavaScript to page bindings.
+
+    Pending calls stay queued until resolved. Auto-resolved calls are returned
+    once and then removed.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        binding_name (Optional[str]): Only return calls to this binding.
+        wait_seconds (float): Wait up to this many seconds (max 60) for a call when none is queued.
+        limit (int): Maximum number of calls to return.
+
+    Returns:
+        Dict[str, Any]: Calls (call_id, binding, args, received_at, status) and binding names.
+    """
+    await browser_manager.touch_instance(instance_id)
+    calls = await page_bindings.get_calls(instance_id, binding_name, wait_seconds, limit)
+    return {"calls": calls, "bindings": page_bindings.list_bindings(instance_id)}
+
+
+@section_tool("cdp-functions")
+async def resolve_page_binding_call(
+    instance_id: str,
+    call_id: str,
+    result: Optional[Any] = None,
+    error: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Answer a pending page binding call.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        call_id (str): Call ID from get_page_binding_calls.
+        result (Optional[Any]): JSON value the page Promise resolves with.
+        error (Optional[str]): Reject the page Promise with this message instead.
+
+    Returns:
+        Dict[str, Any]: Whether the answer reached the page.
+    """
+    await browser_manager.touch_instance(instance_id)
+    try:
+        return await page_bindings.resolve(instance_id, call_id, result, error)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@section_tool("cdp-functions")
+async def remove_page_binding(
+    instance_id: str,
+    binding_name: str
+) -> Dict[str, Any]:
+    """
+    Remove a page binding from every tab and reject its pending calls.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        binding_name (str): Binding to remove.
+
+    Returns:
+        Dict[str, Any]: Removal result.
+    """
+    await browser_manager.touch_instance(instance_id)
+    try:
+        return await page_bindings.remove(instance_id, binding_name)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @section_tool("cdp-functions")

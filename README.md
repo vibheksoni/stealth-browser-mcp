@@ -83,8 +83,8 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 ## Features
 
 - **Anti-bot resistance** - Has passed Cloudflare and Queue-It style challenges in testing; results vary by site, region, browser version, and detector version.
-- **98 tools across 11 sections** - From basic navigation to advanced CDP function execution.
-- **Modular loading** - Run the full 98-tool surface or a minimal 21-tool core; disable sections you do not need.
+- **101 tools across 11 sections** - From basic navigation to advanced CDP function execution.
+- **Modular loading** - Run the full 101-tool surface or a minimal 21-tool core; disable sections you do not need.
 - **Pixel-accurate element cloning** - Extract complete elements with CSS, DOM structure, events, animations, and assets via CDP.
 - **Network inspection** - Inspect requests, responses, headers, payloads, and captured bodies through your AI agent.
 - **Dynamic hook system** - Restricted Python hooks can intercept, block, redirect, fulfill, or modify request/response flows.
@@ -211,11 +211,11 @@ Treat the MCP client or agent as the security principal. The recommended deploym
 
 ## Modular Architecture
 
-Choose exactly what functionality you need. Run the full 98-tool suite or strip it down to the 21-tool core.
+Choose exactly what functionality you need. Run the full 101-tool suite or strip it down to the 21-tool core.
 
 | Mode | Tools | Use Case |
 |------|-------|----------|
-| **Full** (default) | 98 | Complete browser automation and debugging |
+| **Full** (default) | 101 | Complete browser automation and debugging |
 | **Minimal** (`--minimal`) | 21 | Core browser automation and interaction |
 | **Custom** (`--disable-*`) | Your choice | Disable specific sections |
 | **Xpool safe** (`--xpool-safe`) | 84 | Disable CDP function tools that trigger `Runtime.enable` |
@@ -239,7 +239,7 @@ Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnost
 | `element-extraction` | 9 | Element cloning and extraction |
 | `file-extraction` | 9 | File-based extraction tools |
 | `network-debugging` | 10 | Network monitoring and capture |
-| `cdp-functions` | 14 | Chrome DevTools Protocol execution |
+| `cdp-functions` | 17 | Chrome DevTools Protocol execution |
 | `progressive-cloning` | 10 | Advanced element cloning |
 | `cookies-storage` | 3 | Cookie management |
 | `tabs` | 5 | Tab management |
@@ -258,7 +258,9 @@ These are environment variables for the MCP server process. Set them in your she
 | `MCP_AUTH_TOKEN` | unset | Backward-compatible alias for `STEALTH_BROWSER_MCP_AUTH_TOKEN`. |
 | `BROWSER_IDLE_TIMEOUT` | `600` | Global idle timeout in seconds before an unused browser instance is auto-closed. Set `0` to disable idle reaping globally. |
 | `BROWSER_IDLE_REAPER_INTERVAL` | `60` | Background reaper check interval in seconds. |
+| `BROWSER_TAB_RECYCLE_NAVIGATIONS` | `0` | Replace the main tab with a fresh one after this many navigations. `0` keeps the same tab, which preserves history and session storage. |
 | `BROWSER_ORPHAN_PROFILE_MAX_AGE` | `21600` | Startup cleanup threshold in seconds for stale `uc_*` temp profiles. Set `0` to disable this startup sweep. |
+| `STEALTH_BROWSER_EXECUTABLE` | auto-detect | Path to the Chrome, Chromium, or Edge executable to launch instead of the auto-detected one. |
 | `BROWSER_FILE_UPLOAD_ALLOWED_DIRS` | repo root | Directories that `file_upload()` may read from. Separate multiple roots with `;` on Windows or `:` on macOS/Linux. |
 | `STEALTH_BROWSER_DEBUG` | `0` | Enable verbose debug logging to `stderr` when set to `1`. |
 | `DEBUG` | `0` | Legacy alias for `STEALTH_BROWSER_DEBUG`. |
@@ -476,8 +478,11 @@ client = Client(
 | `inspect_function_signature()` | Inspect function details |
 | `inject_and_execute_script()` | Inject and run custom JavaScript |
 | `create_persistent_function()` | Create functions that survive reloads |
+| `create_page_binding()` | Expose `window.<name>()` so page JavaScript can call back to the agent |
+| `get_page_binding_calls()` | Read queued page binding calls, optionally waiting for one |
+| `resolve_page_binding_call()` | Answer a page binding call with a value or an error |
+| `remove_page_binding()` | Remove a page binding and reject its pending calls |
 | `execute_function_sequence()` | Execute ordered function calls |
-| `create_python_binding()` | Create Python-to-JS bindings |
 | `execute_python_in_browser()` | Translate Python to JavaScript with py2js and run it |
 | `get_function_executor_info()` | Inspect executor state |
 
@@ -505,7 +510,7 @@ client = Client(
 
 ## Stealth vs Playwright MCP
 
-Detection results are point-in-time and depend on site policy, region, browser version, IP reputation, and detector version. See [STEALTH_TESTS.md](STEALTH_TESTS.md) for the current manual snapshot and [issue #25](https://github.com/vibheksoni/stealth-browser-mcp/issues/25) for the proposed reproducible benchmark harness.
+Detection results are point-in-time and depend on site policy, region, browser version, IP reputation, and detector version. See [STEALTH_TESTS.md](STEALTH_TESTS.md) for weekly automated results from the benchmark in `benchmarks/stealth/`, which runs on Linux, Windows, and macOS in GitHub Actions, plus the earlier manual snapshot.
 
 | Feature | Stealth Browser MCP | Playwright MCP |
 |---------|---------------------|----------------|
@@ -516,8 +521,8 @@ Detection results are point-in-time and depend on site policy, region, browser v
 | Network debugging | Full request/response inspection through AI tools | Basic |
 | API reverse engineering | Payload inspection through chat | Manual tools only |
 | Dynamic hook system | Restricted Python hooks for real-time interception | Not available |
-| Modular architecture | 11 sections, 21-98 tools | Fixed tool surface |
-| Total tools | 98 customizable tools | About 20 |
+| Modular architecture | 11 sections, 21-101 tools | Fixed tool surface |
+| Total tools | 101 customizable tools | About 20 |
 
 ---
 
