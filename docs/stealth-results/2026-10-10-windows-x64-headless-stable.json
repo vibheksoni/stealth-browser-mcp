@@ -1,8 +1,8 @@
 {
   "runner": "windows-x64-headless-stable",
   "date": "2026-10-10",
-  "started_at": "2026-10-10T19:20:50+00:00",
-  "finished_at": "2026-10-10T19:22:07+00:00",
+  "started_at": "2026-10-10T19:35:59+00:00",
+  "finished_at": "2026-10-10T19:37:13+00:00",
   "environment": {
     "os": "windows",
     "os_release": "Windows-10-10.0.26100-SP0",
@@ -13,9 +13,9 @@
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
-      "run_id": "38079346160",
-      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/38079346160",
-      "commit": "7a06b1459042f3c8453c7fb6a2bfb8c903bd151b",
+      "run_id": "38080370122",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/38080370122",
+      "commit": "bc7fd083616a1a139bef0f4bc13125bd763a2578",
       "event": "workflow_dispatch",
       "runner_image": "win25-vs2026"
     },
@@ -25,6 +25,58 @@
     "protocol_version": "1.3"
   },
   "targets": [
+    {
+      "name": "launch_flags",
+      "title": "Launch flags",
+      "category": "Browser configuration",
+      "url": "",
+      "status": "PASS",
+      "summary": "18 arguments, none flagged",
+      "checks": [
+        {
+          "name": "no automation flags",
+          "passed": true,
+          "critical": true,
+          "value": []
+        },
+        {
+          "name": "no unsupported or sandbox-disabling flags",
+          "passed": true,
+          "critical": true,
+          "value": []
+        },
+        {
+          "name": "GPU not disabled",
+          "passed": true,
+          "critical": false,
+          "value": []
+        }
+      ],
+      "details": {
+        "arguments": [
+          "--remote-allow-origins=*",
+          "--no-first-run",
+          "--no-service-autorun",
+          "--no-default-browser-check",
+          "--homepage=about:blank",
+          "--no-pings",
+          "--password-store=basic",
+          "--disable-infobars",
+          "--disable-breakpad",
+          "--disable-dev-shm-usage",
+          "--disable-session-crashed-bubble",
+          "--disable-search-engine-choice-screen",
+          "--disable-session-crashed-bubble",
+          "--disable-features=IsolateOrigins,site-per-process",
+          "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+          "--headless=new",
+          "--remote-debugging-host=127.0.0.1",
+          "--remote-debugging-port=57744"
+        ]
+      },
+      "duration_seconds": 4.64,
+      "error": null
+    },
     {
       "name": "local_probe",
       "title": "Local fingerprint probe",
@@ -151,7 +203,7 @@
           24
         ]
       },
-      "duration_seconds": 6.05,
+      "duration_seconds": 5.59,
       "error": null
     },
     {
@@ -190,7 +242,7 @@
       "details": {
         "webgl_renderer": "Stealth Benchmark Renderer"
       },
-      "duration_seconds": 7.02,
+      "duration_seconds": 6.09,
       "error": null
     },
     {
@@ -222,13 +274,13 @@
           "name": "mouse moved before click",
           "passed": true,
           "critical": false,
-          "value": 6
+          "value": 3
         },
         {
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 56.8
+          "value": 48.4
         },
         {
           "name": "key events are trusted",
@@ -262,11 +314,11 @@
         }
       ],
       "details": {
-        "press_ms": 56.8,
-        "mouse_moves": 6,
+        "press_ms": 48.4,
+        "mouse_moves": 3,
         "injected_nodes": 0
       },
-      "duration_seconds": 5.7,
+      "duration_seconds": 5.52,
       "error": null
     },
     {
@@ -497,7 +549,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 10.08,
+      "duration_seconds": 9.38,
       "error": null
     },
     {
@@ -553,7 +605,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 8.5,
+      "duration_seconds": 8.44,
       "error": null
     },
     {
@@ -588,7 +640,7 @@
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 13.78,
+      "duration_seconds": 8.06,
       "error": null
     },
     {
@@ -610,7 +662,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 5.89,
+      "duration_seconds": 6.3,
       "error": null
     },
     {
@@ -655,19 +707,19 @@
       "details": {
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "4d35336003fcec2fdefbf561fbb182c5",
+        "ja3_hash": "e50b482431dcf41f570f8e6aa7b62b95",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 5.72,
+      "duration_seconds": 4.92,
       "error": null
     }
   ],
   "schema_version": 1,
   "summary": {
-    "PASS": 8,
+    "PASS": 9,
     "DEGRADED": 0,
     "FAIL": 0,
     "UNREACHABLE": 0

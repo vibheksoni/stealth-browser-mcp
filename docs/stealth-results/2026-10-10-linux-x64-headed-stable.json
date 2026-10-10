@@ -1,15 +1,15 @@
 {
-  "runner": "macos-arm64-headless-stable",
+  "runner": "linux-x64-headed-stable",
   "date": "2026-10-10",
-  "started_at": "2026-10-10T19:35:31+00:00",
-  "finished_at": "2026-10-10T19:36:59+00:00",
+  "started_at": "2026-10-10T19:35:23+00:00",
+  "finished_at": "2026-10-10T19:35:53+00:00",
   "environment": {
-    "os": "macos",
-    "os_release": "macOS-26.6.2-arm64-arm-64bit",
-    "arch": "arm64",
-    "python": "3.11.9",
+    "os": "linux",
+    "os_release": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "arch": "x64",
+    "python": "3.11.17",
     "nodriver": "0.47.0",
-    "mode": "headless",
+    "mode": "headed",
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
@@ -17,11 +17,11 @@
       "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/38080370122",
       "commit": "bc7fd083616a1a139bef0f4bc13125bd763a2578",
       "event": "workflow_dispatch",
-      "runner_image": "macos26"
+      "runner_image": "ubuntu24"
     },
-    "chrome_product": "Chrome/152.0.7977.83",
-    "chrome_version": "152.0.7977.83",
-    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+    "chrome_product": "Chrome/154.0.8037.97",
+    "chrome_version": "154.0.8037.97",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
     "protocol_version": "1.3"
   },
   "targets": [
@@ -31,7 +31,7 @@
       "category": "Browser configuration",
       "url": "",
       "status": "PASS",
-      "summary": "18 arguments, none flagged",
+      "summary": "16 arguments, none flagged",
       "checks": [
         {
           "name": "no automation flags",
@@ -68,13 +68,11 @@
           "--disable-search-engine-choice-screen",
           "--disable-session-crashed-bubble",
           "--disable-features=IsolateOrigins,site-per-process",
-          "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
-          "--headless=new",
           "--remote-debugging-host=127.0.0.1",
-          "--remote-debugging-port=49218"
+          "--remote-debugging-port=48821"
         ]
       },
-      "duration_seconds": 3.2,
+      "duration_seconds": 0.78,
       "error": null
     },
     {
@@ -82,8 +80,8 @@
       "title": "Local fingerprint probe",
       "category": "Automation tells",
       "url": "local/probe.html",
-      "status": "PASS",
-      "summary": "13/13 checks passed",
+      "status": "DEGRADED",
+      "summary": "12/13 checks passed",
       "checks": [
         {
           "name": "navigator.webdriver is not true",
@@ -95,7 +93,7 @@
           "name": "user agent has no HeadlessChrome",
           "passed": true,
           "critical": true,
-          "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+          "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
         },
         {
           "name": "client hints have no HeadlessChrome",
@@ -103,8 +101,8 @@
           "critical": true,
           "value": [
             "Chromium",
-            "Not?A_Brand",
-            "Google Chrome"
+            "Google Chrome",
+            "Not A(Brand"
           ]
         },
         {
@@ -139,8 +137,8 @@
           "passed": true,
           "critical": true,
           "value": [
-            1920,
-            1080
+            1919,
+            1079
           ]
         },
         {
@@ -153,7 +151,7 @@
           "name": "platform matches client hints",
           "passed": true,
           "critical": false,
-          "value": "MacIntel/macOS"
+          "value": "Linux x86_64/Linux"
         },
         {
           "name": "iframe window.chrome present",
@@ -163,9 +161,9 @@
         },
         {
           "name": "WebGL renderer is hardware",
-          "passed": true,
+          "passed": false,
           "critical": false,
-          "value": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)"
+          "value": ""
         },
         {
           "name": "console does not read Error.stack",
@@ -175,35 +173,35 @@
         }
       ],
       "details": {
-        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
-        "platform": "MacIntel",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "platform": "Linux x86_64",
         "brands": [
           "Chromium",
-          "Not?A_Brand",
-          "Google Chrome"
+          "Google Chrome",
+          "Not A(Brand"
         ],
         "languages": [
           "en-US",
           "en"
         ],
-        "hardware_concurrency": 3,
-        "webgl_vendor": "Google Inc. (Apple)",
-        "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
+        "hardware_concurrency": 4,
+        "webgl_vendor": null,
+        "webgl_renderer": null,
         "outer_size": [
-          1920,
-          1080
+          1919,
+          1079
         ],
         "outer_size_at_load": [
           0,
           0
         ],
         "screen": [
-          800,
-          600,
+          1920,
+          1080,
           24
         ]
       },
-      "duration_seconds": 3.37,
+      "duration_seconds": 1.61,
       "error": null
     },
     {
@@ -212,7 +210,7 @@
       "category": "Capability",
       "url": "local/probe.html",
       "status": "PASS",
-      "summary": "4/4 checks passed",
+      "summary": "3/3 checks passed",
       "checks": [
         {
           "name": "script installed",
@@ -231,18 +229,12 @@
           "passed": true,
           "critical": true,
           "value": "installed"
-        },
-        {
-          "name": "WebGL renderer override applied",
-          "passed": true,
-          "critical": false,
-          "value": "Stealth Benchmark Renderer"
         }
       ],
       "details": {
-        "webgl_renderer": "Stealth Benchmark Renderer"
+        "webgl_renderer": null
       },
-      "duration_seconds": 3.66,
+      "duration_seconds": 1.96,
       "error": null
     },
     {
@@ -280,7 +272,7 @@
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 48.8
+          "value": 58.7
         },
         {
           "name": "key events are trusted",
@@ -314,11 +306,11 @@
         }
       ],
       "details": {
-        "press_ms": 48.8,
+        "press_ms": 58.7,
         "mouse_moves": 6,
         "injected_nodes": 0
       },
-      "duration_seconds": 2.73,
+      "duration_seconds": 1.66,
       "error": null
     },
     {
@@ -326,14 +318,14 @@
       "title": "Sannysoft",
       "category": "Bot detection suite",
       "url": "https://bot.sannysoft.com/",
-      "status": "PASS",
-      "summary": "31/31 checks passed",
+      "status": "FAIL",
+      "summary": "29/31 checks passed, failed: WebGL Vendor, WebGL Renderer",
       "checks": [
         {
           "name": "User Agent (Old)",
           "passed": true,
           "critical": true,
-          "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+          "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
         },
         {
           "name": "WebDriver (New)",
@@ -379,15 +371,15 @@
         },
         {
           "name": "WebGL Vendor",
-          "passed": true,
+          "passed": false,
           "critical": true,
-          "value": "Google Inc. (Apple)"
+          "value": "Canvas has no webgl context"
         },
         {
           "name": "WebGL Renderer",
-          "passed": true,
+          "passed": false,
           "critical": true,
-          "value": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)"
+          "value": "Canvas has no webgl context"
         },
         {
           "name": "Broken Image Dimensions",
@@ -517,7 +509,7 @@
         }
       ],
       "details": {
-        "User Agent (Old)": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "User Agent (Old)": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
         "WebDriver (New)": "missing (passed)",
         "WebDriver Advanced": "passed",
         "Chrome (New)": "present (passed)",
@@ -525,8 +517,8 @@
         "Plugins Length (Old)": "5",
         "Plugins is of type PluginArray": "passed",
         "Languages (Old)": "en-US,en",
-        "WebGL Vendor": "Google Inc. (Apple)",
-        "WebGL Renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
+        "WebGL Vendor": "Canvas has no webgl context",
+        "WebGL Renderer": "Canvas has no webgl context",
         "Broken Image Dimensions": "16x16",
         "PHANTOM_UA": "ok",
         "PHANTOM_PROPERTIES": "ok",
@@ -549,7 +541,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 6.12,
+      "duration_seconds": 7.24,
       "error": null
     },
     {
@@ -564,7 +556,7 @@
           "name": "User Agent (Old)",
           "passed": true,
           "critical": true,
-          "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+          "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
         },
         {
           "name": "WebDriver (New)",
@@ -598,14 +590,14 @@
         }
       ],
       "details": {
-        "User Agent (Old)": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "User Agent (Old)": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
         "WebDriver (New)": "missing (passed)",
         "Chrome (New)": "present (passed)",
         "Permissions (New)": "prompt",
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 5.18,
+      "duration_seconds": 4.19,
       "error": null
     },
     {
@@ -614,7 +606,7 @@
       "category": "Deep fingerprinting",
       "url": "https://abrahamjuliot.github.io/creepjs/",
       "status": "PASS",
-      "summary": "0% headless, 0% stealth, 38% like headless",
+      "summary": "0% headless, 0% stealth, 44% like headless",
       "checks": [
         {
           "name": "headless score below 50%",
@@ -636,11 +628,11 @@
         }
       ],
       "details": {
-        "like_headless_percent": 38,
+        "like_headless_percent": 44,
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 8.37,
+      "duration_seconds": 2.22,
       "error": null
     },
     {
@@ -662,7 +654,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 4.62,
+      "duration_seconds": 1.53,
       "error": null
     },
     {
@@ -677,7 +669,7 @@
           "name": "header user agent has no HeadlessChrome",
           "passed": true,
           "critical": true,
-          "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+          "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
         },
         {
           "name": "HTTP/2 negotiated",
@@ -705,23 +697,23 @@
         }
       ],
       "details": {
-        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "c983458c3f9614a5d7a19f49dea0054d",
+        "ja3_hash": "9370b078bc5015e25cf658e7596ce537",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 2.01,
+      "duration_seconds": 1.02,
       "error": null
     }
   ],
   "schema_version": 1,
   "summary": {
-    "PASS": 9,
-    "DEGRADED": 0,
-    "FAIL": 0,
+    "PASS": 7,
+    "DEGRADED": 1,
+    "FAIL": 1,
     "UNREACHABLE": 0
   }
 }

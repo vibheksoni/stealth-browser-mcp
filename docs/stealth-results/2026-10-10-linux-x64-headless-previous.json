@@ -1,8 +1,8 @@
 {
   "runner": "linux-x64-headless-previous",
   "date": "2026-10-10",
-  "started_at": "2026-10-10T19:19:57+00:00",
-  "finished_at": "2026-10-10T19:20:15+00:00",
+  "started_at": "2026-10-10T19:35:23+00:00",
+  "finished_at": "2026-10-10T19:35:44+00:00",
   "environment": {
     "os": "linux",
     "os_release": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
@@ -13,9 +13,9 @@
     "chrome_channel": "previous",
     "ci": {
       "provider": "github-actions",
-      "run_id": "38079346160",
-      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/38079346160",
-      "commit": "7a06b1459042f3c8453c7fb6a2bfb8c903bd151b",
+      "run_id": "38080370122",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/38080370122",
+      "commit": "bc7fd083616a1a139bef0f4bc13125bd763a2578",
       "event": "workflow_dispatch",
       "runner_image": "ubuntu24"
     },
@@ -25,6 +25,58 @@
     "protocol_version": "1.3"
   },
   "targets": [
+    {
+      "name": "launch_flags",
+      "title": "Launch flags",
+      "category": "Browser configuration",
+      "url": "",
+      "status": "PASS",
+      "summary": "18 arguments, none flagged",
+      "checks": [
+        {
+          "name": "no automation flags",
+          "passed": true,
+          "critical": true,
+          "value": []
+        },
+        {
+          "name": "no unsupported or sandbox-disabling flags",
+          "passed": true,
+          "critical": true,
+          "value": []
+        },
+        {
+          "name": "GPU not disabled",
+          "passed": true,
+          "critical": false,
+          "value": []
+        }
+      ],
+      "details": {
+        "arguments": [
+          "--remote-allow-origins=*",
+          "--no-first-run",
+          "--no-service-autorun",
+          "--no-default-browser-check",
+          "--homepage=about:blank",
+          "--no-pings",
+          "--password-store=basic",
+          "--disable-infobars",
+          "--disable-breakpad",
+          "--disable-dev-shm-usage",
+          "--disable-session-crashed-bubble",
+          "--disable-search-engine-choice-screen",
+          "--disable-session-crashed-bubble",
+          "--disable-features=IsolateOrigins,site-per-process",
+          "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+          "--headless=new",
+          "--remote-debugging-host=127.0.0.1",
+          "--remote-debugging-port=39753"
+        ]
+      },
+      "duration_seconds": 0.62,
+      "error": null
+    },
     {
       "name": "local_probe",
       "title": "Local fingerprint probe",
@@ -147,7 +199,7 @@
           24
         ]
       },
-      "duration_seconds": 1.04,
+      "duration_seconds": 1.37,
       "error": null
     },
     {
@@ -186,7 +238,7 @@
       "details": {
         "webgl_renderer": "Stealth Benchmark Renderer"
       },
-      "duration_seconds": 1.62,
+      "duration_seconds": 1.85,
       "error": null
     },
     {
@@ -224,7 +276,7 @@
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 44.9
+          "value": 56.8
         },
         {
           "name": "key events are trusted",
@@ -258,11 +310,11 @@
         }
       ],
       "details": {
-        "press_ms": 44.9,
+        "press_ms": 56.8,
         "mouse_moves": 6,
         "injected_nodes": 0
       },
-      "duration_seconds": 0.97,
+      "duration_seconds": 1.26,
       "error": null
     },
     {
@@ -493,7 +545,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 4.56,
+      "duration_seconds": 5.4,
       "error": null
     },
     {
@@ -549,7 +601,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US"
       },
-      "duration_seconds": 3.7,
+      "duration_seconds": 4.15,
       "error": null
     },
     {
@@ -584,7 +636,7 @@
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 1.41,
+      "duration_seconds": 1.72,
       "error": null
     },
     {
@@ -606,7 +658,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 1.01,
+      "duration_seconds": 1.25,
       "error": null
     },
     {
@@ -651,19 +703,19 @@
       "details": {
         "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "fb763cc7e32096e06153fe3f8c0184e7",
+        "ja3_hash": "e43c9cfc73e39cd35bf98ef51835f87e",
         "ja4": "t13d1518h2_8daaf6152771_4980c97edce0",
         "peetprint_hash": "493a80d6a4267c7820685d29d92aa946",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 0.72,
+      "duration_seconds": 1.57,
       "error": null
     }
   ],
   "schema_version": 1,
   "summary": {
-    "PASS": 6,
+    "PASS": 7,
     "DEGRADED": 1,
     "FAIL": 1,
     "UNREACHABLE": 0

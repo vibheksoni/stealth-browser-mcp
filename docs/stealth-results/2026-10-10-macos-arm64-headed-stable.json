@@ -1,15 +1,15 @@
 {
-  "runner": "macos-arm64-headless-stable",
+  "runner": "macos-arm64-headed-stable",
   "date": "2026-10-10",
-  "started_at": "2026-10-10T19:35:31+00:00",
-  "finished_at": "2026-10-10T19:36:59+00:00",
+  "started_at": "2026-10-10T19:35:24+00:00",
+  "finished_at": "2026-10-10T19:36:57+00:00",
   "environment": {
     "os": "macos",
     "os_release": "macOS-26.6.2-arm64-arm-64bit",
     "arch": "arm64",
     "python": "3.11.9",
     "nodriver": "0.47.0",
-    "mode": "headless",
+    "mode": "headed",
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
@@ -31,7 +31,7 @@
       "category": "Browser configuration",
       "url": "",
       "status": "PASS",
-      "summary": "18 arguments, none flagged",
+      "summary": "16 arguments, none flagged",
       "checks": [
         {
           "name": "no automation flags",
@@ -68,13 +68,11 @@
           "--disable-search-engine-choice-screen",
           "--disable-session-crashed-bubble",
           "--disable-features=IsolateOrigins,site-per-process",
-          "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
-          "--headless=new",
           "--remote-debugging-host=127.0.0.1",
-          "--remote-debugging-port=49218"
+          "--remote-debugging-port=49201"
         ]
       },
-      "duration_seconds": 3.2,
+      "duration_seconds": 2.59,
       "error": null
     },
     {
@@ -140,7 +138,7 @@
           "critical": true,
           "value": [
             1920,
-            1080
+            677
           ]
         },
         {
@@ -191,19 +189,19 @@
         "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
         "outer_size": [
           1920,
-          1080
+          677
         ],
         "outer_size_at_load": [
           0,
           0
         ],
         "screen": [
-          800,
-          600,
+          1024,
+          768,
           24
         ]
       },
-      "duration_seconds": 3.37,
+      "duration_seconds": 3.14,
       "error": null
     },
     {
@@ -242,7 +240,7 @@
       "details": {
         "webgl_renderer": "Stealth Benchmark Renderer"
       },
-      "duration_seconds": 3.66,
+      "duration_seconds": 3.85,
       "error": null
     },
     {
@@ -280,7 +278,7 @@
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 48.8
+          "value": 86.8
         },
         {
           "name": "key events are trusted",
@@ -314,11 +312,11 @@
         }
       ],
       "details": {
-        "press_ms": 48.8,
+        "press_ms": 86.8,
         "mouse_moves": 6,
         "injected_nodes": 0
       },
-      "duration_seconds": 2.73,
+      "duration_seconds": 3.4,
       "error": null
     },
     {
@@ -549,7 +547,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 6.12,
+      "duration_seconds": 6.28,
       "error": null
     },
     {
@@ -605,7 +603,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 5.18,
+      "duration_seconds": 5.48,
       "error": null
     },
     {
@@ -614,7 +612,7 @@
       "category": "Deep fingerprinting",
       "url": "https://abrahamjuliot.github.io/creepjs/",
       "status": "PASS",
-      "summary": "0% headless, 0% stealth, 38% like headless",
+      "summary": "0% headless, 0% stealth, 31% like headless",
       "checks": [
         {
           "name": "headless score below 50%",
@@ -636,11 +634,11 @@
         }
       ],
       "details": {
-        "like_headless_percent": 38,
+        "like_headless_percent": 31,
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 8.37,
+      "duration_seconds": 12.33,
       "error": null
     },
     {
@@ -662,7 +660,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 4.62,
+      "duration_seconds": 6.84,
       "error": null
     },
     {
@@ -707,13 +705,13 @@
       "details": {
         "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "c983458c3f9614a5d7a19f49dea0054d",
+        "ja3_hash": "52f30481001b00bbfdbe3c7356045380",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 2.01,
+      "duration_seconds": 4.04,
       "error": null
     }
   ],
