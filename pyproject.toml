@@ -44,6 +44,9 @@ Issues = "https://github.com/vibheksoni/stealth-browser-mcp/issues"
 
 # Code formatting
 [tool.black]
+
+[project.scripts]
+stealth-browser-mcp = "stealth_browser_mcp.server:main"
 line-length = 100
 target-version = ["py310", "py311", "py312", "py313"]
 
