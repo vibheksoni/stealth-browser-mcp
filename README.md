@@ -37,6 +37,7 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 
 - `STEALTHMCP35` — 35% off to Mobile and Residential Proxies
 - `STEALTHMCP40` — 40% off to ISP (Static) Proxies
+- `STEALTHMCP2X`: 2X traffic for Black Friday
 
 [Get started with NodeMaven](https://go.nodemaven.com/stealthbrowsermcpreadmeoct)
 
