@@ -49,6 +49,7 @@ from .stdio_guard import install_stdio_guard
 from .platform_utils import validate_browser_environment, get_platform_info
 from .process_cleanup import process_cleanup
 from .a11y_snapshot import a11y_manager
+from . import fill_tool
 from . import session_state
 
 DISABLED_SECTIONS = set()
@@ -636,52 +637,82 @@ async def type_text(
 async def fill(
     instance_id: str,
     selector: str,
-    value: str,
-    frame: Optional[str] = None
-) -> bool:
+    value: Optional[str] = None,
+    value_env: Optional[str] = None,
+    strategy: str = "auto",
+    verify: bool = True,
+    frame: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Fill an input field with text using a selector or ref=<id>.
+    Fill an input, textarea, select, combobox, or contenteditable element with verification.
 
-    Focuses the element, clears any existing content, and enters the value.
-    Accepts CSS selectors, XPath, deep selectors, or ref=<id> from an
-    accessibility snapshot (e.g. ref=e12).
+    Classifies the element kind, picks an appropriate input strategy (native setter,
+    synthetic paste, custom combobox choose_option, or formatted input), and
+    verifies the result when verify is True. Sensitive values (passwords or value_env)
+    are never echoed back in plain text.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector, XPath, deep selector, or ref=<id> (e.g. ref=e1).
-        value (str): Text to fill into the input.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        selector (str): CSS selector, deep selector, XPath, or ref=<id>.
+        value (Optional[str]): Text or value to fill into the input.
+        value_env (Optional[str]): Name of an environment variable holding the secret
+            (must start with STEALTH_SECRET_).
+        strategy (str): Input strategy: 'auto', 'native_setter', 'synthetic_paste',
+            'typing', or 'choose_option'. Defaults to 'auto'.
+        verify (bool): Whether to verify the filled value by reading it back. Defaults to True.
+        frame (Optional[str]): Target element within an iframe (selector, name, or id).
 
     Returns:
-        bool: True if filled successfully.
+        Dict[str, Any]: Result with strategy used, verified status, and safe preview.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.fill(
-        tab, selector, value, frame=frame, instance_id=instance_id
+    return await fill_tool.fill(
+        tab,
+        selector,
+        value=value,
+        value_env=value_env,
+        strategy=strategy,
+        verify=verify,
+        frame=frame,
+        instance_id=instance_id,
     )
 
 @section_tool("element-interaction")
 async def fill_element(
     instance_id: str,
     selector: str,
-    value: str,
-    frame: Optional[str] = None
-) -> bool:
+    value: Optional[str] = None,
+    value_env: Optional[str] = None,
+    strategy: str = "auto",
+    verify: bool = True,
+    frame: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Fill an input field with text (alias for fill).
 
     Args:
         instance_id (str): Browser instance ID.
         selector (str): CSS selector, XPath, deep selector, or ref=<id> (e.g. ref=e1).
-        value (str): Text to fill into the input.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        value (Optional[str]): Text or value to fill into the input.
+        value_env (Optional[str]): Secret environment variable name (STEALTH_SECRET_ prefix).
+        strategy (str): Strategy override ('auto', 'native_setter', etc.).
+        verify (bool): Whether to verify read-back value.
+        frame (Optional[str]): Target element within an iframe (selector, name, or id).
 
     Returns:
-        bool: True if filled successfully.
+        Dict[str, Any]: Result with strategy used, verified status, and safe preview.
     """
-    return await fill(instance_id=instance_id, selector=selector, value=value, frame=frame)
+    return await fill(
+        instance_id=instance_id,
+        selector=selector,
+        value=value,
+        value_env=value_env,
+        strategy=strategy,
+        verify=verify,
+        frame=frame,
+    )
 
 @section_tool("element-interaction")
 async def paste_text(
@@ -689,7 +720,8 @@ async def paste_text(
     selector: str,
     text: str,
     clear_first: bool = True,
-    frame: Optional[str] = None
+    frame: Optional[str] = None,
+    mode: Optional[str] = None,
 ) -> bool:
     """
     Paste text instantly into an input field.
@@ -700,6 +732,7 @@ async def paste_text(
         text (str): Text to paste.
         clear_first (bool): Clear field before pasting.
         frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
+        mode (Optional[str]): Paste mode in {'synthetic', 'type', 'native'}. Defaults to None (keeps current behaviour).
 
     Returns:
         bool: True if pasted successfully.
@@ -708,7 +741,7 @@ async def paste_text(
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
     return await dom_handler.paste_text(
-        tab, selector, text, clear_first, frame=frame, instance_id=instance_id
+        tab, selector, text, clear_first, frame=frame, instance_id=instance_id, mode=mode
     )
 
 @section_tool("element-interaction")

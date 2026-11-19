@@ -1171,7 +1171,7 @@ async def call_on_node(tab: Tab, backend_node_id: int, function: str, *args: Any
         else:
             raise
 
-    result, exception = await target_tab.send(cdp.runtime.call_function_on(
+    res = await target_tab.send(cdp.runtime.call_function_on(
         function,
         object_id=remote.object_id,
         arguments=[cdp.runtime.CallArgument(value=arg) for arg in args],
@@ -1182,9 +1182,15 @@ async def call_on_node(tab: Tab, backend_node_id: int, function: str, *args: Any
         await target_tab.send(cdp.runtime.release_object(object_id=remote.object_id))
     except Exception:
         pass
+    if isinstance(res, tuple):
+        result, exception = res
+    else:
+        result, exception = res, None
     if exception:
         raise RuntimeError(exception.text)
-    return result.value
+    if isinstance(result, dict):
+        return result.get("value")
+    return getattr(result, "value", result)
 
 
 async def node_center(tab: Tab, backend_node_id: int) -> Optional[Tuple[float, float]]:

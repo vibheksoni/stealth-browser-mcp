@@ -26,8 +26,9 @@ NULL_DEFAULT_PARAMS = {
     "drop_files": ["instance_id"],
     "get_accessibility_snapshot": ["frame"],
     "take_accessibility_snapshot": ["frame"],
-    "fill": ["frame"],
-    "fill_element": ["frame"],
+    "fill": ["frame", "value", "value_env"],
+    "fill_element": ["frame", "value", "value_env"],
+    "paste_text": ["frame", "mode"],
 }
 
 
