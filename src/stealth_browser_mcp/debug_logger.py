@@ -10,6 +10,11 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+try:
+    from .secrets_env import redact
+except ImportError:
+    from secrets_env import redact
+
 MAX_LOG_ENTRIES = 2000
 MAX_SEEN_ERROR_SIGNATURES = 10000
 
@@ -104,16 +109,6 @@ class DebugLogger:
             return
 
         with self._lock:
-            error_signature = f"{component}.{method}.{type(error).__name__}.{str(error)}"
-
-            if error_signature in self._seen_errors:
-                self._stats[f'{component}.{method}.errors'] += 1
-                return
-
-            if len(self._seen_errors) >= MAX_SEEN_ERROR_SIGNATURES:
-                self._seen_errors.clear()
-            self._seen_errors.add(error_signature)
-
             error_entry = {
                 'timestamp': datetime.now().isoformat(),
                 'component': component,
@@ -123,9 +118,21 @@ class DebugLogger:
                 'traceback': traceback.format_exc(),
                 'context': context or {}
             }
+            error_entry = redact(error_entry)
+
+            error_signature = f"{component}.{method}.{error_entry['error_type']}.{error_entry['error_message']}"
+
+            if error_signature in self._seen_errors:
+                self._stats[f'{component}.{method}.errors'] += 1
+                return
+
+            if len(self._seen_errors) >= MAX_SEEN_ERROR_SIGNATURES:
+                self._seen_errors.clear()
+            self._seen_errors.add(error_signature)
+
             _append_capped(self._errors, error_entry)
             self._stats[f'{component}.{method}.errors'] += 1
-            self._emit_stderr(f"[DEBUG ERROR] {component}.{method}: {error}")
+            self._emit_stderr(f"[DEBUG ERROR] {component}.{method}: {error_entry['error_message']}")
 
     def log_warning(self, component: str, method: str, message: str, context: Optional[Dict[str, Any]] = None):
         """
@@ -148,9 +155,10 @@ class DebugLogger:
                 'message': message,
                 'context': context or {}
             }
+            warning_entry = redact(warning_entry)
             _append_capped(self._warnings, warning_entry)
             self._stats[f'{component}.{method}.warnings'] += 1
-            self._emit_stderr(f"[DEBUG WARN] {component}.{method}: {message}")
+            self._emit_stderr(f"[DEBUG WARN] {component}.{method}: {warning_entry['message']}")
 
     def log_info(self, component: str, method: str, message: str, data: Optional[Any] = None):
         """
@@ -173,11 +181,12 @@ class DebugLogger:
                 'message': message,
                 'data': data
             }
+            info_entry = redact(info_entry)
             _append_capped(self._info, info_entry)
             self._stats[f'{component}.{method}.calls'] += 1
-            self._emit_stderr(f"[DEBUG INFO] {component}.{method}: {message}")
-            if data:
-                self._emit_stderr(f"  Data: {data}")
+            self._emit_stderr(f"[DEBUG INFO] {component}.{method}: {info_entry['message']}")
+            if info_entry['data']:
+                self._emit_stderr(f"  Data: {info_entry['data']}")
 
     def get_debug_view(self) -> Dict[str, Any]:
         """
