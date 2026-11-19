@@ -81,6 +81,7 @@ class BrowserManager:
         self._instances: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
         self._spawn_diagnostics: Dict[str, Dict[str, Any]] = {}
+        self._session_infos: Dict[str, Dict[str, Any]] = {}
         self._proxy_forwarders: Dict[str, AuthenticatedProxyForwarder] = {}
         self._idle_timeout_seconds_default = _parse_nonnegative_int_env(
             "BROWSER_IDLE_TIMEOUT",
@@ -99,6 +100,11 @@ class BrowserManager:
             "BROWSER_TAB_RECYCLE_NAVIGATIONS",
             0,
         )
+        try:
+            from . import session_spawn
+            session_spawn.startup_janitor()
+        except Exception:
+            pass
 
     @staticmethod
     def _append_user_agent_arg(args: List[str], user_agent: Optional[str]) -> List[str]:
@@ -391,16 +397,22 @@ class BrowserManager:
             pass
         self._idle_reaper_task = None
 
-    async def spawn_browser(self, options: BrowserOptions) -> BrowserInstance:
+    async def spawn_browser(self, options: Optional[BrowserOptions] = None, **kwargs: Any) -> BrowserInstance:
         """
         Spawn a new browser instance with given options.
 
         Args:
-            options (BrowserOptions): Options for browser configuration.
+            options (Optional[BrowserOptions]): Options for browser configuration.
+            **kwargs: Additional options if options object is not provided.
 
         Returns:
             BrowserInstance: The spawned browser instance.
         """
+        if options is None:
+            options = BrowserOptions(**kwargs)
+        elif kwargs:
+            options = options.model_copy(update=kwargs)
+
         instance_id = str(uuid.uuid4())
 
         instance = BrowserInstance(
@@ -412,6 +424,14 @@ class BrowserManager:
 
         browser: Optional[Browser] = None
         proxy_forwarder: Optional[AuthenticatedProxyForwarder] = None
+        session_id: Optional[str] = None
+        session_dir: Optional[Path] = None
+        session_info: Optional[Dict[str, Any]] = None
+        args_modifier: Optional[Callable[[List[str]], List[str]]] = None
+        clone_ms: float = 0.0
+        t_spawn_start = time.monotonic()
+        t_launch_start: float = 0.0
+
         try:
             platform_info = get_platform_info()
             proxy_config: Optional[ProxyConfig] = None
@@ -430,11 +450,32 @@ class BrowserManager:
                     launch_proxy_server = proxy_forwarder.proxy_server
                 else:
                     launch_proxy_server = proxy_config.server
-            
-            # Detect the best available browser executable (Chrome, Chromium, or Edge)
-            browser_executable = check_browser_executable()
-            if not browser_executable:
-                raise Exception("No compatible browser found (Chrome, Chromium, or Microsoft Edge)")
+
+            if options.seed:
+                from . import session_spawn
+                session_id, session_dir, seed_data = session_spawn.prepare_session_spawn(
+                    seed_name=options.seed,
+                    cap=getattr(options, "cap", None),
+                )
+                clone_ms = session_spawn.clone_seed_to_session(
+                    options.seed,
+                    session_id,
+                    seed_data,
+                )
+                options.user_data_dir = str(session_dir)
+                source_browser = seed_data.get("source_browser", "chrome")
+                browser_executable = session_spawn.find_family_binary(source_browser)
+
+                caller_args, args_modifier = session_spawn.build_spawn_args_and_config(
+                    seed_data,
+                    list(options.browser_args or []),
+                )
+                options.browser_args = caller_args
+            else:
+                # Detect the best available browser executable (Chrome, Chromium, or Edge)
+                browser_executable = check_browser_executable()
+                if not browser_executable:
+                    raise Exception("No compatible browser found (Chrome, Chromium, or Microsoft Edge)")
             
             # Identify browser type for logging
             browser_type = "Unknown"
@@ -474,7 +515,16 @@ class BrowserManager:
                 browser_args=launch_args
             )
 
-            browser = await launch_browser(config)
+            if args_modifier is not None:
+                if hasattr(config, "_default_browser_args"):
+                    config._default_browser_args = [
+                        arg for arg in config._default_browser_args
+                        if not arg.startswith("--password-store=")
+                    ]
+                config.args_modifier = args_modifier
+
+            t_launch_start = time.monotonic()
+            browser = await launch_browser(config, args_modifier=args_modifier)
             tab = browser.main_tab
             config_obj = getattr(browser, "config", None)
             actual_user_data_dir = getattr(config_obj, "user_data_dir", options.user_data_dir)
@@ -532,6 +582,21 @@ class BrowserManager:
             if proxy_forwarder is not None:
                 self._proxy_forwarders[instance_id] = proxy_forwarder
 
+            if session_id and options.seed and session_dir is not None:
+                from . import session_spawn
+                session_info = await session_spawn.finish_session_spawn(
+                    session_id=session_id,
+                    seed_name=options.seed,
+                    session_dir=session_dir,
+                    browser=browser,
+                    clone_ms=clone_ms,
+                    t_launch_start=t_launch_start,
+                    t_spawn_start=t_spawn_start,
+                    check_url=options.check_url,
+                )
+                self._session_infos[instance_id] = session_info
+                instance.session_id = session_id
+
             async with self._lock:
                 self._instances[instance_id] = {
                     'browser': browser,
@@ -543,7 +608,9 @@ class BrowserManager:
                     'configured_tabs': configured_tabs,
                     'idle_timeout_seconds': idle_timeout_seconds,
                     'spawn_diagnostics': spawn_diagnostics,
-                    'network_data': []
+                    'network_data': [],
+                    'session_id': session_id,
+                    'session_info': session_info,
                 }
 
             instance.state = BrowserState.READY
@@ -569,6 +636,12 @@ class BrowserManager:
             if proxy_forwarder is not None:
                 try:
                     await proxy_forwarder.close()
+                except Exception:
+                    pass
+            if session_id:
+                try:
+                    from . import session_spawn
+                    session_spawn.cleanup_session(session_id, keep=False)
                 except Exception:
                     pass
             try:
@@ -628,7 +701,7 @@ class BrowserManager:
         async with self._lock:
             return [data['instance'] for data in self._instances.values()]
 
-    async def close_instance(self, instance_id: str) -> bool:
+    async def close_instance(self, instance_id: str, keep: Optional[bool] = None) -> bool:
         """
         Close and remove a browser instance.
 
@@ -673,6 +746,21 @@ class BrowserManager:
             await self._close_proxy_forwarder(instance_id)
         except Exception:
             pass
+
+        session_id = data.get("session_id")
+        options = data.get("options")
+        effective_keep = keep if keep is not None else (getattr(options, "keep", False) if options else False)
+        if session_id:
+            try:
+                from . import session_spawn
+                session_spawn.cleanup_session(session_id, keep=effective_keep)
+            except Exception as error:
+                debug_logger.log_warning(
+                    "browser_manager",
+                    "close_instance",
+                    f"Session cleanup failed for {session_id}: {error}",
+                )
+        self._session_infos.pop(instance_id, None)
 
         await self._notify_close_listeners(instance_id)
         return True
@@ -762,6 +850,10 @@ class BrowserManager:
     async def get_spawn_diagnostics(self, instance_id: str) -> Optional[Dict[str, Any]]:
         """Get spawn diagnostics for an instance."""
         return self._spawn_diagnostics.get(instance_id)
+
+    async def get_session_info(self, instance_id: str) -> Optional[Dict[str, Any]]:
+        """Get session spawn info if spawned from a seed."""
+        return self._session_infos.get(instance_id)
 
     @staticmethod
     def _get_tab_target_id(tab: Optional[Tab]) -> Optional[str]:

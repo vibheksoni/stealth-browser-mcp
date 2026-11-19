@@ -5,7 +5,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, List, Optional
 
 import nodriver as uc
 import psutil
@@ -80,7 +80,11 @@ async def _stop_process(process: asyncio.subprocess.Process) -> None:
             continue
 
 
-async def launch_browser(config: uc.Config, timeout: float = DEVTOOLS_READY_TIMEOUT) -> Browser:
+async def launch_browser(
+    config: uc.Config,
+    timeout: float = DEVTOOLS_READY_TIMEOUT,
+    args_modifier: Optional[Callable[[List[str]], List[str]]] = None,
+) -> Browser:
     """
     Start Chrome for a nodriver config and connect to it.
 
@@ -97,6 +101,8 @@ async def launch_browser(config: uc.Config, timeout: float = DEVTOOLS_READY_TIME
     Args:
         config (uc.Config): nodriver config describing the launch.
         timeout (float): Seconds to wait for the DevTools endpoint.
+        args_modifier (Optional[Callable[[List[str]], List[str]]]): Optional modifier
+            to transform launch arguments after config() is evaluated.
 
     Returns:
         Browser: Connected nodriver browser whose `_process` is the launched Chrome.
@@ -109,9 +115,13 @@ async def launch_browser(config: uc.Config, timeout: float = DEVTOOLS_READY_TIME
     (profile_dir / ACTIVE_PORT_FILE).unlink(missing_ok=True)
     config.host = "127.0.0.1"
     config.port = nodriver_util.free_port()
+    launch_args = list(config())
+    modifier = args_modifier or getattr(config, "args_modifier", None)
+    if modifier is not None:
+        launch_args = modifier(launch_args)
     process = await asyncio.create_subprocess_exec(
         config.browser_executable_path,
-        *config(),
+        *launch_args,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,

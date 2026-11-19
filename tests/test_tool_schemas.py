@@ -12,7 +12,7 @@ from stealth_browser_mcp import server
 
 # Tool parameters that default to None and must therefore accept an explicit null.
 NULL_DEFAULT_PARAMS = {
-    "spawn_browser": ["browser_args", "block_resources", "extra_headers"],
+    "spawn_browser": ["browser_args", "block_resources", "extra_headers", "seed", "check_url", "cap"],
     "execute_cdp_command": ["params"],
     "discover_global_functions": ["context_id"],
     "call_javascript_function": ["args"],

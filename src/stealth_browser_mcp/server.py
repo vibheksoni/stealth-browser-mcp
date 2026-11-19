@@ -243,7 +243,11 @@ async def spawn_browser(
     block_resources: Optional[List[str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     user_data_dir: Optional[str] = None,
-    sandbox: Optional[Any] = None
+    sandbox: Optional[Any] = None,
+    seed: Optional[str] = None,
+    check_url: Optional[str] = None,
+    keep: bool = False,
+    cap: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Spawn a new browser instance.
@@ -261,6 +265,10 @@ async def spawn_browser(
         extra_headers (Dict[str, str]): Additional HTTP headers.
         user_data_dir (Optional[str]): Path to user data directory for persistent sessions.
         sandbox (Optional[Any]): Enable browser sandbox. Accepts bool, string ('true'/'false'), int (1/0), or None for auto-detect.
+        seed (Optional[str]): Seed profile name to clone a disposable session from.
+        check_url (Optional[str]): Optional URL to verify cookie carryover via CDP Network.getCookies.
+        keep (bool): Keep session directory on close instead of deleting it.
+        cap (Optional[int]): Maximum concurrent sessions cap.
 
     Returns:
         Dict[str, Any]: Instance information including instance_id.
@@ -289,17 +297,25 @@ async def spawn_browser(
             block_resources=block_resources or [],
             extra_headers=extra_headers or {},
             user_data_dir=user_data_dir,
-            sandbox=sandbox
+            sandbox=sandbox,
+            seed=seed,
+            check_url=check_url,
+            keep=keep,
+            cap=cap,
         )
         instance = await browser_manager.spawn_browser(options)
         spawn_diagnostics = await browser_manager.get_spawn_diagnostics(instance.instance_id)
-        return {
+        session_info = await browser_manager.get_session_info(instance.instance_id)
+        result: Dict[str, Any] = {
             "instance_id": instance.instance_id,
             "state": instance.state,
             "headless": instance.headless,
             "viewport": instance.viewport,
             "spawn_diagnostics": spawn_diagnostics or {},
         }
+        if session_info:
+            result.update(session_info)
+        return result
     except Exception as e:
         message = str(e)
         if not message.startswith("Failed to spawn browser"):

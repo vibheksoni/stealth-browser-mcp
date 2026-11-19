@@ -26,6 +26,7 @@ class BrowserInstance(BaseModel):
     headless: bool = Field(default=False)
     user_agent: Optional[str] = None
     viewport: Dict[str, int] = Field(default_factory=lambda: {"width": 1920, "height": 1080})
+    session_id: Optional[str] = None
     
     def update_activity(self):
         """Update last activity timestamp."""
@@ -96,6 +97,10 @@ class BrowserOptions(BaseModel):
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     user_data_dir: Optional[str] = Field(default=None, description="Path to user data directory")
     sandbox: bool = Field(default=True, description="Enable browser sandbox mode")
+    seed: Optional[str] = Field(default=None, description="Seed name to clone session from")
+    check_url: Optional[str] = Field(default=None, description="Optional URL to verify cookie carryover")
+    keep: bool = Field(default=False, description="Keep session directory on close")
+    cap: Optional[int] = Field(default=None, description="Maximum concurrent sessions cap")
 
 
 class NavigationOptions(BaseModel):
