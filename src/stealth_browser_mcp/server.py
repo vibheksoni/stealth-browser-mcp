@@ -51,6 +51,7 @@ from .process_cleanup import process_cleanup
 from .a11y_snapshot import a11y_manager
 from . import fill_tool
 from . import session_state
+from . import seed_snapshots
 from . import seed_tools
 
 DISABLED_SECTIONS = set()
@@ -522,6 +523,63 @@ async def wait_for_download(
         filename_pattern=filename_pattern,
         browser_manager=browser_manager,
     )
+
+@section_tool("browser-management")
+async def snapshot_seed(
+    name: str,
+    label: Optional[str] = None,
+    max_snapshots: Optional[int] = 5,
+) -> Dict[str, Any]:
+    """
+    Take a snapshot of a seed directory.
+
+    Copies the seed directory to data_dir/snapshots/<name>/<timestamp>-<label>/
+    under the per-seed lock.
+
+    Args:
+        name (str): Validated seed name.
+        label (Optional[str]): Optional descriptive label for the snapshot.
+        max_snapshots (Optional[int]): Number of recent snapshots to retain (default: 5).
+
+    Returns:
+        Dict[str, Any]: Information about the created snapshot.
+    """
+    return seed_snapshots.snapshot_seed(name=name, label=label, max_snapshots=max_snapshots)
+
+@section_tool("browser-management")
+async def list_seed_snapshots(
+    name: str,
+) -> List[Dict[str, Any]]:
+    """
+    List snapshots for a seed directory.
+
+    Args:
+        name (str): Validated seed name.
+
+    Returns:
+        List[Dict[str, Any]]: List of snapshot descriptions.
+    """
+    return seed_snapshots.list_seed_snapshots(name=name)
+
+@section_tool("browser-management")
+async def restore_seed_snapshot(
+    name: str,
+    snapshot_id: str,
+) -> Dict[str, Any]:
+    """
+    Restore a seed directory from a snapshot.
+
+    Restores the exact file set under the per-seed lock and refuses if live
+    sessions use the seed.
+
+    Args:
+        name (str): Validated seed name.
+        snapshot_id (str): Identifier of the snapshot to restore.
+
+    Returns:
+        Dict[str, Any]: Result indicating restoration status.
+    """
+    return seed_snapshots.restore_seed_snapshot(name=name, snapshot_id=snapshot_id)
 
 @section_tool("element-interaction")
 async def query_elements(
