@@ -20,6 +20,7 @@ NULL_DEFAULT_PARAMS = {
     "get_function_executor_info": ["instance_id"],
     "save_session": ["file_path", "origins"],
     "restore_session": ["file_path", "session_data"],
+    "choose_option": ["filter_text", "frame"],
 }
 
 

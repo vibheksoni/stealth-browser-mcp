@@ -75,6 +75,8 @@ class TestFixtureServerUngated(unittest.TestCase):
             "dates.html": "Date and Time Inputs Fixture",
             "prosemirror.html": "ProseMirror-like Editor Fixture",
             "login.html": "Login Fixture Page",
+            "react_select.html": "React-Select-like Combobox Fixture",
+            "aria_combobox.html": "ARIA Combobox and Listbox Fixture",
         }
 
         with FixtureServer() as server:

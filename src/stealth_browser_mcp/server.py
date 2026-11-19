@@ -672,6 +672,48 @@ async def select_option(
     return await dom_handler.select_option(tab, selector, value, text, converted_index)
 
 @section_tool("element-interaction")
+async def choose_option(
+    instance_id: str,
+    selector: str,
+    option_text: str,
+    filter_text: Optional[str] = None,
+    timeout: int = 10000,
+    frame: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Select an option from a custom combobox, listbox, or React-select widget.
+
+    Clicks the trigger element to open the dropdown, optionally types filter text,
+    waits for the listbox and options to appear (matching role=listbox/option or
+    React-select style class names), clicks the matching option by visible text,
+    and verifies that the selection was applied.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector, deep selector, or XPath for the combobox or trigger element.
+        option_text (str): Visible text of the option to pick.
+        filter_text (Optional[str]): Optional text to type into the combobox to filter options.
+        timeout (int): Timeout in milliseconds to wait for elements. Defaults to 10000.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+
+    Returns:
+        Dict[str, Any]: { "success": True, "selected": str, "option": str, "verification": str }
+    """
+    if isinstance(timeout, str):
+        timeout = int(timeout)
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise Exception(f"Instance not found: {instance_id}")
+    return await dom_handler.choose_option(
+        tab,
+        selector,
+        option_text,
+        filter_text=filter_text,
+        timeout=timeout,
+        frame=frame
+    )
+
+@section_tool("element-interaction")
 async def get_element_state(
     instance_id: str,
     selector: str

@@ -139,6 +139,404 @@ RESOLVE_ELEMENT_JS = """function (selector, frameRef, parts, isXPath, xpathExpr)
   }
 }"""
 
+FIND_OPTION_JS = """function (optionText, triggerSelector, frameRef, parts, isXPath, xpathExpr) {
+  let root = document;
+  if (frameRef) {
+    let iframe = null;
+    if (frameRef.startsWith('//') || frameRef.toLowerCase().startsWith('xpath=')) {
+      const fXpath = frameRef.toLowerCase().startsWith('xpath=') ? frameRef.substring(6).trim() : frameRef;
+      try {
+        const res = document.evaluate(fXpath, document, null, 9, null);
+        iframe = res ? res.singleNodeValue : null;
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector(frameRef); } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector('iframe[name="' + frameRef + '"], iframe#' + frameRef); } catch (e) {}
+    }
+    if (iframe) {
+      try {
+        root = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document) || document;
+      } catch (e) {
+        return null;
+      }
+    }
+  }
+
+  function resolveEl(sel) {
+    if (!sel) return null;
+    if (isXPath) {
+      try {
+        const res = root.evaluate(xpathExpr, root, null, 9, null);
+        return res ? res.singleNodeValue : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    if (parts && parts.length > 1) {
+      let curr = root;
+      for (let i = 0; i < parts.length; i++) {
+        if (!curr) return null;
+        let found = null;
+        try { found = curr.querySelector(parts[i]); } catch (e) { return null; }
+        if (!found) return null;
+        if (i === parts.length - 1) return found;
+        if (!found.shadowRoot) return null;
+        curr = found.shadowRoot;
+      }
+      return null;
+    }
+    try {
+      return root.querySelector(sel);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function isVisible(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const win = el.ownerDocument ? (el.ownerDocument.defaultView || window) : window;
+    const style = win.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0 && !el.getClientRects().length) return false;
+    return true;
+  }
+
+  const trigger = resolveEl(triggerSelector);
+
+  const scopes = [root];
+  if (trigger && typeof trigger.getRootNode === 'function') {
+    const triggerScope = trigger.getRootNode();
+    if (triggerScope && triggerScope !== root && !scopes.includes(triggerScope)) {
+      scopes.unshift(triggerScope);
+    }
+  }
+
+  let candidates = [];
+  const seen = new Set();
+
+  function addCandidate(el) {
+    if (el && !seen.has(el) && isVisible(el)) {
+      seen.add(el);
+      candidates.push(el);
+    }
+  }
+
+  // 1. If trigger has aria-controls or aria-owns, check that listbox first
+  if (trigger) {
+    const controlsId = trigger.getAttribute('aria-controls') || trigger.getAttribute('aria-owns');
+    if (controlsId) {
+      for (let s = 0; s < scopes.length; s++) {
+        const controlled = scopes[s].getElementById ? scopes[s].getElementById(controlsId) : scopes[s].querySelector('#' + controlsId);
+        if (controlled && isVisible(controlled)) {
+          const opts = controlled.querySelectorAll('[role="option"], [role="menuitem"], [class*="option"], li');
+          for (let i = 0; i < opts.length; i++) addCandidate(opts[i]);
+        }
+      }
+    }
+  }
+
+  // 2. Options by role
+  for (let s = 0; s < scopes.length; s++) {
+    try {
+      const roleOpts = scopes[s].querySelectorAll('[role="option"], [role="menuitem"]');
+      for (let i = 0; i < roleOpts.length; i++) addCandidate(roleOpts[i]);
+    } catch (e) {}
+  }
+
+  // 3. Options by react-select and combobox class patterns
+  for (let s = 0; s < scopes.length; s++) {
+    try {
+      const classOpts = scopes[s].querySelectorAll(
+        '[class*="select__option"], [class*="select-option"], [class*="-option"], [class*="Option"], [class*="menu-item"], [class*="menuItem"]'
+      );
+      for (let i = 0; i < classOpts.length; i++) addCandidate(classOpts[i]);
+    } catch (e) {}
+  }
+
+  // 4. Options in visible listboxes / menus
+  for (let s = 0; s < scopes.length; s++) {
+    try {
+      const listboxes = scopes[s].querySelectorAll(
+        '[role="listbox"], [role="menu"], [class*="select__menu"], [class*="select-menu"], [class*="menu-list"], [class*="MenuList"], [class*="-menu"]'
+      );
+      for (let i = 0; i < listboxes.length; i++) {
+        const lb = listboxes[i];
+        if (isVisible(lb)) {
+          const items = lb.querySelectorAll('li, div, a, span');
+          for (let j = 0; j < items.length; j++) {
+            const item = items[j];
+            if (isVisible(item)) {
+              const hasSub = item.querySelector('[role="option"], [class*="option"], li');
+              if (!hasSub) addCandidate(item);
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 5. Match by visible text
+  const target = (optionText || '').trim();
+  const targetLower = target.toLowerCase();
+
+  let exactMatch = null;
+  let exactCaseInsensitive = null;
+  let startsWithMatch = null;
+  let containsMatch = null;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const el = candidates[i];
+    const text = (el.innerText || el.textContent || '').trim();
+    if (!text) continue;
+    const textLower = text.toLowerCase();
+
+    if (text === target) {
+      exactMatch = el;
+      break;
+    }
+    if (!exactCaseInsensitive && textLower === targetLower) {
+      exactCaseInsensitive = el;
+    } else if (!startsWithMatch && textLower.startsWith(targetLower)) {
+      startsWithMatch = el;
+    } else if (!containsMatch && textLower.includes(targetLower)) {
+      containsMatch = el;
+    }
+  }
+
+  return exactMatch || exactCaseInsensitive || startsWithMatch || containsMatch || null;
+}"""
+
+VERIFY_SELECTION_JS = """function (optionText, triggerSelector, frameRef, clickedOptionId, parts, isXPath, xpathExpr) {
+  let root = document;
+  if (frameRef) {
+    let iframe = null;
+    if (frameRef.startsWith('//') || frameRef.toLowerCase().startsWith('xpath=')) {
+      const fXpath = frameRef.toLowerCase().startsWith('xpath=') ? frameRef.substring(6).trim() : frameRef;
+      try {
+        const res = document.evaluate(fXpath, document, null, 9, null);
+        iframe = res ? res.singleNodeValue : null;
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector(frameRef); } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector('iframe[name="' + frameRef + '"], iframe#' + frameRef); } catch (e) {}
+    }
+    if (iframe) {
+      try {
+        root = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document) || document;
+      } catch (e) {
+        return { verified: false, error: 'frame_not_found' };
+      }
+    }
+  }
+
+  function resolveEl(sel) {
+    if (!sel) return null;
+    if (isXPath) {
+      try {
+        const res = root.evaluate(xpathExpr, root, null, 9, null);
+        return res ? res.singleNodeValue : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    if (parts && parts.length > 1) {
+      let curr = root;
+      for (let i = 0; i < parts.length; i++) {
+        if (!curr) return null;
+        let found = null;
+        try { found = curr.querySelector(parts[i]); } catch (e) { return null; }
+        if (!found) return null;
+        if (i === parts.length - 1) return found;
+        if (!found.shadowRoot) return null;
+        curr = found.shadowRoot;
+      }
+      return null;
+    }
+    try {
+      return root.querySelector(sel);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const target = (optionText || '').trim();
+  const targetLower = target.toLowerCase();
+
+  const trigger = resolveEl(triggerSelector);
+
+  // 1. Check trigger itself for text or value
+  if (trigger) {
+    const triggerText = (trigger.innerText || trigger.textContent || '').trim().toLowerCase();
+    if (triggerText.includes(targetLower)) {
+      return { verified: true, reason: 'trigger_text_matches', text: triggerText };
+    }
+    if (trigger.value && String(trigger.value).toLowerCase().includes(targetLower)) {
+      return { verified: true, reason: 'trigger_value_matches', value: trigger.value };
+    }
+    // Check inner input / select elements
+    const inputs = trigger.querySelectorAll('input, select, textarea');
+    for (let i = 0; i < inputs.length; i++) {
+      if (inputs[i].value && String(inputs[i].value).toLowerCase().includes(targetLower)) {
+        return { verified: true, reason: 'inner_input_matches', value: inputs[i].value };
+      }
+    }
+    // Check React-Select single-value containers
+    const singleVals = trigger.querySelectorAll(
+      '[class*="single-value"], [class*="singleValue"], [class*="SingleValue"], [class*="value-container"]'
+    );
+    for (let i = 0; i < singleVals.length; i++) {
+      const svText = (singleVals[i].innerText || singleVals[i].textContent || '').trim().toLowerCase();
+      if (svText.includes(targetLower)) {
+        return { verified: true, reason: 'single_value_matches', text: svText };
+      }
+    }
+    // Check parent element (in case trigger was an inner element like an input)
+    if (trigger.parentElement) {
+      const parentText = (trigger.parentElement.innerText || trigger.parentElement.textContent || '').trim().toLowerCase();
+      if (parentText.includes(targetLower)) {
+        return { verified: true, reason: 'parent_text_matches', text: parentText };
+      }
+      const pSingleVals = trigger.parentElement.querySelectorAll(
+        '[class*="single-value"], [class*="singleValue"], [class*="SingleValue"], [class*="value-container"]'
+      );
+      for (let i = 0; i < pSingleVals.length; i++) {
+        const psvText = (pSingleVals[i].innerText || pSingleVals[i].textContent || '').trim().toLowerCase();
+        if (psvText.includes(targetLower)) {
+          return { verified: true, reason: 'parent_single_value_matches', text: psvText };
+        }
+      }
+    }
+  }
+
+  // 2. Check aria-selected on clicked option if ID was known
+  if (clickedOptionId) {
+    const clicked = root.getElementById ? root.getElementById(clickedOptionId) : root.querySelector('#' + clickedOptionId);
+    if (clicked && clicked.getAttribute('aria-selected') === 'true') {
+      return { verified: true, reason: 'aria_selected' };
+    }
+  }
+
+  // 3. Check any option element that matches text and is marked selected
+  const allOpts = root.querySelectorAll('[role="option"], [class*="option"]');
+  for (let i = 0; i < allOpts.length; i++) {
+    const opt = allOpts[i];
+    const optText = (opt.innerText || opt.textContent || '').trim().toLowerCase();
+    if (optText === targetLower || optText.includes(targetLower)) {
+      if (opt.getAttribute('aria-selected') === 'true' ||
+          opt.classList.contains('selected') ||
+          opt.className.includes('is-selected') ||
+          opt.className.includes('--is-selected')) {
+        return { verified: true, reason: 'option_marked_selected' };
+      }
+    }
+  }
+
+  // 4. Check if combobox closed (aria-expanded="false" or menu hidden)
+  if (trigger) {
+    const expanded = trigger.getAttribute('aria-expanded');
+    if (expanded === 'false') {
+      return { verified: true, reason: 'combobox_closed' };
+    }
+    const menu = root.querySelector('[role="listbox"], [class*="select__menu"], [class*="-menu"]');
+    if (!menu) {
+      return { verified: true, reason: 'menu_closed' };
+    } else {
+      const win = menu.ownerDocument ? (menu.ownerDocument.defaultView || window) : window;
+      const mStyle = win.getComputedStyle(menu);
+      if (mStyle.display === 'none' || mStyle.visibility === 'hidden') {
+        return { verified: true, reason: 'menu_hidden' };
+      }
+    }
+  }
+
+  return { verified: false };
+}"""
+
+FOCUS_INPUT_JS = """function (triggerSelector, frameRef, parts, isXPath, xpathExpr) {
+  let root = document;
+  if (frameRef) {
+    let iframe = null;
+    if (frameRef.startsWith('//') || frameRef.toLowerCase().startsWith('xpath=')) {
+      const fXpath = frameRef.toLowerCase().startsWith('xpath=') ? frameRef.substring(6).trim() : frameRef;
+      try {
+        const res = document.evaluate(fXpath, document, null, 9, null);
+        iframe = res ? res.singleNodeValue : null;
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector(frameRef); } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector('iframe[name="' + frameRef + '"], iframe#' + frameRef); } catch (e) {}
+    }
+    if (iframe) {
+      try {
+        root = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document) || document;
+      } catch (e) {
+        return false;
+      }
+    }
+  }
+
+  function resolveEl(sel) {
+    if (!sel) return null;
+    if (isXPath) {
+      try {
+        const res = root.evaluate(xpathExpr, root, null, 9, null);
+        return res ? res.singleNodeValue : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    if (parts && parts.length > 1) {
+      let curr = root;
+      for (let i = 0; i < parts.length; i++) {
+        if (!curr) return null;
+        let found = null;
+        try { found = curr.querySelector(parts[i]); } catch (e) { return null; }
+        if (!found) return null;
+        if (i === parts.length - 1) return found;
+        if (!found.shadowRoot) return null;
+        curr = found.shadowRoot;
+      }
+      return null;
+    }
+    try {
+      return root.querySelector(sel);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const trigger = resolveEl(triggerSelector);
+  if (trigger) {
+    if (trigger.tagName === 'INPUT' || trigger.tagName === 'TEXTAREA') {
+      trigger.focus();
+      return true;
+    }
+    const inner = trigger.querySelector('input:not([type="hidden"]), textarea');
+    if (inner) {
+      inner.focus();
+      return true;
+    }
+    if (typeof trigger.focus === 'function') {
+      trigger.focus();
+      return true;
+    }
+  }
+  if (root.activeElement && (root.activeElement.tagName === 'INPUT' || root.activeElement.tagName === 'TEXTAREA')) {
+    return true;
+  }
+  return false;
+}"""
+
 
 def is_xpath_selector(selector: str) -> bool:
     """Return True if selector begins with // or xpath=."""
@@ -218,6 +616,102 @@ def build_resolve_expression(
         f"{json.dumps(xpath_expr)}"
     )
     return f"({RESOLVE_ELEMENT_JS})({args_json})"
+
+
+def build_find_option_expression(
+    option_text: str,
+    trigger_selector: Optional[str] = None,
+    frame: Optional[str] = None,
+    parts: Optional[List[str]] = None,
+    is_xpath: Optional[bool] = None,
+    xpath_expr: Optional[str] = None,
+) -> str:
+    """Build a JavaScript expression that finds a combobox option by visible text."""
+    if trigger_selector:
+        if is_xpath is None:
+            is_xpath = is_xpath_selector(trigger_selector)
+        if xpath_expr is None:
+            xpath_expr = extract_xpath(trigger_selector) if is_xpath else ""
+        if parts is None:
+            raw_parts = split_deep_selector(trigger_selector)
+            parts = raw_parts if len(raw_parts) > 1 else None
+    else:
+        is_xpath = False if is_xpath is None else is_xpath
+        xpath_expr = "" if xpath_expr is None else xpath_expr
+
+    args_json = (
+        f"{json.dumps(option_text)}, "
+        f"{json.dumps(trigger_selector)}, "
+        f"{json.dumps(frame)}, "
+        f"{json.dumps(parts)}, "
+        f"{'true' if is_xpath else 'false'}, "
+        f"{json.dumps(xpath_expr)}"
+    )
+    return f"({FIND_OPTION_JS})({args_json})"
+
+
+def build_verify_selection_expression(
+    option_text: str,
+    trigger_selector: Optional[str] = None,
+    frame: Optional[str] = None,
+    clicked_option_id: Optional[str] = None,
+    parts: Optional[List[str]] = None,
+    is_xpath: Optional[bool] = None,
+    xpath_expr: Optional[str] = None,
+) -> str:
+    """Build a JavaScript expression that verifies combobox selection."""
+    if trigger_selector:
+        if is_xpath is None:
+            is_xpath = is_xpath_selector(trigger_selector)
+        if xpath_expr is None:
+            xpath_expr = extract_xpath(trigger_selector) if is_xpath else ""
+        if parts is None:
+            raw_parts = split_deep_selector(trigger_selector)
+            parts = raw_parts if len(raw_parts) > 1 else None
+    else:
+        is_xpath = False if is_xpath is None else is_xpath
+        xpath_expr = "" if xpath_expr is None else xpath_expr
+
+    args_json = (
+        f"{json.dumps(option_text)}, "
+        f"{json.dumps(trigger_selector)}, "
+        f"{json.dumps(frame)}, "
+        f"{json.dumps(clicked_option_id)}, "
+        f"{json.dumps(parts)}, "
+        f"{'true' if is_xpath else 'false'}, "
+        f"{json.dumps(xpath_expr)}"
+    )
+    return f"({VERIFY_SELECTION_JS})({args_json})"
+
+
+def build_focus_input_expression(
+    trigger_selector: Optional[str] = None,
+    frame: Optional[str] = None,
+    parts: Optional[List[str]] = None,
+    is_xpath: Optional[bool] = None,
+    xpath_expr: Optional[str] = None,
+) -> str:
+    """Build a JavaScript expression that focuses the combobox input element."""
+    if trigger_selector:
+        if is_xpath is None:
+            is_xpath = is_xpath_selector(trigger_selector)
+        if xpath_expr is None:
+            xpath_expr = extract_xpath(trigger_selector) if is_xpath else ""
+        if parts is None:
+            raw_parts = split_deep_selector(trigger_selector)
+            parts = raw_parts if len(raw_parts) > 1 else None
+    else:
+        is_xpath = False if is_xpath is None else is_xpath
+        xpath_expr = "" if xpath_expr is None else xpath_expr
+
+    args_json = (
+        f"{json.dumps(trigger_selector)}, "
+        f"{json.dumps(frame)}, "
+        f"{json.dumps(parts)}, "
+        f"{'true' if is_xpath else 'false'}, "
+        f"{json.dumps(xpath_expr)}"
+    )
+    return f"({FOCUS_INPUT_JS})({args_json})"
 
 
 _last_mouse_positions: Dict[int, Tuple[float, float]] = {}

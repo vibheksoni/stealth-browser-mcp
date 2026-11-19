@@ -535,6 +535,177 @@ class DOMHandler:
             raise Exception(f"Failed to select option: {str(e)}")
 
     @staticmethod
+    async def choose_option(
+        tab: Tab,
+        selector: str,
+        option_text: str,
+        filter_text: Optional[str] = None,
+        timeout: int = 10000,
+        frame: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Choose an option from a custom combobox, listbox, or React-select widget.
+
+        Clicks the trigger to open the dropdown, optionally types filter text,
+        waits for the listbox and options to appear (matching role=listbox/option
+        or React-select class names), clicks the matching option by visible text,
+        and verifies that the selection was applied.
+
+        Args:
+            tab (Tab): The browser tab object.
+            selector (str): CSS selector, deep selector, or XPath for the combobox or trigger.
+            option_text (str): Visible text of the option to pick.
+            filter_text (Optional[str]): Optional text to type to filter options.
+            timeout (int): Timeout in milliseconds. Defaults to 10000.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
+
+        Returns:
+            Dict[str, Any]: { "success": True, "selected": str, "option": str, "verification": str }
+        """
+        from nodriver import cdp
+
+        try:
+            if isinstance(timeout, str):
+                timeout = int(timeout)
+            timeout_sec = max(timeout / 1000.0, 0.5)
+
+            # 1. Click trigger
+            trigger_node_id = await DOMHandler._resolve_target(tab, selector, timeout_sec, frame=frame)
+            await input_actions.click_node(tab, trigger_node_id)
+            await asyncio.sleep(0.05)
+
+            # Selector analysis for deep selectors / xpath
+            parts = input_actions.split_deep_selector(selector) if selector else None
+            is_deep = len(parts) > 1 if parts else False
+            is_xpath = input_actions.is_xpath_selector(selector) if selector else False
+            xpath_expr = input_actions.extract_xpath(selector) if is_xpath else ""
+
+            # 2. Optionally type to filter
+            if filter_text:
+                focus_expr = input_actions.build_focus_input_expression(
+                    trigger_selector=selector,
+                    frame=frame,
+                    parts=parts if is_deep else None,
+                    is_xpath=is_xpath,
+                    xpath_expr=xpath_expr,
+                )
+                try:
+                    await tab.send(cdp.runtime.evaluate(
+                        expression=focus_expr,
+                        return_by_value=True,
+                        await_promise=True,
+                    ))
+                except Exception:
+                    pass
+                for char in filter_text:
+                    await input_actions.type_character(tab, char)
+                    await asyncio.sleep(0.02)
+                await asyncio.sleep(0.05)
+
+            # 3. Wait for listbox/options and pick matching option
+            deadline = time.monotonic() + timeout_sec
+            option_backend_node_id = None
+            clicked_option_id = None
+
+            find_expression = input_actions.build_find_option_expression(
+                option_text=option_text,
+                trigger_selector=selector,
+                frame=frame,
+                parts=parts if is_deep else None,
+                is_xpath=is_xpath,
+                xpath_expr=xpath_expr,
+            )
+
+            while time.monotonic() < deadline:
+                try:
+                    eval_result = await tab.send(cdp.runtime.evaluate(
+                        expression=find_expression,
+                        return_by_value=False,
+                        await_promise=True,
+                    ))
+                    remote_obj = eval_result[0] if isinstance(eval_result, tuple) else eval_result
+                    if remote_obj and getattr(remote_obj, "object_id", None):
+                        obj_id = cdp.runtime.RemoteObjectId(remote_obj.object_id)
+                        node = await tab.send(cdp.dom.describe_node(object_id=obj_id))
+                        if node and hasattr(node, "backend_node_id"):
+                            option_backend_node_id = int(node.backend_node_id)
+                            try:
+                                call_res = await tab.send(cdp.runtime.call_function_on(
+                                    "function () { return this.id || null; }",
+                                    object_id=obj_id,
+                                    return_by_value=True,
+                                ))
+                                call_obj = call_res[0] if isinstance(call_res, tuple) else call_res
+                                clicked_option_id = getattr(call_obj, "value", None)
+                            except Exception:
+                                clicked_option_id = None
+                            try:
+                                await tab.send(cdp.runtime.release_object(object_id=obj_id))
+                            except Exception:
+                                pass
+                            break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+
+            if option_backend_node_id is None:
+                raise Exception(f"Option '{option_text}' not found in combobox: {selector}")
+
+            # 4. Click the option
+            await input_actions.click_node(tab, option_backend_node_id)
+
+            # 5. Verify selection
+            verify_deadline = time.monotonic() + min(5.0, timeout_sec)
+            verified = False
+            verification_info = {}
+
+            verify_expression = input_actions.build_verify_selection_expression(
+                option_text=option_text,
+                trigger_selector=selector,
+                frame=frame,
+                clicked_option_id=clicked_option_id,
+                parts=parts if is_deep else None,
+                is_xpath=is_xpath,
+                xpath_expr=xpath_expr,
+            )
+
+            while time.monotonic() < verify_deadline:
+                try:
+                    verify_res = await tab.send(cdp.runtime.evaluate(
+                        expression=verify_expression,
+                        return_by_value=True,
+                        await_promise=True,
+                    ))
+                    remote_obj = verify_res[0] if isinstance(verify_res, tuple) else verify_res
+                    val = getattr(remote_obj, "value", None)
+                    if isinstance(val, dict) and val.get("verified"):
+                        verified = True
+                        verification_info = val
+                        break
+                    elif val is True:
+                        verified = True
+                        verification_info = {"verified": True, "reason": "script_true"}
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+
+            if not verified:
+                raise Exception(
+                    f"Option '{option_text}' was clicked but selection could not be verified on: {selector}"
+                )
+
+            return {
+                "success": True,
+                "selected": option_text,
+                "option": option_text,
+                "verification": verification_info.get("reason", "verified"),
+            }
+
+        except Exception as e:
+            raise Exception(f"Failed to choose option: {str(e)}")
+
+    @staticmethod
     async def get_element_state(
         tab: Tab,
         selector: str
@@ -750,3 +921,6 @@ class DOMHandler:
 
         except Exception as e:
             raise Exception(f"Failed to scroll page: {str(e)}")
+
+
+choose_option = DOMHandler.choose_option
