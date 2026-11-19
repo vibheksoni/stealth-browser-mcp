@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Contenteditable Fixture</title>
+  <style>
+    #editor {
+      border: 1px solid #888;
+      padding: 10px;
+      min-height: 100px;
+      font-family: sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <h1>Contenteditable Fixture</h1>
+  <p>Editable content region with input event tracking.</p>
+
+  <div id="toolbar" style="margin-bottom: 8px;">
+    <button type="button" id="bold-btn" onclick="document.execCommand('bold', false, null);">Bold</button>
+    <button type="button" id="italic-btn" onclick="document.execCommand('italic', false, null);">Italic</button>
+  </div>
+
+  <div id="editor" contenteditable="true" role="textbox" aria-multiline="true">
+    <p id="first-p">Initial editable paragraph.</p>
+  </div>
+
+  <div id="status-panel" style="margin-top: 15px;">
+    <p>Text Content: <span id="text-display">Initial editable paragraph.</span></p>
+    <p>Event Count: <span id="event-count">0</span></p>
+    <p>Last Event Type: <span id="last-event-type">none</span></p>
+  </div>
+
+  <script>
+    (function() {
+      const editor = document.getElementById("editor");
+      const textDisplay = document.getElementById("text-display");
+      const eventCount = document.getElementById("event-count");
+      const lastEventType = document.getElementById("last-event-type");
+      let count = 0;
+
+      function onEditorChange(e) {
+        count++;
+        eventCount.textContent = String(count);
+        lastEventType.textContent = e.type + (e.inputType ? " (" + e.inputType + ")" : "");
+        textDisplay.textContent = editor.innerText.trim();
+      }
+
+      editor.addEventListener("input", onEditorChange);
+      editor.addEventListener("beforeinput", function(e) {
+        lastEventType.textContent = "beforeinput (" + e.inputType + ")";
+      });
+    })();
+  </script>
+</body>
+</html>

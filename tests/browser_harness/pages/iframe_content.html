@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Iframe Inner Content</title>
+</head>
+<body>
+  <h2>Inside Same-Origin Frame</h2>
+  <div>
+    <label for="frame-input">Frame Input:</label>
+    <input type="text" id="frame-input" name="frame-input" placeholder="Inside frame" value="frame-initial">
+  </div>
+  <div style="margin-top: 10px;">
+    <button type="button" id="frame-button">Frame Action</button>
+  </div>
+  <div style="margin-top: 10px;">
+    <p>Frame Value: <span id="frame-status">frame-initial</span></p>
+    <p>Frame Event Count: <span id="frame-count">0</span></p>
+  </div>
+
+  <script>
+    (function() {
+      const input = document.getElementById("frame-input");
+      const status = document.getElementById("frame-status");
+      const countDisplay = document.getElementById("frame-count");
+      let count = 0;
+
+      input.addEventListener("input", function(e) {
+        count++;
+        status.textContent = e.target.value;
+        countDisplay.textContent = String(count);
+      });
+
+      document.getElementById("frame-button").addEventListener("click", function() {
+        status.textContent = "button clicked: " + input.value;
+      });
+    })();
+  </script>
+</body>
+</html>
