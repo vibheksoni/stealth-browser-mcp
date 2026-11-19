@@ -37,7 +37,7 @@ def user_data_dir() -> Path:
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    return base / APP_NAME
+    return (base / APP_NAME).resolve()
 
 
 def data_dir() -> Path:
@@ -53,7 +53,10 @@ def data_dir() -> Path:
     configured = os.getenv(DATA_DIR_ENV, "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return source_checkout_root() or user_data_dir()
+    root = source_checkout_root()
+    if root is not None:
+        return root.resolve()
+    return user_data_dir().resolve()
 
 
 def clone_output_dir() -> Path:

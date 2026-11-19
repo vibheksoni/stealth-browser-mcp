@@ -18,6 +18,7 @@ import nodriver as uc
 
 from stealth_browser_mcp import dom_handler, element_kind, fill_tool, server
 from stealth_browser_mcp.element_kind import ElementKind
+from stealth_browser_mcp.paths import DATA_DIR_ENV
 from stealth_browser_mcp.secrets_env import (
     REDACTED_PLACEHOLDER,
     SECRET_ENV_PREFIX,
@@ -60,6 +61,14 @@ class FakeFillTab:
             char = params.get("text") or params.get("key")
             self.events.append((method, t, char))
             if (t == "keyDown" or t == "rawKeyDown") and char:
+                if "paste" in params.get("commands", []):
+                    try:
+                        from stealth_browser_mcp import os_clipboard
+                        b = os_clipboard._get_backend()
+                        if b is not None:
+                            self.current_value = b.get_text()
+                    except Exception:
+                        pass
                 if t == "keyDown":
                     self.typed_chars.append(char)
                 if char == "Backspace":
@@ -189,9 +198,15 @@ class ClassifyAndStrategyTableTests(unittest.TestCase):
     """Table-driven unit tests verifying strategy=auto across every element kind."""
 
     def setUp(self):
+        self._orig_env = os.environ.copy()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ[DATA_DIR_ENV] = self._tmp.name
         clear_secrets()
 
     def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._orig_env)
+        self._tmp.cleanup()
         clear_secrets()
 
     def test_every_kind_row_passes_with_strategy_auto(self):
@@ -336,6 +351,16 @@ class ClassifyAndStrategyTableTests(unittest.TestCase):
 class VerifyMismatchReportingTests(unittest.TestCase):
     """Tests for mismatch reporting when read-back does not match expected value."""
 
+    def setUp(self):
+        self._orig_env = os.environ.copy()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ[DATA_DIR_ENV] = self._tmp.name
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._orig_env)
+        self._tmp.cleanup()
+
     def test_mismatch_reports_verified_false_and_diff(self):
         tab = FakeFillTab(
             backend_node_id=42,
@@ -366,11 +391,14 @@ class PasswordAndSecretSecurityTests(unittest.TestCase):
 
     def setUp(self):
         self._orig_environ = dict(os.environ)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ[DATA_DIR_ENV] = self._tmp.name
         clear_secrets()
 
     def tearDown(self):
         os.environ.clear()
         os.environ.update(self._orig_environ)
+        self._tmp.cleanup()
         clear_secrets()
 
     def test_password_field_value_never_echoed_in_result(self):
@@ -493,6 +521,16 @@ class PasswordAndSecretSecurityTests(unittest.TestCase):
 class UnsupportedKindsAndExplicitStrategyTests(unittest.TestCase):
     """Tests for unsupported element kinds and strategy override options."""
 
+    def setUp(self):
+        self._orig_env = os.environ.copy()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ[DATA_DIR_ENV] = self._tmp.name
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._orig_env)
+        self._tmp.cleanup()
+
     def test_button_unsupported(self):
         tab = FakeFillTab(
             backend_node_id=42,
@@ -536,6 +574,17 @@ class UnsupportedKindsAndExplicitStrategyTests(unittest.TestCase):
 class PasteModePlumbingTests(unittest.TestCase):
     """Tests for paste_text(mode=) plumbing in dom_handler and server."""
 
+    def setUp(self):
+        self._env = os.environ.copy()
+        self._tmp = tempfile.TemporaryDirectory()
+        from stealth_browser_mcp.paths import DATA_DIR_ENV
+        os.environ[DATA_DIR_ENV] = self._tmp.name
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
     def test_paste_mode_default_keeps_current_behaviour(self):
         tab = FakeFillTab(backend_node_id=42)
         success = asyncio.run(dom_handler.DOMHandler.paste_text(tab, "#target", "pasted text"))
@@ -573,6 +622,52 @@ class PasteModePlumbingTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertGreater(len(tab.typed_chars), 0)
 
+    def test_paste_mode_clipboard_plumbing(self):
+        from stealth_browser_mcp import os_clipboard
+        from tests.test_os_clipboard import RecordingBackend, _fake_backend_factory
+
+        orig_flag = os.environ.get(os_clipboard.ENV_FLAG)
+        os.environ[os_clipboard.ENV_FLAG] = "1"
+        try:
+            backend = RecordingBackend(current="initial")
+            with unittest.mock.patch.object(os_clipboard, "_get_backend", _fake_backend_factory(backend)):
+                tab = FakeFillTab(backend_node_id=42)
+                success = asyncio.run(
+                    dom_handler.DOMHandler.paste_text(tab, "#target", "clipboard text", mode="clipboard")
+                )
+                self.assertTrue(success)
+                self.assertEqual(tab.current_value, "clipboard text")
+        finally:
+            if orig_flag is None:
+                os.environ.pop(os_clipboard.ENV_FLAG, None)
+            else:
+                os.environ[os_clipboard.ENV_FLAG] = orig_flag
+
+    def test_fill_strategy_os_paste(self):
+        from stealth_browser_mcp import os_clipboard
+        from tests.test_os_clipboard import RecordingBackend, _fake_backend_factory
+
+        orig_flag = os.environ.get(os_clipboard.ENV_FLAG)
+        os.environ[os_clipboard.ENV_FLAG] = "1"
+        try:
+            backend = RecordingBackend(current="initial")
+            with unittest.mock.patch.object(os_clipboard, "_get_backend", _fake_backend_factory(backend)):
+                tab = FakeFillTab(
+                    backend_node_id=42,
+                    facts={"tag_name": "input", "type": "text", "input_type": "text"},
+                )
+                res = asyncio.run(
+                    fill_tool.fill(tab, "#target", value="os paste val", strategy="os_paste", verify=True)
+                )
+                self.assertTrue(res["verified"])
+                self.assertEqual(res["strategy"], "os_paste")
+                self.assertEqual(tab.current_value, "os paste val")
+        finally:
+            if orig_flag is None:
+                os.environ.pop(os_clipboard.ENV_FLAG, None)
+            else:
+                os.environ[os_clipboard.ENV_FLAG] = orig_flag
+
     def test_paste_mode_invalid_raises_value_error(self):
         tab = FakeFillTab(backend_node_id=42)
         with self.assertRaises(ValueError) as ctx:
@@ -588,6 +683,16 @@ class PasteModePlumbingTests(unittest.TestCase):
 )
 class TestFillToolGatedBrowser(unittest.TestCase):
     """Gated real-browser integration tests with local fixture harness."""
+
+    def setUp(self):
+        self._orig_env = os.environ.copy()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ[DATA_DIR_ENV] = self._tmp.name
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._orig_env)
+        self._tmp.cleanup()
 
     def test_fill_real_browser_inputs(self):
         """Test filling real inputs in Chrome headless on inputs.html."""

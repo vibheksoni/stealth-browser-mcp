@@ -399,7 +399,7 @@ class DOMHandler:
         Insert text in one step, like a paste.
 
         Much faster than typing character by character. Supports modes in
-        {'synthetic', 'type', 'native'} or None (default keeps current behaviour).
+        {'synthetic', 'type', 'native', 'clipboard', 'os_paste'} or None (default keeps current behaviour).
 
         Args:
             tab (Tab): The browser tab object.
@@ -408,15 +408,15 @@ class DOMHandler:
             clear_first (bool): Clear input before pasting.
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
             instance_id (Optional[str]): Browser instance ID.
-            mode (Optional[str]): Paste mode ('synthetic', 'type', 'native', or None).
+            mode (Optional[str]): Paste mode ('synthetic', 'type', 'native', 'clipboard', 'os_paste', or None).
 
         Returns:
             bool: True if pasting succeeded.
         """
         from nodriver import cdp
 
-        if mode is not None and mode not in {"synthetic", "type", "native"}:
-            raise ValueError(f"Invalid paste mode: {mode}. Must be one of 'synthetic', 'type', 'native'")
+        if mode is not None and mode not in {"synthetic", "type", "native", "clipboard", "os_paste"}:
+            raise ValueError(f"Invalid paste mode: {mode}. Must be one of 'synthetic', 'type', 'native', 'clipboard', 'os_paste'")
 
         try:
             backend_node_id = await DOMHandler._resolve_target(
@@ -426,6 +426,14 @@ class DOMHandler:
                 from .fill_native_setter import fill_native_setter
 
                 await fill_native_setter(
+                    tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                )
+                return True
+
+            if mode in ("clipboard", "os_paste"):
+                from .fill_os_paste import fill_os_paste
+
+                await fill_os_paste(
                     tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
                 )
                 return True

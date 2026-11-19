@@ -78,6 +78,7 @@ class TestFixtureServerUngated(unittest.TestCase):
             "react_select.html": "React-Select-like Combobox Fixture",
             "aria_combobox.html": "ARIA Combobox and Listbox Fixture",
             "download.html": "Download and Drop Fixture",
+            "paste_only.html": "Paste-Only Fixture Editor",
             "cross_origin_outer.html": "Cross-Origin Iframe Fixture",
             "cross_origin_inner.html": "Inside Cross-Origin Frame",
         }

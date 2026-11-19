@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional, Tuple, Union
 
-from . import element_kind, input_actions
+from . import element_kind, input_actions, os_clipboard
 from .dom_handler import DEFAULT_ELEMENT_TIMEOUT, DOMHandler
 from .element_kind import ElementKind, classify
 from .fill_native_setter import fill_native_setter
+from .fill_os_paste import fill_os_paste
 from .fill_synthetic_paste import fill_synthetic_paste
 from .input_formats import format_for_input_type
 from .secrets_env import (
@@ -228,6 +229,8 @@ def _pick_strategy(kind: str, facts: Dict[str, Any], requested_strategy: str = "
             return "native_setter"
         if strat in ("synthetic", "synthetic_paste"):
             return "synthetic_paste"
+        if strat in ("os_paste", "clipboard", "os_clipboard"):
+            return "os_paste"
         if strat in ("type", "typing"):
             return "typing"
         if strat in ("choose_option", "select"):
@@ -312,7 +315,7 @@ async def fill(
         target: Target selector string, backend node ID, or element handle.
         value: Direct text or value to fill into the element.
         value_env: Environment variable name holding secret (STEALTH_SECRET_ prefix).
-        strategy: 'auto', 'native_setter', 'synthetic_paste', 'typing', or 'choose_option'.
+        strategy: 'auto', 'native_setter', 'synthetic_paste', 'os_paste', 'typing', or 'choose_option'.
         verify: Whether to verify applied value by reading it back.
         frame: Optional iframe selector, name, or id.
         instance_id: Optional browser instance ID for ref targeting.
@@ -390,6 +393,15 @@ async def fill(
                     await input_actions.clear_field(tab, node_id)
                     for char in formatted_val:
                         await input_actions.type_character(tab, char)
+
+        elif chosen_strategy == "os_paste":
+            await fill_os_paste(
+                tab,
+                node_id,
+                text=formatted_val,
+                frame=frame,
+                instance_id=instance_id,
+            )
 
         elif chosen_strategy == "typing":
             await input_actions.focus_node(tab, node_id)
@@ -475,6 +487,42 @@ async def fill(
                 verified = comp.equal
                 actual_for_preview = act_val
                 first_diff = comp.first_diff_index
+
+            # Fallback to os_paste if verification failed, strategy was 'auto',
+            # and the OS clipboard opt-in flag is enabled.
+            if (
+                not verified
+                and strategy in ("auto", "default")
+                and os_clipboard._flag_enabled()
+                and kind not in (ElementKind.CHECKBOX, ElementKind.RADIO, ElementKind.FILE, ElementKind.BUTTON)
+            ):
+                try:
+                    await fill_os_paste(
+                        tab,
+                        node_id,
+                        text=formatted_val,
+                        frame=frame,
+                        instance_id=instance_id,
+                    )
+                    read_data = await input_actions.call_on_node(tab, node_id, READ_VALUE_JS)
+                    if kind in (ElementKind.CONTENTEDITABLE, ElementKind.RICH_EDITOR):
+                        act_text = str(_extract_prop(read_data, "text", "") or _extract_prop(read_data, "value", "") or "")
+                        comp = compare_text(formatted_val, act_text, mode="auto")
+                        if comp.equal:
+                            verified = True
+                            chosen_strategy = "os_paste"
+                            actual_for_preview = act_text
+                            first_diff = -1
+                    else:
+                        act_val = str(_extract_prop(read_data, "value", "") or _extract_prop(read_data, "text", "") or "")
+                        comp = compare_text(formatted_val, act_val, mode="auto")
+                        if comp.equal:
+                            verified = True
+                            chosen_strategy = "os_paste"
+                            actual_for_preview = act_val
+                            first_diff = -1
+                except Exception:
+                    pass
 
         preview = safe_preview(formatted_val, is_password=is_secret)
         result: Dict[str, Any] = {

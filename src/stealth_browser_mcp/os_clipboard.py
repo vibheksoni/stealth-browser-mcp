@@ -20,12 +20,14 @@ Nothing here reads a browser profile or talks to the network.
 
 import ctypes
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional, Protocol
 
 from .file_lock import FileLock
-from .paths import data_dir
+from .paths import data_dir, user_data_dir
 
 # Opt-in flag. Clipboard access is disabled unless this is exactly "1".
 ENV_FLAG = "STEALTH_ALLOW_OS_CLIPBOARD"
@@ -60,7 +62,11 @@ def _clipboard_lock():
     runtime. The parent directory is created if missing so
     :class:`file_lock.FileLock` can open the lock file.
     """
-    path = data_dir() / "locks" / _CLIPBOARD_LOCK_NAME
+    base = data_dir()
+    if not base or str(base).strip() in ("", "."):
+        base = user_data_dir()
+    base = Path(base).resolve()
+    path = (base / "locks" / _CLIPBOARD_LOCK_NAME).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     return FileLock(str(path), timeout=10.0)
 
@@ -70,50 +76,55 @@ def _flag_enabled() -> bool:
     return os.environ.get(ENV_FLAG, "").strip() == "1"
 
 
+def _is_wl_clip_present() -> bool:
+    """Return True when the Wayland clipboard tools are on the PATH."""
+    return bool(shutil.which("wl-copy")) and bool(shutil.which("wl-paste"))
+
+
+def _is_xclip_present() -> bool:
+    """Return True when xclip is on the PATH."""
+    return bool(shutil.which("xclip"))
+
+
 def _linux_get_text() -> str:
     """Return the Wayland or X11 clipboard text, or empty string on failure."""
-    if _is_wl_clip_present():
-        result = subprocess.run(
-            ["wl-paste", "--no-watcher", "-i"],
-            check=False,
-            capture_output=True,
-        )
-    else:
-        result = subprocess.run(
-            ["xclip", "-selection", "clipboard", "-o"],
-            check=False,
-            capture_output=True,
-        )
-    return result.stdout.decode("utf-16-le", errors="replace")
+    try:
+        if _is_wl_clip_present():
+            result = subprocess.run(
+                ["wl-paste", "--no-watcher", "-i"],
+                check=False,
+                capture_output=True,
+            )
+            return result.stdout.decode("utf-16-le", errors="replace")
+        if _is_xclip_present():
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                check=False,
+                capture_output=True,
+            )
+            return result.stdout.decode("utf-16-le", errors="replace")
+        return ""
+    except (OSError, FileNotFoundError):
+        return ""
 
 
 def _linux_set_text(text: str) -> None:
     """Write ``text`` to the Wayland or X11 clipboard."""
-    if _is_wl_clip_present():
-        subprocess.run(
-            ["wl-copy", "--no-watcher"],
-            input=text.encode("utf-16-le"),
-            check=False,
-        )
-    else:
-        subprocess.run(
-            ["xclip", "-selection", "clipboard"],
-            input=text.encode("utf-16-le"),
-            check=False,
-        )
-
-
-def _is_wl_clip_present() -> bool:
-    """Return True when the Wayland clipboard tools are on the PATH."""
     try:
-        check = subprocess.run(
-            ["which", "wl-copy"],
-            check=False,
-            capture_output=True,
-        )
-    except OSError:
-        return False
-    return check.returncode == 0
+        if _is_wl_clip_present():
+            subprocess.run(
+                ["wl-copy", "--no-watcher"],
+                input=text.encode("utf-16-le"),
+                check=False,
+            )
+        elif _is_xclip_present():
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=text.encode("utf-16-le"),
+                check=False,
+            )
+    except (OSError, FileNotFoundError):
+        pass
 
 
 class LinuxClipboardBackend:
@@ -173,7 +184,9 @@ def _get_backend() -> Optional[ClipboardBackend]:
         if not hasattr(ctypes, "windll"):
             return None
         return WindowsClipboardBackend()
-    return LinuxClipboardBackend()
+    if _is_wl_clip_present() or _is_xclip_present():
+        return LinuxClipboardBackend()
+    return None
 
 
 class clipboard_paste_session:
@@ -186,6 +199,7 @@ class clipboard_paste_session:
 
     Args:
         text: The text to place on the clipboard while the body runs.
+        backend: Optional clipboard backend to use instead of the platform default.
 
     Yields:
         None.
@@ -194,7 +208,9 @@ class clipboard_paste_session:
         ClipboardDisabledError: If the opt-in flag is not set to "1".
     """
 
-    def __init__(self, text: str) -> None:
+    def __init__(
+        self, text: str, backend: Optional[ClipboardBackend] = None
+    ) -> None:
         if not _flag_enabled():
             raise ClipboardDisabledError(
                 "OS clipboard access is disabled; set {0}=1 to enable clipboard paste"
@@ -202,22 +218,30 @@ class clipboard_paste_session:
             )
         self._text = text
         self._lock = None
-        self._backend = None
+        self._backend = backend
         self._saved = ""
 
     def __enter__(self):
         """Take the lock, save the current clipboard, and set the new text."""
         self._lock = _clipboard_lock()
         self._lock.acquire()
-        backend = _get_backend()
-        if backend is None:
-            raise ClipboardDisabledError(
-                "OS clipboard access is unavailable on this platform"
-            )
-        self._backend = backend
-        self._saved = backend.get_text()
-        backend.set_text(self._text)
-        return self
+        try:
+            backend = self._backend or _get_backend()
+            if backend is None:
+                raise ClipboardDisabledError(
+                    "OS clipboard access is unavailable on this platform"
+                )
+            self._backend = backend
+            self._saved = backend.get_text()
+            backend.set_text(self._text)
+            return self
+        except BaseException:
+            if self._lock is not None:
+                try:
+                    self._lock.release()
+                finally:
+                    self._lock = None
+            raise
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Restore the saved clipboard text and release the lock."""
@@ -226,6 +250,8 @@ class clipboard_paste_session:
                 self._backend.set_text(self._saved)
         finally:
             if self._lock is not None:
-                self._lock.release()
-                self._lock = None
+                try:
+                    self._lock.release()
+                finally:
+                    self._lock = None
         return False

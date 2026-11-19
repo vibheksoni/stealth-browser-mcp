@@ -57,10 +57,14 @@ def _fake_backend_factory(backend):
 class FlagTests(unittest.TestCase):
     def setUp(self):
         self._env = os.environ.copy()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ[DATA_DIR_ENV] = self._tmp.name
+        os.environ.pop(os_clipboard.ENV_FLAG, None)
 
     def tearDown(self):
         os.environ.clear()
         os.environ.update(self._env)
+        self._tmp.cleanup()
 
     def test_flag_off_raises(self):
         os.environ.pop(os_clipboard.ENV_FLAG, None)
@@ -80,7 +84,7 @@ class FlagTests(unittest.TestCase):
         backend = RecordingBackend()
         with unittest.mock.patch.object(os_clipboard, "_get_backend",
                                         _fake_backend_factory(backend)):
-            with os_clipboard.clipboard_paste_session("paste"):
+            with os_clipboard.clipboard_paste_session("paste", backend=backend):
                 pass
         self.assertIn("paste", backend.sets)
 
@@ -173,6 +177,43 @@ class LockTests(unittest.TestCase):
                         raise RuntimeError("boom")
         self.assertEqual(lock.calls, ["acquire", "release"])
         self.assertFalse(lock.held)
+
+    def test_lock_released_when_backend_get_or_set_raises(self):
+        class BrokenBackend:
+            def get_text(self):
+                raise RuntimeError("clipboard read failed")
+
+            def set_text(self, text):
+                raise RuntimeError("clipboard write failed")
+
+        lock = RecordingLock()
+        with unittest.mock.patch.object(os_clipboard, "_clipboard_lock", lambda: lock):
+            with unittest.mock.patch.object(
+                os_clipboard, "_get_backend", _fake_backend_factory(BrokenBackend())
+            ):
+                with self.assertRaises(RuntimeError):
+                    with os_clipboard.clipboard_paste_session("p"):
+                        pass
+        self.assertEqual(lock.calls, ["acquire", "release"])
+        self.assertFalse(lock.held)
+
+    def test_lock_released_when_backend_none(self):
+        lock = RecordingLock()
+        with unittest.mock.patch.object(os_clipboard, "_clipboard_lock", lambda: lock):
+            with unittest.mock.patch.object(os_clipboard, "_get_backend", lambda: None):
+                with self.assertRaises(ClipboardDisabledError):
+                    with os_clipboard.clipboard_paste_session("p"):
+                        pass
+        self.assertEqual(lock.calls, ["acquire", "release"])
+        self.assertFalse(lock.held)
+
+    def test_clipboard_lock_path_is_always_absolute(self):
+        """Clipboard lock path is always absolute and never relative even if data dir is empty."""
+        for val in ("", "   "):
+            os.environ[DATA_DIR_ENV] = val
+            lock = os_clipboard._clipboard_lock()
+            self.assertTrue(Path(lock.path).is_absolute())
+            self.assertFalse(str(lock.path).startswith("locks"))
 
 
 if __name__ == "__main__":

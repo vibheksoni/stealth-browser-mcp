@@ -658,7 +658,7 @@ async def fill(
         value_env (Optional[str]): Name of an environment variable holding the secret
             (must start with STEALTH_SECRET_).
         strategy (str): Input strategy: 'auto', 'native_setter', 'synthetic_paste',
-            'typing', or 'choose_option'. Defaults to 'auto'.
+            'os_paste', 'typing', or 'choose_option'. Defaults to 'auto'.
         verify (bool): Whether to verify the filled value by reading it back. Defaults to True.
         frame (Optional[str]): Target element within an iframe (selector, name, or id).
 
@@ -732,7 +732,7 @@ async def paste_text(
         text (str): Text to paste.
         clear_first (bool): Clear field before pasting.
         frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
-        mode (Optional[str]): Paste mode in {'synthetic', 'type', 'native'}. Defaults to None (keeps current behaviour).
+        mode (Optional[str]): Paste mode in {'synthetic', 'type', 'native', 'clipboard', 'os_paste'}. Defaults to None (keeps current behaviour).
 
     Returns:
         bool: True if pasted successfully.
