@@ -36,6 +36,11 @@ from .models import BrowserOptions
 from .network_interceptor import NetworkInterceptor
 from .page_bindings import page_bindings
 from .dynamic_hook_ai_interface import dynamic_hook_ai
+from .downloads import (
+    download_manager,
+    wait_for_download as wait_for_download_impl,
+    drop_files as drop_files_impl,
+)
 from .persistent_storage import persistent_storage
 from .progressive_element_cloner import progressive_element_cloner
 from .response_handler import response_handler
@@ -208,8 +213,10 @@ def _register_manager_listeners() -> None:
     """Connect tab preparation and close cleanup to the current browser manager."""
     browser_manager.add_tab_listener(_prepare_tab)
     browser_manager.add_tab_listener(page_bindings.prepare_tab)
+    browser_manager.add_tab_listener(download_manager.prepare_tab)
     browser_manager.add_close_listener(_forget_instance)
     browser_manager.add_close_listener(page_bindings.forget_instance)
+    browser_manager.add_close_listener(download_manager.forget_instance)
 
 
 _register_manager_listeners()
@@ -485,6 +492,33 @@ async def reload_page(instance_id: str, ignore_cache: bool = False) -> bool:
     await tab.reload(ignore_cache=ignore_cache)
     return True
 
+@section_tool("browser-management")
+async def wait_for_download(
+    instance_id: Optional[str] = None,
+    timeout: float = 30.0,
+    filename_pattern: Optional[str] = None,
+    instance: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Wait for a file download to complete in the session download directory.
+
+    Args:
+        instance_id (Optional[str]): Browser instance ID.
+        timeout (float): Maximum seconds to wait (default: 30.0).
+        filename_pattern (Optional[str]): Glob pattern or filename to match.
+        instance (Optional[str]): Alias for instance_id.
+
+    Returns:
+        Dict[str, Any]: Details of downloaded file including file_path, filename, and file_size.
+    """
+    target_id = instance_id or instance
+    return await wait_for_download_impl(
+        instance=target_id,
+        timeout=timeout,
+        filename_pattern=filename_pattern,
+        browser_manager=browser_manager,
+    )
+
 @section_tool("element-interaction")
 async def query_elements(
     instance_id: str,
@@ -685,6 +719,30 @@ async def file_upload(
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
     return await dom_handler.file_upload(tab, selector, paths)
+
+@section_tool("element-interaction")
+async def drop_files(
+    selector: str,
+    paths: List[str],
+    instance_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Drop files onto a drag-and-drop zone element via CDP Input.dispatchDragEvent / DataTransfer events.
+
+    Args:
+        selector (str): CSS selector, deep selector, or XPath for the drop target element.
+        paths (List[str]): List of absolute file paths to drop.
+        instance_id (Optional[str]): Browser instance ID.
+
+    Returns:
+        Dict[str, Any]: { success: True, count: N, files: [basename, ...] }
+    """
+    return await drop_files_impl(
+        selector=selector,
+        paths=paths,
+        instance_id=instance_id,
+        browser_manager=browser_manager,
+    )
 
 @section_tool("element-interaction")
 async def select_option(

@@ -16,6 +16,27 @@ class QuietFixtureHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress standard logging to protect stdio MCP transport and test output."""
 
+    def do_GET(self) -> None:
+        """Handle GET requests, including download fixture endpoints."""
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if path in ("/download", "/api/download"):
+            params = urllib.parse.parse_qs(parsed.query)
+            filename = params.get("filename", ["fixture_download.txt"])[0]
+            safe_filename = Path(filename).name or "fixture_download.txt"
+            body = b"Stealth browser fixture download content\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header(
+                "Content-Disposition", f'attachment; filename="{safe_filename}"'
+            )
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        super().do_GET()
+
     def do_POST(self) -> None:
         """Handle POST requests, such as mock login submissions setting cookies."""
         parsed = urllib.parse.urlparse(self.path)

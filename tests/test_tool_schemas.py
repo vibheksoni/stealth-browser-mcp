@@ -22,6 +22,8 @@ NULL_DEFAULT_PARAMS = {
     "restore_session": ["file_path", "session_data"],
     "choose_option": ["filter_text", "frame"],
     "wait_for": ["selector", "state", "text", "url"],
+    "wait_for_download": ["instance_id", "filename_pattern", "instance"],
+    "drop_files": ["instance_id"],
 }
 
 

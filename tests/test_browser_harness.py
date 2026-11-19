@@ -77,6 +77,7 @@ class TestFixtureServerUngated(unittest.TestCase):
             "login.html": "Login Fixture Page",
             "react_select.html": "React-Select-like Combobox Fixture",
             "aria_combobox.html": "ARIA Combobox and Listbox Fixture",
+            "download.html": "Download and Drop Fixture",
         }
 
         with FixtureServer() as server:
@@ -115,6 +116,19 @@ class TestFixtureServerUngated(unittest.TestCase):
                 body = response.read().decode("utf-8")
                 self.assertIn("Login Successful", body)
                 self.assertIn("localStorage.setItem('session_token'", body)
+
+    def test_download_endpoint_returns_attachment(self) -> None:
+        """Verify GET /download returns expected attachment headers and body."""
+        with FixtureServer() as server:
+            url = server.url_for("download?filename=custom_sample.csv")
+            with urllib.request.urlopen(url, timeout=5.0) as response:
+                self.assertEqual(response.status, 200)
+                content_type = response.headers.get("Content-Type", "")
+                self.assertIn("application/octet-stream", content_type)
+                disp = response.headers.get("Content-Disposition", "")
+                self.assertIn('attachment; filename="custom_sample.csv"', disp)
+                body = response.read()
+                self.assertIn(b"Stealth browser fixture download content", body)
 
     def test_pages_files_are_ascii_only(self) -> None:
         """Verify that all fixture files in PAGES_DIR contain valid ASCII characters only."""
