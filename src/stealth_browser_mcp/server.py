@@ -2321,6 +2321,23 @@ async def validate_browser_environment_tool() -> Dict[str, Any]:
         }
 
 
+@section_tool("debugging")
+async def doctor() -> Dict[str, Any]:
+    """
+    Run environment health checks: browser binaries per family, Linux keyring
+    reachability, seed ages, live sessions vs cap, stale locks, and whether the
+    data directory is writable. Secrets are redacted from the output.
+
+    Returns:
+        Dict[str, Any]: A summary with per-check status and an overall verdict.
+    """
+    try:
+        from .doctor import run_checks as doctor_run_checks
+        return doctor_run_checks()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @section_tool("progressive-cloning")
 async def clone_element_progressive(
     instance_id: str,
