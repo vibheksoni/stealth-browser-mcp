@@ -48,6 +48,7 @@ from .screenshot_encoder import DEFAULT_QUALITY, fit_screenshot, validate_option
 from .stdio_guard import install_stdio_guard
 from .platform_utils import validate_browser_environment, get_platform_info
 from .process_cleanup import process_cleanup
+from .a11y_snapshot import a11y_manager
 from . import session_state
 
 DISABLED_SECTIONS = set()
@@ -207,6 +208,7 @@ async def _forget_instance(instance_id: str) -> None:
     """
     await network_interceptor.clear_instance_data(instance_id)
     cdp_function_executor.forget_instance(instance_id)
+    a11y_manager.forget_instance(instance_id)
 
 
 def _register_manager_listeners() -> None:
@@ -588,7 +590,9 @@ async def click_element(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.click_element(tab, selector, text_match, timeout, frame=frame)
+    return await dom_handler.click_element(
+        tab, selector, text_match, timeout, frame=frame, instance_id=instance_id
+    )
 
 @section_tool("element-interaction")
 async def type_text(
@@ -608,7 +612,7 @@ async def type_text(
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector, deep selector (host >>> input), or XPath.
+        selector (str): CSS selector, deep selector (host >>> input), XPath, or ref=<id>.
         text (str): Text to type.
         clear_first (bool): Clear field before typing.
         delay_ms (int): Delay between keystrokes in milliseconds.
@@ -625,8 +629,59 @@ async def type_text(
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
     return await dom_handler.type_text(
-        tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter, frame=frame
+        tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter, frame=frame, instance_id=instance_id
     )
+
+@section_tool("element-interaction")
+async def fill(
+    instance_id: str,
+    selector: str,
+    value: str,
+    frame: Optional[str] = None
+) -> bool:
+    """
+    Fill an input field with text using a selector or ref=<id>.
+
+    Focuses the element, clears any existing content, and enters the value.
+    Accepts CSS selectors, XPath, deep selectors, or ref=<id> from an
+    accessibility snapshot (e.g. ref=e12).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector, XPath, deep selector, or ref=<id> (e.g. ref=e1).
+        value (str): Text to fill into the input.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+
+    Returns:
+        bool: True if filled successfully.
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise Exception(f"Instance not found: {instance_id}")
+    return await dom_handler.fill(
+        tab, selector, value, frame=frame, instance_id=instance_id
+    )
+
+@section_tool("element-interaction")
+async def fill_element(
+    instance_id: str,
+    selector: str,
+    value: str,
+    frame: Optional[str] = None
+) -> bool:
+    """
+    Fill an input field with text (alias for fill).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector, XPath, deep selector, or ref=<id> (e.g. ref=e1).
+        value (str): Text to fill into the input.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+
+    Returns:
+        bool: True if filled successfully.
+    """
+    return await fill(instance_id=instance_id, selector=selector, value=value, frame=frame)
 
 @section_tool("element-interaction")
 async def paste_text(
@@ -641,7 +696,7 @@ async def paste_text(
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector, deep selector, or XPath.
+        selector (str): CSS selector, deep selector, XPath, or ref=<id>.
         text (str): Text to paste.
         clear_first (bool): Clear field before pasting.
         frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
@@ -652,7 +707,9 @@ async def paste_text(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.paste_text(tab, selector, text, clear_first, frame=frame)
+    return await dom_handler.paste_text(
+        tab, selector, text, clear_first, frame=frame, instance_id=instance_id
+    )
 
 @section_tool("element-interaction")
 async def press_key(
@@ -675,7 +732,7 @@ async def press_key(
         instance_id (str): Browser instance ID.
         key (str): DOM KeyboardEvent.key name (Enter, Tab, Escape, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, Backspace, Delete, Home, End, PageUp, PageDown, Space, F1-F12) or a single printable character.
         modifiers (Optional[List[str]]): Modifier keys to hold: Shift, Control (Ctrl), Alt, Meta (Cmd).
-        selector (Optional[str]): CSS selector, deep selector, or XPath to focus before pressing. Presses on the focused element when omitted.
+        selector (Optional[str]): CSS selector, deep selector, XPath, or ref=<id> to focus before pressing. Presses on the focused element when omitted.
         count (int): Number of times to press the key.
         delay_ms (int): Delay between presses in milliseconds.
         frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
@@ -692,7 +749,9 @@ async def press_key(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.press_key(tab, key, modifiers, selector, count, delay_ms, frame=frame)
+    return await dom_handler.press_key(
+        tab, key, modifiers, selector, count, delay_ms, frame=frame, instance_id=instance_id
+    )
 
 @section_tool("element-interaction")
 async def file_upload(
@@ -1016,6 +1075,79 @@ async def take_screenshot(
     finally:
         if tmp_path.exists():
             os.unlink(tmp_path)
+
+
+@section_tool("element-interaction")
+async def get_accessibility_snapshot(
+    instance_id: str,
+    max_nodes: int = 500,
+    max_chars: int = 50000,
+    interactive_only: bool = False,
+    frame: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get an accessibility snapshot of the page.
+
+    Returns a compact text and JSON tree with stable short refs (e.g. ref=e12)
+    for interactive nodes, with hard size caps (max_nodes and max_chars) and
+    a truncated flag. Stored refs can be targeted with click_element, fill,
+    and type_text using selector="ref=<id>".
+
+    Args:
+        instance_id (str): Browser instance ID.
+        max_nodes (int): Maximum number of nodes to return in the snapshot. Defaults to 500.
+        max_chars (int): Maximum characters for the text tree. Defaults to 50000.
+        interactive_only (bool): When True, only include interactive elements. Defaults to False.
+        frame (Optional[str]): Target frame selector, name, or id. Defaults to None (root document).
+
+    Returns:
+        Dict[str, Any]: { "tree": str, "text": str, "nodes": dict, "truncated": bool, "node_count": int, "refs": dict }
+    """
+    if isinstance(max_nodes, str):
+        max_nodes = int(max_nodes)
+    if isinstance(max_chars, str):
+        max_chars = int(max_chars)
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise Exception(f"Instance not found: {instance_id}")
+    return await dom_handler.get_accessibility_snapshot(
+        tab,
+        instance_id=instance_id,
+        max_nodes=max_nodes,
+        max_chars=max_chars,
+        interactive_only=interactive_only,
+        frame=frame,
+    )
+
+
+@section_tool("element-interaction")
+async def take_accessibility_snapshot(
+    instance_id: str,
+    max_nodes: int = 500,
+    max_chars: int = 50000,
+    interactive_only: bool = False,
+    frame: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Take an accessibility snapshot of the page (alias for get_accessibility_snapshot).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        max_nodes (int): Maximum number of nodes to return in the snapshot. Defaults to 500.
+        max_chars (int): Maximum characters for the text tree. Defaults to 50000.
+        interactive_only (bool): When True, only include interactive elements. Defaults to False.
+        frame (Optional[str]): Target frame selector, name, or id. Defaults to None.
+
+    Returns:
+        Dict[str, Any]: { "tree": str, "text": str, "nodes": dict, "truncated": bool, "node_count": int, "refs": dict }
+    """
+    return await get_accessibility_snapshot(
+        instance_id=instance_id,
+        max_nodes=max_nodes,
+        max_chars=max_chars,
+        interactive_only=interactive_only,
+        frame=frame,
+    )
 
 
 @section_tool("network-debugging")

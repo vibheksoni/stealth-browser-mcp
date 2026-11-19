@@ -142,6 +142,22 @@ class FindNodeTests(unittest.TestCase):
         self.assertIn("iframe#auth", eval_events[0][1])
         self.assertIn("input#email", eval_events[0][1])
 
+    def test_ref_selector_resolves_via_snapshot_manager(self):
+        from stealth_browser_mcp.a11y_snapshot import a11y_manager
+        a11y_manager.clear_all()
+        tab = RecordingTab(backend_node_id=88)
+        a11y_manager.store_snapshot("inst-test", tab, refs={"e1": 88}, tree_text="", tree_json={})
+        node_id = asyncio.run(input_actions.find_node(tab, "ref=e1", instance_id="inst-test"))
+        self.assertEqual(node_id, 88)
+
+    def test_stale_ref_raises_clear_error(self):
+        from stealth_browser_mcp.a11y_snapshot import a11y_manager
+        a11y_manager.clear_all()
+        tab = RecordingTab(backend_node_id=88)
+        with self.assertRaises(Exception) as ctx:
+            asyncio.run(input_actions.find_node(tab, "ref=e999"))
+        self.assertIn("no accessibility snapshot has been taken", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

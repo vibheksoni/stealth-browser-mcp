@@ -192,21 +192,25 @@ class DOMHandler:
         tab: Tab,
         selector: str,
         timeout: float,
-        frame: Optional[str] = None
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> int:
         """
-        Resolve a selector to a backend node id or raise.
+        Resolve a selector or ref=<id> to a backend node id or raise.
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector, deep selector, or XPath.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             timeout (float): Seconds to wait for the element.
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID for ref resolution.
 
         Returns:
             int: Backend node id.
         """
-        backend_node_id = await input_actions.find_node(tab, selector, timeout, frame=frame)
+        backend_node_id = await input_actions.find_node(
+            tab, selector, timeout, frame=frame, instance_id=instance_id
+        )
         if backend_node_id is None:
             target_desc = f"{selector} (in frame {frame})" if frame else selector
             raise Exception(f"Element not found: {target_desc}")
@@ -218,7 +222,8 @@ class DOMHandler:
         selector: str,
         text_match: Optional[str] = None,
         timeout: int = 10000,
-        frame: Optional[str] = None
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> bool:
         """
         Click an element with trusted mouse events.
@@ -230,10 +235,11 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector, deep selector, or XPath for the element.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             text_match (Optional[str]): Match element by text content.
             timeout (int): Timeout in milliseconds.
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
 
         Returns:
             bool: True if click succeeded.
@@ -245,7 +251,9 @@ class DOMHandler:
                     raise Exception(f"Element not found with text: {text_match}")
                 backend_node_id = int(element.backend_node_id)
             else:
-                backend_node_id = await DOMHandler._resolve_target(tab, selector, timeout / 1000, frame=frame)
+                backend_node_id = await DOMHandler._resolve_target(
+                    tab, selector, timeout / 1000, frame=frame, instance_id=instance_id
+                )
             await input_actions.click_node(tab, backend_node_id)
             return True
         except Exception as e:
@@ -260,7 +268,8 @@ class DOMHandler:
         delay_ms: int = 50,
         parse_newlines: bool = False,
         shift_enter: bool = False,
-        frame: Optional[str] = None
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> bool:
         """
         Type text with trusted keyboard events and human-like delays.
@@ -271,19 +280,22 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector, deep selector, or XPath for the input element.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             text (str): Text to type.
             clear_first (bool): Clear input before typing.
             delay_ms (int): Delay between keystrokes in milliseconds.
             parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
             shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
 
         Returns:
             bool: True if typing succeeded.
         """
         try:
-            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame)
+            backend_node_id = await DOMHandler._resolve_target(
+                tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+            )
             await input_actions.focus_node(tab, backend_node_id)
             if clear_first:
                 await input_actions.clear_field(tab, backend_node_id)
@@ -297,12 +309,49 @@ class DOMHandler:
             raise Exception(f"Failed to type text: {str(e)}")
 
     @staticmethod
+    async def fill(
+        tab: Tab,
+        selector: str,
+        value: str,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Fill an input element with text by selector or ref=<id>.
+
+        Resolves the target element (including ref= targeting), focuses it,
+        clears any existing content, and enters the text.
+
+        Args:
+            tab (Tab): The browser tab object.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
+            value (str): Text value to fill into the element.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
+
+        Returns:
+            bool: True if filling succeeded.
+        """
+        try:
+            backend_node_id = await DOMHandler._resolve_target(
+                tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+            )
+            await input_actions.focus_node(tab, backend_node_id)
+            await input_actions.clear_field(tab, backend_node_id)
+            for char in value:
+                await input_actions.type_character(tab, char)
+            return True
+        except Exception as e:
+            raise Exception(f"Failed to fill element: {str(e)}")
+
+    @staticmethod
     async def paste_text(
         tab: Tab,
         selector: str,
         text: str,
         clear_first: bool = True,
-        frame: Optional[str] = None
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> bool:
         """
         Insert text in one step, like a paste.
@@ -312,10 +361,11 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector, deep selector, or XPath for the input element.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             text (str): Text to paste.
             clear_first (bool): Clear input before pasting.
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
 
         Returns:
             bool: True if pasting succeeded.
@@ -323,7 +373,9 @@ class DOMHandler:
         from nodriver import cdp
 
         try:
-            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame)
+            backend_node_id = await DOMHandler._resolve_target(
+                tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+            )
             await input_actions.focus_node(tab, backend_node_id)
             if clear_first:
                 await input_actions.clear_field(tab, backend_node_id)
@@ -340,7 +392,8 @@ class DOMHandler:
         selector: Optional[str] = None,
         count: int = 1,
         delay_ms: int = 50,
-        frame: Optional[str] = None
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Press a real key using trusted CDP Input.dispatchKeyEvent events.
@@ -353,10 +406,11 @@ class DOMHandler:
             tab (Tab): The browser tab object.
             key (str): DOM KeyboardEvent.key name (Enter, Tab, ArrowDown, F5, ...) or a single printable character.
             modifiers (Optional[List[str]]): Modifier keys to hold: Shift, Control/Ctrl, Alt, Meta/Cmd.
-            selector (Optional[str]): CSS selector, deep selector, or XPath to focus before pressing. Presses on the active element when omitted.
+            selector (Optional[str]): CSS selector, deep selector, XPath, or ref=<id> to focus before pressing. Presses on the active element when omitted.
             count (int): Number of times to press the key.
             delay_ms (int): Delay between presses in milliseconds.
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
 
         Returns:
             Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -371,7 +425,9 @@ class DOMHandler:
             modifier_mask, canonical_modifiers = resolve_modifiers(modifiers)
 
             if selector:
-                backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame)
+                backend_node_id = await DOMHandler._resolve_target(
+                    tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+                )
                 await input_actions.focus_node(tab, backend_node_id)
 
             text = descriptor["text"]
@@ -959,5 +1015,43 @@ class DOMHandler:
         except Exception as e:
             raise Exception(f"Failed to scroll page: {str(e)}")
 
+    @staticmethod
+    async def get_accessibility_snapshot(
+        tab: Tab,
+        instance_id: Optional[str] = None,
+        max_nodes: int = 500,
+        max_chars: int = 50000,
+        interactive_only: bool = False,
+        frame: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get an accessibility snapshot of the page with stable short refs and size caps.
+
+        Args:
+            tab (Tab): Browser tab.
+            instance_id (Optional[str]): Browser instance ID.
+            max_nodes (int): Maximum nodes to include before truncating. Defaults to 500.
+            max_chars (int): Maximum character length of text tree before truncating. Defaults to 50000.
+            interactive_only (bool): Include only interactive nodes and their ancestors. Defaults to False.
+            frame (Optional[str]): Target frame (omitted for root document).
+
+        Returns:
+            Dict[str, Any]: Snapshot result dictionary.
+        """
+        from . import a11y_snapshot
+        return await a11y_snapshot.get_accessibility_snapshot(
+            tab=tab,
+            instance_id=instance_id,
+            max_nodes=max_nodes,
+            max_chars=max_chars,
+            interactive_only=interactive_only,
+            frame=frame,
+        )
+
+    take_accessibility_snapshot = get_accessibility_snapshot
+
 
 choose_option = DOMHandler.choose_option
+fill = DOMHandler.fill
+get_accessibility_snapshot = DOMHandler.get_accessibility_snapshot
+take_accessibility_snapshot = DOMHandler.take_accessibility_snapshot

@@ -24,6 +24,10 @@ NULL_DEFAULT_PARAMS = {
     "wait_for": ["selector", "state", "text", "url"],
     "wait_for_download": ["instance_id", "filename_pattern", "instance"],
     "drop_files": ["instance_id"],
+    "get_accessibility_snapshot": ["frame"],
+    "take_accessibility_snapshot": ["frame"],
+    "fill": ["frame"],
+    "fill_element": ["frame"],
 }
 
 

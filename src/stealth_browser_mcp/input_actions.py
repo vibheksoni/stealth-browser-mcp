@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nodriver import Tab, cdp
 
+from .a11y_snapshot import a11y_manager, extract_ref_id, is_ref_selector
+from .cdp_raw import raw_command
 from .key_definitions import resolve_key_descriptor
 
 SHIFTED_SYMBOLS = set('~!@#$%^&*()_+{}|:"<>?')
@@ -1004,6 +1006,7 @@ async def find_node(
     selector: str,
     timeout: float = 0.0,
     frame: Optional[str] = None,
+    instance_id: Optional[str] = None,
 ) -> Optional[int]:
     """
     Resolve a selector to a backend node id.
@@ -1016,19 +1019,48 @@ async def find_node(
         (e.g. xpath=//input[@name='q'] or //button[text()='Submit'])
       - Iframe targeting via the frame argument (accepts iframe CSS
         selector, name, id, or XPath; supports both same-origin and cross-origin)
+      - Ref targeting using ref=<id> (e.g. ref=e12 or ref="e1") resolved
+        from the latest accessibility snapshot
 
     Only the document root is fetched for standard selectors with no frame,
     so lookups stay fast on large pages.
 
     Args:
         tab (Tab): Browser tab.
-        selector (str): CSS selector, deep selector, or XPath.
+        selector (str): CSS selector, deep selector, XPath, or ref=<id>.
         timeout (float): Seconds to keep polling while the element is missing.
         frame (Optional[str]): Iframe selector, name, id, or XPath.
+        instance_id (Optional[str]): Browser instance ID for ref resolution.
 
     Returns:
         Optional[int]: Backend node id, or None when nothing matched in time.
     """
+    known_refs = a11y_manager.get_known_refs(instance_id=instance_id, tab=tab)
+    if is_ref_selector(selector, known_refs=known_refs):
+        ref_id = extract_ref_id(selector)
+        backend_node_id = a11y_manager.resolve_ref(
+            ref_id=ref_id,
+            instance_id=instance_id,
+            tab=tab,
+        )
+        try:
+            node = await asyncio.wait_for(
+                tab.send(raw_command("DOM.describeNode", {"backendNodeId": int(backend_node_id)})),
+                timeout=3.0,
+            )
+            b_id = getattr(node, "backend_node_id", None)
+            if b_id is not None:
+                return int(b_id)
+            if isinstance(node, dict) and "node" in node and "backendNodeId" in node["node"]:
+                return int(node["node"]["backendNodeId"])
+            if isinstance(node, dict) and "backendNodeId" in node:
+                return int(node["backendNodeId"])
+            return int(backend_node_id)
+        except asyncio.TimeoutError:
+            return int(backend_node_id)
+        except Exception as e:
+            raise Exception(f"Stale ref '{selector}': element no longer exists in DOM") from e
+
     deadline = time.monotonic() + max(timeout, 0.0)
     parts = split_deep_selector(selector)
     is_deep = len(parts) > 1
