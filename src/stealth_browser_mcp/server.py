@@ -51,6 +51,7 @@ from .process_cleanup import process_cleanup
 from .a11y_snapshot import a11y_manager
 from . import fill_tool
 from . import session_state
+from . import seed_tools
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -3391,6 +3392,66 @@ def validate_hook_function(function_code: str) -> Dict[str, Any]:
         Dict[str, Any]: Validation results with issues and warnings
     """
     return dynamic_hook_ai.validate_hook_function(function_code=function_code)
+
+
+@section_tool("browser-management")
+async def list_sources() -> Dict[str, Any]:
+    """
+    List installed browser profile sources and existing seeds with their age.
+
+    Discovers installed Chrome, Edge, and Brave browser profiles on Linux,
+    and reports existing seeds created with refresh_seed.
+
+    Returns:
+        Dict[str, Any]: Discovered browser profile sources and existing seeds.
+    """
+    return seed_tools.list_sources()
+
+
+@section_tool("browser-management")
+async def refresh_seed(
+    name: str,
+    source_browser: str,
+    profile: Optional[str] = None,
+    include_passwords: bool = False,
+    include_cards: bool = False,
+    indexeddb_cap_bytes: int = 50 * 1024 * 1024,
+    source_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Refresh or create a curated browser profile seed from a source browser.
+
+    Copies session state (cookies, local storage, extensions, settings) without
+    caches from the source profile into a dedicated seed directory. The source
+    directory is opened read-only and never modified.
+
+    Args:
+        name (str): Unique name for the seed (1-40 chars, [a-z0-9_-]).
+        source_browser (str): Source browser family ("chrome", "edge", "brave")
+            or path to user data directory.
+        profile (Optional[str]): Profile directory name inside the source (e.g.
+            "Default" or "Profile 1"). Defaults to auto-detecting the last-used profile.
+        include_passwords (bool): Whether to include saved login credentials.
+            Defaults to False.
+        include_cards (bool): Whether to include saved payment data.
+            Defaults to False.
+        indexeddb_cap_bytes (int): Maximum bytes to keep per IndexedDB origin.
+            Defaults to 52428800 (50 MB).
+        source_dir (Optional[str]): Explicit path to user data directory if not
+            using standard system locations.
+
+    Returns:
+        Dict[str, Any]: Summary of the refresh operation (status, counts, bytes).
+    """
+    return seed_tools.refresh_seed(
+        name=name,
+        source_browser=source_browser,
+        profile=profile,
+        include_passwords=include_passwords,
+        include_cards=include_cards,
+        indexeddb_cap_bytes=indexeddb_cap_bytes,
+        source_dir=source_dir,
+    )
 
 
 if parse_bool_env("XPOOL_SAFE_MODE", default=False):
