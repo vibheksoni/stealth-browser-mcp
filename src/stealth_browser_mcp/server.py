@@ -43,6 +43,7 @@ from .screenshot_encoder import DEFAULT_QUALITY, fit_screenshot, validate_option
 from .stdio_guard import install_stdio_guard
 from .platform_utils import validate_browser_environment, get_platform_info
 from .process_cleanup import process_cleanup
+from . import session_state
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -1200,6 +1201,72 @@ async def clear_cookies(
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
     return await network_interceptor.clear_cookies(tab, url)
+
+
+@section_tool("cookies-storage")
+async def save_session(
+    instance_id: str,
+    file_path: Optional[str] = None,
+    origins: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Save browser session state (cookies and localStorage per origin) to JSON.
+
+    Saves cookies via CDP Network.getAllCookies and localStorage per origin
+    in Playwright-compatible storageState format. The output file is written
+    with mode 0600 (POSIX).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        file_path (Optional[str]): Destination JSON file path.
+        origins (Optional[List[str]]): Specific origins to save localStorage for.
+
+    Returns:
+        Dict[str, Any]: Result with file_path, cookies_count, origins_count, and session data.
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise Exception(f"Instance not found: {instance_id}")
+    return await session_state.save_session(
+        instance_id=instance_id,
+        file_path=file_path,
+        origins=origins,
+        browser_manager=browser_manager,
+    )
+
+
+@section_tool("cookies-storage")
+async def restore_session(
+    instance_id: str,
+    file_path: Optional[str] = None,
+    session_data: Optional[Dict[str, Any]] = None,
+    clear_existing: bool = True,
+) -> Dict[str, Any]:
+    """
+    Restore browser session state (cookies and localStorage per origin) from JSON.
+
+    Restores cookies via CDP Network.setCookies and localStorage per origin
+    from Playwright-compatible storageState format.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        file_path (Optional[str]): Source JSON file path.
+        session_data (Optional[Dict[str, Any]]): Session state dictionary.
+        clear_existing (bool): Whether to clear existing cookies and storage before restore.
+
+    Returns:
+        Dict[str, Any]: Result with success, cookies_restored, and origins_restored.
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise Exception(f"Instance not found: {instance_id}")
+    return await session_state.restore_session(
+        instance_id=instance_id,
+        file_path=file_path,
+        session_data=session_data,
+        clear_existing=clear_existing,
+        browser_manager=browser_manager,
+    )
 
 
 @mcp.resource("browser://{instance_id}/state")
