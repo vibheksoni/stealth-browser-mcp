@@ -29,6 +29,7 @@ NULL_DEFAULT_PARAMS = {
     "fill": ["frame", "value", "value_env"],
     "fill_element": ["frame", "value", "value_env"],
     "paste_text": ["frame", "mode"],
+    "export_har": ["path"],
     "snapshot_seed": ["label"],
     "refresh_seed": ["profile", "source_dir"],
 }
@@ -63,6 +64,21 @@ class NullDefaultSchemaTests(unittest.TestCase):
 
         result = asyncio.run(run())
         self.assertFalse(result.is_error, result.content)
+
+    def test_export_har_schema(self):
+        async def run():
+            async with Client(server.mcp) as client:
+                return {tool.name: tool for tool in await client.list_tools()}
+
+        tools = asyncio.run(run())
+        self.assertIn("export_har", tools)
+        tool = tools["export_har"]
+        props = tool.inputSchema["properties"]
+        self.assertIn("instance_id", props)
+        self.assertIn("path", props)
+        self.assertIn("include_sensitive", props)
+        required = tool.inputSchema.get("required", [])
+        self.assertIn("instance_id", required)
 
 
 if __name__ == "__main__":

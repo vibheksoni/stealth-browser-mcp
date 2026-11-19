@@ -51,6 +51,7 @@ from .process_cleanup import process_cleanup
 from .a11y_snapshot import a11y_manager
 from . import fill_tool
 from . import session_state
+from .har_export import build_har, export_to_json
 from . import seed_snapshots
 from . import seed_tools
 
@@ -1395,6 +1396,66 @@ async def export_network_data(
         bool: True if successful.
     """
     return await network_interceptor.export_to_json(instance_id, filepath)
+
+
+@section_tool("network-debugging")
+async def export_har(
+    instance_id: str,
+    path: Optional[str] = None,
+    include_sensitive: bool = False,
+) -> Union[Dict[str, Any], str]:
+    """
+    Export captured network traffic for an instance as a HAR 1.2 document.
+
+    Authorization, Cookie, and Set-Cookie header values are redacted by
+    default; pass include_sensitive to include them.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        path (Optional[str]): Optional file path to write the HAR document.
+        include_sensitive (bool): Include redacted (Authorization/Cookie) values.
+
+    Returns:
+        Union[Dict[str, Any], str]: The HAR 1.2 document, or the written path.
+    """
+    requests = await network_interceptor.list_requests(instance_id)
+    entries = []
+    for request in requests:
+        response = await network_interceptor.get_response(request.request_id)
+        req_ts = request.timestamp.isoformat() if hasattr(request.timestamp, "isoformat") else str(request.timestamp)
+        entry: Dict[str, Any] = {
+            "request": {
+                "request_id": request.request_id,
+                "url": request.url,
+                "method": request.method,
+                "headers": dict(request.headers),
+                "cookies": dict(request.cookies),
+                "post_data": request.post_data,
+                "timestamp": req_ts,
+            }
+        }
+        if response is not None:
+            resp_ts = response.timestamp.isoformat() if hasattr(response.timestamp, "isoformat") else str(response.timestamp)
+            resp_dict: Dict[str, Any] = {
+                "status": response.status,
+                "content_type": response.content_type,
+                "headers": dict(response.headers),
+                "timestamp": resp_ts,
+            }
+            if response.body is not None:
+                try:
+                    resp_dict["text"] = response.body.decode("utf-8")
+                except UnicodeDecodeError:
+                    resp_dict["body"] = response.body
+            entry["response"] = resp_dict
+        entries.append(entry)
+
+    har = build_har(entries, include_sensitive=include_sensitive)
+
+    if path:
+        export_to_json(har, path)
+        return path
+    return har
 
 
 @section_tool("network-debugging")
