@@ -270,13 +270,16 @@ class DOMHandler:
         shift_enter: bool = False,
         frame: Optional[str] = None,
         instance_id: Optional[str] = None,
+        grapheme: Optional[bool] = None,
+        ime: bool = False,
     ) -> bool:
         """
         Type text with trusted keyboard events and human-like delays.
 
         Each ASCII character produces keydown, keypress, input, and keyup
         events, with Shift held for capitals and shifted symbols. Other
-        characters are inserted like an input method would.
+        characters and grapheme clusters (such as emoji ZWJ sequences and CJK)
+        are inserted with Unicode grapheme awareness.
 
         Args:
             tab (Tab): The browser tab object.
@@ -288,6 +291,8 @@ class DOMHandler:
             shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
             frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
             instance_id (Optional[str]): Browser instance ID.
+            grapheme (Optional[bool]): Enable grapheme-cluster-aware typing. Defaults to True for non-ASCII text.
+            ime (bool): If True, simulate IME composition for CJK characters.
 
         Returns:
             bool: True if typing succeeded.
@@ -299,11 +304,24 @@ class DOMHandler:
             await input_actions.focus_node(tab, backend_node_id)
             if clear_first:
                 await input_actions.clear_field(tab, backend_node_id)
-            delay = max(delay_ms, 0) / 1000
-            for index, char in enumerate(text):
-                await input_actions.type_character(tab, char, parse_newlines or shift_enter, shift_enter)
-                if delay and index < len(text) - 1:
-                    await asyncio.sleep(delay)
+            use_grapheme = grapheme if grapheme is not None else not text.isascii()
+            if use_grapheme:
+                from .grapheme_typing import type_graphemes
+
+                await type_graphemes(
+                    tab,
+                    text,
+                    ime=ime,
+                    delay_ms=delay_ms,
+                    parse_newlines=parse_newlines,
+                    shift_enter=shift_enter,
+                )
+            else:
+                delay = max(delay_ms, 0) / 1000
+                for index, char in enumerate(text):
+                    await input_actions.type_character(tab, char, parse_newlines or shift_enter, shift_enter)
+                    if delay and index < len(text) - 1:
+                        await asyncio.sleep(delay)
             return True
         except Exception as e:
             raise Exception(f"Failed to type text: {str(e)}")
