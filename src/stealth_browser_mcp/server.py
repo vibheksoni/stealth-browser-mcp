@@ -28,9 +28,21 @@ from .debug_logger import debug_logger
 from .dom_handler import DOMHandler
 from .element_cloner import element_cloner
 from .file_based_element_cloner import file_based_element_cloner
-from .http_security import (
+from starlette.middleware import Middleware as ASGIMiddleware
+from .http_auth import (
+    BearerAuthMiddleware,
     create_http_auth_provider,
-    get_http_auth_token,
+    get_mcp_token as get_http_auth_token,
+    validate_bind,
+)
+from .page_summary import (
+    ACTION_TOOL_NAMES,
+    with_page_summary,
+)
+from .mcp_sessions import (
+    SessionLifecycleMiddleware,
+    get_current_mcp_session_id,
+    mcp_session_manager,
 )
 from .models import BrowserOptions
 from .network_interceptor import NetworkInterceptor
@@ -107,7 +119,10 @@ def section_tool(section: str):
     """Decorator that registers tools and tracks section membership."""
     def decorator(func):
         SECTION_TOOLS[section].append(func.__name__)
-        return mcp.tool(func)
+        target_func = func
+        if func.__name__ in ACTION_TOOL_NAMES:
+            target_func = with_page_summary(func)
+        return mcp.tool(target_func)
     return decorator
 
 
@@ -186,6 +201,8 @@ mcp = FastMCP(
 )
 
 browser_manager = BrowserManager()
+mcp_session_manager.set_browser_manager(browser_manager)
+browser_manager.add_close_listener(mcp_session_manager.on_instance_closed)
 network_interceptor = NetworkInterceptor()
 dom_handler = DOMHandler()
 cdp_function_executor = CDPFunctionExecutor()
@@ -304,6 +321,9 @@ async def spawn_browser(
             cap=cap,
         )
         instance = await browser_manager.spawn_browser(options)
+        mcp_sid = get_current_mcp_session_id()
+        if mcp_sid:
+            mcp_session_manager.register_session(mcp_sid, instance.instance_id)
         spawn_diagnostics = await browser_manager.get_spawn_diagnostics(instance.instance_id)
         session_info = await browser_manager.get_session_info(instance.instance_id)
         result: Dict[str, Any] = {
@@ -351,6 +371,15 @@ async def list_instances() -> List[Dict[str, Any]]:
                 "title": inst_data["title"],
                 "source": "stored"
             })
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        return mcp_session_manager.filter_instances(result)
     return result
 
 @section_tool("browser-management")
@@ -364,6 +393,15 @@ async def close_instance(instance_id: str) -> bool:
     Returns:
         bool: True if closed successfully.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.close_instance(instance_id)
 
 @section_tool("browser-management")
@@ -377,6 +415,15 @@ async def get_instance_state(instance_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Optional[Dict[str, Any]]: Complete state information.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     state = await browser_manager.get_page_state(instance_id)
     if state:
         return state.dict()
@@ -1133,7 +1180,7 @@ async def take_screenshot(
     file_path: Optional[str] = None,
     quality: int = DEFAULT_QUALITY,
     max_width: Optional[int] = None
-) -> Union[str, ToolResult]:
+) -> ToolResult:
     """
     Take a screenshot of the page.
 
@@ -1146,15 +1193,25 @@ async def take_screenshot(
         instance_id (str): Browser instance ID.
         full_page (bool): Capture full page (not just viewport).
         format (str): Image format ('png' or 'jpeg'). Use jpeg with a lower quality for smaller images.
-        file_path (Optional[str]): Save the full-resolution screenshot to this path on the server instead.
+        file_path (Optional[str]): Save the full-resolution screenshot to this path on the server in addition to returning image content.
         quality (int): JPEG quality from 1 to 100. PNG is lossless and ignores it.
         max_width (Optional[int]): Largest width in pixels to return, for a smaller image.
 
     Returns:
-        Union[str, ToolResult]: Server file location when file_path is given, otherwise
-            an MCP image with format, width, height, original size, scale, quality,
-            byte count, and SHA-256 metadata.
+        ToolResult: MCP image content block with format, width, height, original size,
+            scale, quality, byte count, and SHA-256 metadata. When file_path is given,
+            it also includes the server file location text and metadata path.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
+
     format = validate_screenshot_options(format, quality, max_width)
 
     tab = await browser_manager.get_tab(instance_id)
@@ -1165,7 +1222,22 @@ async def take_screenshot(
         save_path = Path(file_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
         await tab.save_screenshot(save_path, format=format, full_page=full_page)
-        return f"Screenshot saved on the server: {str(save_path.absolute())}"
+        image_bytes, metadata = fit_screenshot(save_path, format, quality, max_width)
+        metadata["path"] = str(save_path.absolute())
+        return ToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=f"Screenshot saved on the server: {str(save_path.absolute())}",
+                ),
+                ImageContent(
+                    type="image",
+                    mimeType=f"image/{format}",
+                    data=base64.b64encode(image_bytes).decode("ascii"),
+                ),
+            ],
+            structured_content=metadata,
+        )
 
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
         tmp_path = Path(tmp_file.name)
@@ -1174,11 +1246,14 @@ async def take_screenshot(
         await tab.save_screenshot(tmp_path, format="png", full_page=full_page)
         image_bytes, metadata = fit_screenshot(tmp_path, format, quality, max_width)
         return ToolResult(
-            content=[ImageContent(
-                type="image",
-                mimeType=f"image/{format}",
-                data=base64.b64encode(image_bytes).decode("ascii"),
-            ), TextContent(type="text", text=json.dumps(metadata))],
+            content=[
+                ImageContent(
+                    type="image",
+                    mimeType=f"image/{format}",
+                    data=base64.b64encode(image_bytes).decode("ascii"),
+                ),
+                TextContent(type="text", text=json.dumps(metadata)),
+            ],
             structured_content=metadata,
         )
     finally:
@@ -1900,6 +1975,15 @@ async def list_tabs(instance_id: str) -> List[Dict[str, str]]:
     Returns:
         List[Dict[str, str]]: List of tabs with their details.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.list_tabs(instance_id)
 
 
@@ -1918,6 +2002,15 @@ async def switch_tab(
     Returns:
         bool: True if switched successfully.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.switch_to_tab(instance_id, tab_id)
 
 
@@ -1936,6 +2029,15 @@ async def close_tab(
     Returns:
         bool: True if closed successfully.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.close_tab(instance_id, tab_id)
 
 
@@ -1950,6 +2052,15 @@ async def get_active_tab(instance_id: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Active tab information.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     tab = await browser_manager.get_active_tab(instance_id)
     if not tab:
         return {"error": "No active tab found"}
@@ -1982,6 +2093,15 @@ async def new_tab(
     Returns:
         Dict[str, Any]: New tab information.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     try:
         new_tab_obj = await browser_manager.open_tab(instance_id, url)
         return {
@@ -3727,13 +3847,26 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
     
     if args.transport == "http":
-        if HTTP_AUTH_TOKEN is None and not is_loopback_host(args.host):
-            print(
-                f"WARNING: HTTP transport is listening on {args.host} without an auth token. "
-                "Set STEALTH_BROWSER_MCP_AUTH_TOKEN before exposing the server beyond localhost.",
-                file=sys.stderr,
-            )
-        mcp.run(transport="http", host=args.host, port=args.port)
+        token = get_http_auth_token()
+        try:
+            validate_bind(args.host, token)
+        except ValueError as e:
+            sys.stderr.write(f"Error: {e}\n")
+            sys.exit(1)
+
+        if token and mcp.auth is None:
+            mcp.auth = create_http_auth_provider(token)
+
+        http_middleware = [
+            ASGIMiddleware(BearerAuthMiddleware, expected_token=token),
+            ASGIMiddleware(SessionLifecycleMiddleware, session_manager=mcp_session_manager),
+        ]
+        mcp.run(
+            transport="http",
+            host=args.host,
+            port=args.port,
+            middleware=http_middleware,
+        )
     else:
         install_stdio_guard()
         mcp.run(transport="stdio")
