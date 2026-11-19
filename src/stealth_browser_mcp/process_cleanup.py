@@ -123,8 +123,8 @@ class ProcessCleanup:
             bool: True when the running process started before it was tracked.
         """
         tracked_at = metadata.get("timestamp")
-        if not isinstance(tracked_at, (int, float)):
-            return False
+        if not isinstance(tracked_at, (int, float)) or tracked_at <= 0:
+            return True
         try:
             return psutil.Process(pid).create_time() <= tracked_at + 5.0
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -365,6 +365,41 @@ class ProcessCleanup:
                 )
         return active_profile_dirs
 
+    @classmethod
+    def _get_process_tree_pids(cls, pid: int) -> Set[int]:
+        """
+        Collect the root process id and all its child/descendant process ids.
+
+        Args:
+            pid (int): Root process id.
+
+        Returns:
+            Set[int]: Process ids in the tree.
+        """
+        if not isinstance(pid, int) or pid <= 0:
+            return set()
+        pids: Set[int] = {pid}
+        try:
+            if not psutil.pid_exists(pid):
+                return set()
+            parent = psutil.Process(pid)
+            try:
+                for child in parent.children(recursive=True):
+                    child_pid = getattr(child, "pid", child)
+                    if isinstance(child_pid, int) and child_pid > 0:
+                        pids.add(child_pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return set()
+        except Exception as error:
+            debug_logger.log_warning(
+                "process_cleanup",
+                "process_tree",
+                f"Failed inspecting process tree for PID {pid}: {error}",
+            )
+        return pids
+
     def _get_browser_pids_for_profile(self, user_data_dir: Optional[str]) -> Set[int]:
         """
         Collect all live browser PIDs currently using a specific profile directory.
@@ -406,7 +441,7 @@ class ProcessCleanup:
         metadata: Dict[str, Any],
     ) -> bool:
         """
-        Kill all browser processes associated with tracked metadata.
+        Kill the browser process and its child process tree for tracked metadata.
 
         Args:
             instance_id (str): Browser instance id.
@@ -415,21 +450,27 @@ class ProcessCleanup:
         Returns:
             bool: True if all associated browser processes were killed or already absent.
         """
-        pids_to_kill = self._get_browser_pids_for_profile(metadata.get("user_data_dir"))
-        fallback_pid = metadata.get("pid")
-        if (
-            not pids_to_kill
-            and isinstance(fallback_pid, int)
-            and self._pid_predates_tracking(fallback_pid, metadata)
-        ):
-            pids_to_kill = {fallback_pid}
+        target_pid = metadata.get("pid")
+        if not isinstance(target_pid, int) or target_pid <= 0:
+            return True
+
+        if not psutil.pid_exists(target_pid):
+            return True
+
+        if not self._pid_predates_tracking(target_pid, metadata):
+            return True
+
+        pids_to_kill = self._get_process_tree_pids(target_pid)
         if not pids_to_kill:
             return True
 
-        success = True
-        for pid in sorted(pids_to_kill):
-            if not self._kill_process_by_pid(pid, instance_id):
+        child_pids = pids_to_kill - {target_pid}
+        success = self._kill_process_by_pid(target_pid, instance_id)
+
+        for child_pid in sorted(child_pids):
+            if not self._kill_process_by_pid(child_pid, instance_id, is_child=True):
                 success = False
+
         return success
 
     def _cleanup_profile_dir(
@@ -772,11 +813,12 @@ class ProcessCleanup:
             return False
 
         pid = metadata.get("pid")
-        profile_pids = self._get_browser_pids_for_profile(metadata.get("user_data_dir"))
-        if profile_pids:
-            return False
-        if isinstance(pid, int) and psutil.pid_exists(pid):
-            return False
+        if isinstance(pid, int) and pid > 0:
+            if psutil.pid_exists(pid) and self._pid_predates_tracking(pid, metadata):
+                return False
+            child_pids = self._get_process_tree_pids(pid) - {pid}
+            if child_pids:
+                return False
 
         active_profile_dirs = self._get_active_browser_profile_dirs()
         cleaned = self._cleanup_profile_for_metadata(
@@ -839,13 +881,19 @@ class ProcessCleanup:
 
         return finalized_count
 
-    def _kill_process_by_pid(self, pid: int, instance_id: str = "unknown") -> bool:
+    def _kill_process_by_pid(
+        self,
+        pid: int,
+        instance_id: str = "unknown",
+        is_child: bool = False,
+    ) -> bool:
         """
         Kill a browser process by PID using escalating termination methods.
 
         Args:
             pid: Process ID to kill.
             instance_id: Instance identifier for diagnostics.
+            is_child: True if the process is a child in the browser's process tree.
 
         Returns:
             bool: True if the process was killed or already absent.
@@ -862,7 +910,7 @@ class ProcessCleanup:
             try:
                 process = psutil.Process(pid)
                 process_name = process.name()
-                if not self._is_browser_process_name(process_name):
+                if not is_child and not self._is_browser_process_name(process_name):
                     debug_logger.log_warning(
                         "process_cleanup",
                         "kill_process",
@@ -1017,12 +1065,13 @@ class ProcessCleanup:
             return False
 
         pid = metadata.get("pid")
-        if not isinstance(pid, int):
-            return bool(self._get_browser_pids_for_profile(metadata.get("user_data_dir")))
+        if not isinstance(pid, int) or pid <= 0:
+            return False
 
-        return psutil.pid_exists(pid) or bool(
-            self._get_browser_pids_for_profile(metadata.get("user_data_dir"))
-        )
+        if not psutil.pid_exists(pid):
+            return False
+
+        return self._pid_predates_tracking(pid, metadata)
 
 
 process_cleanup = ProcessCleanup()
