@@ -201,7 +201,7 @@ class DOMHandler:
             tab (Tab): The browser tab object.
             selector (str): CSS selector, deep selector, or XPath.
             timeout (float): Seconds to wait for the element.
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             int: Backend node id.
@@ -233,7 +233,7 @@ class DOMHandler:
             selector (str): CSS selector, deep selector, or XPath for the element.
             text_match (Optional[str]): Match element by text content.
             timeout (int): Timeout in milliseconds.
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             bool: True if click succeeded.
@@ -277,7 +277,7 @@ class DOMHandler:
             delay_ms (int): Delay between keystrokes in milliseconds.
             parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
             shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             bool: True if typing succeeded.
@@ -315,7 +315,7 @@ class DOMHandler:
             selector (str): CSS selector, deep selector, or XPath for the input element.
             text (str): Text to paste.
             clear_first (bool): Clear input before pasting.
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             bool: True if pasting succeeded.
@@ -356,7 +356,7 @@ class DOMHandler:
             selector (Optional[str]): CSS selector, deep selector, or XPath to focus before pressing. Presses on the active element when omitted.
             count (int): Number of times to press the key.
             delay_ms (int): Delay between presses in milliseconds.
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -557,7 +557,7 @@ class DOMHandler:
             option_text (str): Visible text of the option to pick.
             filter_text (Optional[str]): Optional text to type to filter options.
             timeout (int): Timeout in milliseconds. Defaults to 10000.
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             Dict[str, Any]: { "success": True, "selected": str, "option": str, "verification": str }
@@ -580,25 +580,44 @@ class DOMHandler:
             is_xpath = input_actions.is_xpath_selector(selector) if selector else False
             xpath_expr = input_actions.extract_xpath(selector) if is_xpath else ""
 
+            # Check if frame is cross-origin
+            eval_tab = tab
+            eval_context_id = None
+            eval_frame = frame
+            if frame:
+                frame_ctx = await input_actions.resolve_frame_context(tab, frame)
+                if frame_ctx and frame_ctx.is_cross_origin:
+                    eval_tab = frame_ctx.target_tab or tab
+                    eval_context_id = frame_ctx.context_id
+                    eval_frame = None
+
             # 2. Optionally type to filter
             if filter_text:
                 focus_expr = input_actions.build_focus_input_expression(
                     trigger_selector=selector,
-                    frame=frame,
+                    frame=eval_frame,
                     parts=parts if is_deep else None,
                     is_xpath=is_xpath,
                     xpath_expr=xpath_expr,
                 )
                 try:
-                    await tab.send(cdp.runtime.evaluate(
-                        expression=focus_expr,
-                        return_by_value=True,
-                        await_promise=True,
-                    ))
+                    if eval_context_id is not None:
+                        await eval_tab.send(cdp.runtime.evaluate(
+                            expression=focus_expr,
+                            context_id=cdp.runtime.ExecutionContextId(eval_context_id),
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
+                    else:
+                        await eval_tab.send(cdp.runtime.evaluate(
+                            expression=focus_expr,
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
                 except Exception:
                     pass
                 for char in filter_text:
-                    await input_actions.type_character(tab, char)
+                    await input_actions.type_character(eval_tab, char)
                     await asyncio.sleep(0.02)
                 await asyncio.sleep(0.05)
 
@@ -610,7 +629,7 @@ class DOMHandler:
             find_expression = input_actions.build_find_option_expression(
                 option_text=option_text,
                 trigger_selector=selector,
-                frame=frame,
+                frame=eval_frame,
                 parts=parts if is_deep else None,
                 is_xpath=is_xpath,
                 xpath_expr=xpath_expr,
@@ -618,19 +637,29 @@ class DOMHandler:
 
             while time.monotonic() < deadline:
                 try:
-                    eval_result = await tab.send(cdp.runtime.evaluate(
-                        expression=find_expression,
-                        return_by_value=False,
-                        await_promise=True,
-                    ))
+                    if eval_context_id is not None:
+                        eval_result = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=find_expression,
+                            context_id=cdp.runtime.ExecutionContextId(eval_context_id),
+                            return_by_value=False,
+                            await_promise=True,
+                        ))
+                    else:
+                        eval_result = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=find_expression,
+                            return_by_value=False,
+                            await_promise=True,
+                        ))
                     remote_obj = eval_result[0] if isinstance(eval_result, tuple) else eval_result
                     if remote_obj and getattr(remote_obj, "object_id", None):
                         obj_id = cdp.runtime.RemoteObjectId(remote_obj.object_id)
-                        node = await tab.send(cdp.dom.describe_node(object_id=obj_id))
+                        node = await eval_tab.send(cdp.dom.describe_node(object_id=obj_id))
                         if node and hasattr(node, "backend_node_id"):
                             option_backend_node_id = int(node.backend_node_id)
+                            if eval_context_id is not None or eval_tab is not tab:
+                                input_actions._track_node(option_backend_node_id, eval_context_id, eval_tab)
                             try:
-                                call_res = await tab.send(cdp.runtime.call_function_on(
+                                call_res = await eval_tab.send(cdp.runtime.call_function_on(
                                     "function () { return this.id || null; }",
                                     object_id=obj_id,
                                     return_by_value=True,
@@ -640,7 +669,7 @@ class DOMHandler:
                             except Exception:
                                 clicked_option_id = None
                             try:
-                                await tab.send(cdp.runtime.release_object(object_id=obj_id))
+                                await eval_tab.send(cdp.runtime.release_object(object_id=obj_id))
                             except Exception:
                                 pass
                             break
@@ -662,7 +691,7 @@ class DOMHandler:
             verify_expression = input_actions.build_verify_selection_expression(
                 option_text=option_text,
                 trigger_selector=selector,
-                frame=frame,
+                frame=eval_frame,
                 clicked_option_id=clicked_option_id,
                 parts=parts if is_deep else None,
                 is_xpath=is_xpath,
@@ -671,11 +700,19 @@ class DOMHandler:
 
             while time.monotonic() < verify_deadline:
                 try:
-                    verify_res = await tab.send(cdp.runtime.evaluate(
-                        expression=verify_expression,
-                        return_by_value=True,
-                        await_promise=True,
-                    ))
+                    if eval_context_id is not None:
+                        verify_res = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=verify_expression,
+                            context_id=cdp.runtime.ExecutionContextId(eval_context_id),
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
+                    else:
+                        verify_res = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=verify_expression,
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
                     remote_obj = verify_res[0] if isinstance(verify_res, tuple) else verify_res
                     val = getattr(remote_obj, "value", None)
                     if isinstance(val, dict) and val.get("verified"):
@@ -773,7 +810,7 @@ class DOMHandler:
             timeout (int): Timeout in milliseconds.
             visible (bool): Wait for element to be visible.
             text_content (Optional[str]): Wait for element to contain text.
-            frame (Optional[str]): Same-origin iframe selector, name, or id.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             bool: True if element matches conditions, False otherwise.

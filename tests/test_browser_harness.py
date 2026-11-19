@@ -78,6 +78,8 @@ class TestFixtureServerUngated(unittest.TestCase):
             "react_select.html": "React-Select-like Combobox Fixture",
             "aria_combobox.html": "ARIA Combobox and Listbox Fixture",
             "download.html": "Download and Drop Fixture",
+            "cross_origin_outer.html": "Cross-Origin Iframe Fixture",
+            "cross_origin_inner.html": "Inside Cross-Origin Frame",
         }
 
         with FixtureServer() as server:
@@ -141,6 +143,22 @@ class TestFixtureServerUngated(unittest.TestCase):
                 content_bytes.decode("ascii")
             except UnicodeDecodeError as exc:
                 self.fail(f"Non-ASCII character in {html_file.name}: {exc}")
+
+    def test_two_port_fixture_servers_concurrent(self) -> None:
+        """Verify two FixtureServer instances run simultaneously on different loopback ports."""
+        with FixtureServer(port=0) as server_a:
+            with FixtureServer(port=0) as server_b:
+                self.assertNotEqual(server_a.port_number, server_b.port_number)
+                self.assertGreater(server_a.port_number, 0)
+                self.assertGreater(server_b.port_number, 0)
+                url_a = server_a.url_for("cross_origin_outer.html")
+                url_b = server_b.url_for("cross_origin_inner.html")
+                with urllib.request.urlopen(url_a, timeout=5.0) as res_a:
+                    self.assertEqual(res_a.status, 200)
+                    self.assertIn("Cross-Origin Iframe Fixture", res_a.read().decode("ascii"))
+                with urllib.request.urlopen(url_b, timeout=5.0) as res_b:
+                    self.assertEqual(res_b.status, 200)
+                    self.assertIn("Inside Cross-Origin Frame", res_b.read().decode("ascii"))
 
 
 @unittest.skipUnless(

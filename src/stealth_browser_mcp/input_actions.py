@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from nodriver import Tab, cdp
@@ -23,6 +24,14 @@ PRESS_DURATION_RANGE = (0.04, 0.09)
 MAX_TRACKED_TABS = 64
 
 HIT_TEST_JS = """function (x, y) {
+  if (window.self !== window.top) {
+    const win = this.ownerDocument ? (this.ownerDocument.defaultView || window) : window;
+    const style = win.getComputedStyle(this);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = this.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0 && !this.getClientRects().length) return false;
+    return true;
+  }
   let hit = document.elementFromPoint(x, y);
   if (!hit) return false;
   if (hit === this || this.contains(hit)) return true;
@@ -714,6 +723,279 @@ def build_focus_input_expression(
     return f"({FOCUS_INPUT_JS})({args_json})"
 
 
+@dataclass
+class FrameContext:
+    """Targeting context for an iframe (same-origin or cross-origin)."""
+
+    frame_id: Optional[str]
+    context_id: Optional[int]
+    target_tab: Tab
+    is_cross_origin: bool
+
+
+def _tab_cache_id(tab: Any) -> Any:
+    """Get a stable cache key for a tab, using CDP target_id when available."""
+    target = getattr(tab, "target", None)
+    target_id = getattr(target, "target_id", None) if target else None
+    if target_id is not None:
+        return str(target_id)
+    return id(tab)
+
+
+_node_contexts: Dict[int, Optional[int]] = {}
+_node_tabs: Dict[int, Tab] = {}
+_frame_contexts: Dict[Tuple[Any, str], FrameContext] = {}
+MAX_TRACKED_NODES = 128
+
+
+def _track_node(backend_node_id: int, context_id: Optional[int], target_tab: Optional[Tab] = None) -> None:
+    """Record execution context and target tab for a backend node id."""
+    if context_id is not None:
+        _node_contexts[backend_node_id] = context_id
+    if target_tab is not None and not getattr(target_tab, "closed", False):
+        _node_tabs[backend_node_id] = target_tab
+    while len(_node_contexts) > MAX_TRACKED_NODES:
+        _node_contexts.pop(next(iter(_node_contexts)), None)
+    while len(_node_tabs) > MAX_TRACKED_NODES:
+        _node_tabs.pop(next(iter(_node_tabs)), None)
+
+
+def _find_frame_id_in_tree(tree: Any, frame_ref: str) -> Optional[str]:
+    """Recursively search a CDP FrameTree for a frame matching the frame reference."""
+    if not tree:
+        return None
+    child_frames = getattr(tree, "child_frames", None) or []
+    for child in child_frames:
+        f = getattr(child, "frame", None)
+        if f:
+            fid = getattr(f, "id_", None) or getattr(f, "id", None)
+            fname = getattr(f, "name", None) or ""
+            furl = getattr(f, "url", None) or ""
+            if fname == frame_ref or (fid and str(fid) == frame_ref) or (frame_ref in furl):
+                return str(fid)
+        sub = _find_frame_id_in_tree(child, frame_ref)
+        if sub:
+            return sub
+    return None
+
+
+RESOLVE_IFRAME_NODE_JS = """function (frameRef) {
+  if (!frameRef) return null;
+  if (frameRef.startsWith('//') || frameRef.toLowerCase().startsWith('xpath=')) {
+    const fXpath = frameRef.toLowerCase().startsWith('xpath=') ? frameRef.substring(6).trim() : frameRef;
+    try {
+      const res = document.evaluate(fXpath, document, null, 9, null);
+      if (res && res.singleNodeValue) return res.singleNodeValue;
+    } catch (e) {}
+  }
+  try {
+    const el = document.querySelector(frameRef);
+    if (el) return el;
+  } catch (e) {}
+  try {
+    const el = document.querySelector('iframe[name="' + frameRef + '"], iframe#' + frameRef + ', #' + frameRef);
+    if (el) return el;
+  } catch (e) {}
+  try {
+    const frames = document.querySelectorAll('iframe, frame');
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i];
+      if (f.name === frameRef || f.id === frameRef || (f.src && f.src.includes(frameRef))) {
+        return f;
+      }
+    }
+  } catch (e) {}
+  return null;
+}"""
+
+
+async def resolve_frame_context(tab: Tab, frame: str) -> Optional[FrameContext]:
+    """
+    Resolve frame ID and execution context for an iframe.
+
+    Supports both same-origin and cross-origin iframes. For cross-origin
+    iframes, obtains the frame ID from DOM.describeNode or Page.getFrameTree,
+    creates an isolated world via Page.createIsolatedWorld, or connects to the
+    OOPIF target session.
+
+    Args:
+        tab (Tab): Browser tab.
+        frame (str): Iframe CSS selector, name, id, or XPath.
+
+    Returns:
+        Optional[FrameContext]: Resolved frame context, or None when not found.
+    """
+    cache_key = (_tab_cache_id(tab), frame)
+    if cache_key in _frame_contexts:
+        cached = _frame_contexts[cache_key]
+        if cached.target_tab and not getattr(cached.target_tab, "closed", False) and not getattr(tab, "closed", False):
+            return cached
+
+    frame_id: Optional[str] = None
+    try:
+        iframe_eval = await tab.send(cdp.runtime.evaluate(
+            expression=f"({RESOLVE_IFRAME_NODE_JS})({json.dumps(frame)})",
+            return_by_value=False,
+            await_promise=True,
+        ))
+        remote_obj = iframe_eval[0] if isinstance(iframe_eval, tuple) else iframe_eval
+        if remote_obj and getattr(remote_obj, "object_id", None):
+            obj_id = cdp.runtime.RemoteObjectId(remote_obj.object_id)
+            iframe_node = await tab.send(cdp.dom.describe_node(object_id=obj_id))
+            try:
+                await tab.send(cdp.runtime.release_object(object_id=obj_id))
+            except Exception:
+                pass
+            if iframe_node and getattr(iframe_node, "frame_id", None):
+                frame_id = str(iframe_node.frame_id)
+    except Exception:
+        pass
+
+    if not frame_id:
+        try:
+            tree = await tab.send(cdp.page.get_frame_tree())
+            frame_id = _find_frame_id_in_tree(tree, frame)
+        except Exception:
+            pass
+
+    target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and hasattr(tab.browser, "targets"):
+        for t in tab.browser.targets:
+            if getattr(t, "type_", None) == "iframe":
+                target_info = getattr(t, "target", None)
+                opener = getattr(target_info, "opener_frame_id", None) if target_info else None
+                t_url = getattr(t, "url", None) or (target_info.url if target_info else "")
+                t_id = getattr(t, "target_id", None) or (target_info.target_id if target_info else None)
+                if (frame_id and opener and str(opener) == frame_id) or \
+                   (frame_id and t_id and str(t_id) == frame_id) or \
+                   (frame and t_url and frame in t_url):
+                    target_tab = t
+                    if not frame_id:
+                        frame_id = str(opener or t_id or "")
+                    break
+
+    context_id: Optional[int] = None
+    if frame_id:
+        try:
+            try:
+                await tab.send(cdp.page.enable())
+            except Exception:
+                pass
+            raw_ctx = await tab.send(cdp.page.create_isolated_world(
+                frame_id=cdp.page.FrameId(frame_id),
+                world_name="stealth_cross_origin",
+                grant_univeral_access=True,
+            ))
+            if raw_ctx is not None:
+                context_id = int(raw_ctx)
+        except Exception:
+            context_id = None
+
+    if context_id is None and target_tab is tab:
+        try:
+            targets = await tab.send(cdp.target.get_targets())
+            for ti in targets:
+                if getattr(ti, "type_", None) == "iframe":
+                    opener = getattr(ti, "opener_frame_id", None)
+                    ti_url = getattr(ti, "url", "")
+                    if (frame_id and opener and str(opener) == frame_id) or (frame and ti_url and frame in ti_url):
+                        if not frame_id and opener:
+                            frame_id = str(opener)
+                        try:
+                            await tab.send(cdp.target.attach_to_target(target_id=ti.target_id, flatten=True))
+                        except Exception:
+                            pass
+                        if hasattr(tab, "browser") and tab.browser and hasattr(tab.browser, "targets"):
+                            for bt in tab.browser.targets:
+                                if getattr(bt, "target_id", None) == ti.target_id:
+                                    target_tab = bt
+                                    break
+                        break
+        except Exception:
+            pass
+
+    if frame_id or context_id is not None or target_tab is not tab:
+        ctx = FrameContext(
+            frame_id=frame_id,
+            context_id=context_id,
+            target_tab=target_tab,
+            is_cross_origin=True,
+        )
+        _frame_contexts[cache_key] = ctx
+        while len(_frame_contexts) > MAX_TRACKED_NODES:
+            _frame_contexts.pop(next(iter(_frame_contexts)), None)
+        return ctx
+
+    return None
+
+
+async def resolve_cross_origin_node(
+    tab: Tab,
+    selector: str,
+    frame: str,
+    parts: Optional[List[str]] = None,
+    is_deep: bool = False,
+    is_xpath: bool = False,
+    xpath_expr: str = "",
+) -> Optional[int]:
+    """
+    Resolve a selector inside a cross-origin iframe using its frame context.
+
+    Evaluates the selector within the iframe's isolated world or separate CDP
+    target session and returns the resolved backend node ID.
+
+    Args:
+        tab (Tab): Browser tab.
+        selector (str): CSS selector, deep selector, or XPath.
+        frame (str): Iframe reference.
+        parts (Optional[List[str]]): Deep selector segments if applicable.
+        is_deep (bool): Whether selector uses deep combinators.
+        is_xpath (bool): Whether selector is XPath.
+        xpath_expr (str): XPath expression string.
+
+    Returns:
+        Optional[int]: Backend node id, or None when element was not found.
+    """
+    frame_ctx = await resolve_frame_context(tab, frame)
+    if not frame_ctx:
+        return None
+
+    expression = build_resolve_expression(
+        selector=selector,
+        frame=None,
+        parts=parts if is_deep else None,
+        is_xpath=is_xpath,
+        xpath_expr=xpath_expr,
+    )
+
+    eval_kwargs: Dict[str, Any] = {
+        "expression": expression,
+        "return_by_value": False,
+        "await_promise": True,
+    }
+    if frame_ctx.context_id is not None and frame_ctx.target_tab is tab:
+        eval_kwargs["context_id"] = cdp.runtime.ExecutionContextId(int(frame_ctx.context_id))
+
+    try:
+        eval_result = await frame_ctx.target_tab.send(cdp.runtime.evaluate(**eval_kwargs))
+        remote_obj = eval_result[0] if isinstance(eval_result, tuple) else eval_result
+        if remote_obj and getattr(remote_obj, "object_id", None):
+            obj_id = cdp.runtime.RemoteObjectId(remote_obj.object_id)
+            node = await frame_ctx.target_tab.send(cdp.dom.describe_node(object_id=obj_id))
+            try:
+                await frame_ctx.target_tab.send(cdp.runtime.release_object(object_id=obj_id))
+            except Exception:
+                pass
+            if node and hasattr(node, "backend_node_id"):
+                bid = int(node.backend_node_id)
+                _track_node(bid, frame_ctx.context_id, frame_ctx.target_tab if frame_ctx.target_tab is not tab else None)
+                return bid
+    except Exception:
+        pass
+
+    return None
+
+
 _last_mouse_positions: Dict[int, Tuple[float, float]] = {}
 
 
@@ -732,8 +1014,8 @@ async def find_node(
         combinators (e.g. host-tag >>> .inner-button or host >> child)
       - XPath expressions using xpath= prefix or starting with //
         (e.g. xpath=//input[@name='q'] or //button[text()='Submit'])
-      - Same-origin iframe targeting via the frame argument (accepts iframe
-        CSS selector, name, or id attribute)
+      - Iframe targeting via the frame argument (accepts iframe CSS
+        selector, name, id, or XPath; supports both same-origin and cross-origin)
 
     Only the document root is fetched for standard selectors with no frame,
     so lookups stay fast on large pages.
@@ -742,7 +1024,7 @@ async def find_node(
         tab (Tab): Browser tab.
         selector (str): CSS selector, deep selector, or XPath.
         timeout (float): Seconds to keep polling while the element is missing.
-        frame (Optional[str]): Same-origin iframe selector, name, or id.
+        frame (Optional[str]): Iframe selector, name, id, or XPath.
 
     Returns:
         Optional[int]: Backend node id, or None when nothing matched in time.
@@ -766,8 +1048,9 @@ async def find_node(
             except Exception:
                 pass
         else:
+            xpath_expr = extract_xpath(selector) if is_xpath else ""
+            found_bid = None
             try:
-                xpath_expr = extract_xpath(selector) if is_xpath else ""
                 expression = build_resolve_expression(
                     selector=selector,
                     frame=frame,
@@ -789,9 +1072,28 @@ async def find_node(
                     except Exception:
                         pass
                     if node and hasattr(node, "backend_node_id"):
-                        return int(node.backend_node_id)
+                        found_bid = int(node.backend_node_id)
             except Exception:
                 pass
+
+            if found_bid is not None:
+                return found_bid
+
+            if frame is not None:
+                try:
+                    co_bid = await resolve_cross_origin_node(
+                        tab=tab,
+                        selector=selector,
+                        frame=frame,
+                        parts=parts if is_deep else None,
+                        is_deep=is_deep,
+                        is_xpath=is_xpath,
+                        xpath_expr=xpath_expr,
+                    )
+                    if co_bid is not None:
+                        return co_bid
+                except Exception:
+                    pass
 
         if time.monotonic() >= deadline:
             return None
@@ -811,14 +1113,43 @@ async def call_on_node(tab: Tab, backend_node_id: int, function: str, *args: Any
     Returns:
         Any: Returned value, by value.
     """
-    remote = await tab.send(cdp.dom.resolve_node(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
-    result, exception = await tab.send(cdp.runtime.call_function_on(
+    target_tab = _node_tabs.get(backend_node_id, tab)
+    if getattr(target_tab, "closed", False):
+        target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and hasattr(target_tab, "browser") and target_tab.browser and target_tab.browser is not tab.browser:
+        target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and not getattr(target_tab, "browser", None):
+        target_tab = tab
+
+    resolve_kwargs: Dict[str, Any] = {
+        "backend_node_id": cdp.dom.BackendNodeId(backend_node_id)
+    }
+    ctx_id = _node_contexts.get(backend_node_id)
+    if getattr(target_tab, "closed", False) or (target_tab is not tab and target_tab is not _node_tabs.get(backend_node_id)):
+        ctx_id = None
+    if ctx_id is not None and target_tab is tab:
+        resolve_kwargs["execution_context_id"] = cdp.runtime.ExecutionContextId(int(ctx_id))
+
+    try:
+        remote = await target_tab.send(cdp.dom.resolve_node(**resolve_kwargs))
+    except Exception:
+        if "execution_context_id" in resolve_kwargs:
+            resolve_kwargs.pop("execution_context_id")
+            remote = await target_tab.send(cdp.dom.resolve_node(**resolve_kwargs))
+        else:
+            raise
+
+    result, exception = await target_tab.send(cdp.runtime.call_function_on(
         function,
         object_id=remote.object_id,
         arguments=[cdp.runtime.CallArgument(value=arg) for arg in args],
         return_by_value=True,
         await_promise=True,
     ))
+    try:
+        await target_tab.send(cdp.runtime.release_object(object_id=remote.object_id))
+    except Exception:
+        pass
     if exception:
         raise RuntimeError(exception.text)
     return result.value
@@ -835,10 +1166,24 @@ async def node_center(tab: Tab, backend_node_id: int) -> Optional[Tuple[float, f
     Returns:
         Optional[Tuple[float, float]]: (x, y), or None when the node has no layout box.
     """
+    target_tab = _node_tabs.get(backend_node_id, tab)
+    if getattr(target_tab, "closed", False):
+        target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and hasattr(target_tab, "browser") and target_tab.browser and target_tab.browser is not tab.browser:
+        target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and not getattr(target_tab, "browser", None):
+        target_tab = tab
+
+    quads = None
     try:
-        quads = await tab.send(cdp.dom.get_content_quads(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
+        quads = await target_tab.send(cdp.dom.get_content_quads(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
     except Exception:
-        return None
+        pass
+    if not quads and target_tab is not tab:
+        try:
+            quads = await tab.send(cdp.dom.get_content_quads(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
+        except Exception:
+            pass
     if not quads:
         return None
     quad = quads[0]
@@ -856,10 +1201,21 @@ async def scroll_into_view(tab: Tab, backend_node_id: int) -> Optional[Tuple[flo
     Returns:
         Optional[Tuple[float, float]]: Settled center point, or None when the node has no layout box.
     """
+    target_tab = _node_tabs.get(backend_node_id, tab)
+    if getattr(target_tab, "closed", False):
+        target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and hasattr(target_tab, "browser") and target_tab.browser and target_tab.browser is not tab.browser:
+        target_tab = tab
+    if hasattr(tab, "browser") and tab.browser and not getattr(target_tab, "browser", None):
+        target_tab = tab
+
     try:
-        await tab.send(cdp.dom.scroll_into_view_if_needed(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
+        await target_tab.send(cdp.dom.scroll_into_view_if_needed(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
     except Exception:
-        pass
+        try:
+            await tab.send(cdp.dom.scroll_into_view_if_needed(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
+        except Exception:
+            pass
     previous = await node_center(tab, backend_node_id)
     for _ in range(SCROLL_SETTLE_ATTEMPTS):
         if previous is None:
@@ -881,7 +1237,8 @@ async def move_mouse(tab: Tab, x: float, y: float) -> None:
         x (float): Target x in viewport CSS pixels.
         y (float): Target y in viewport CSS pixels.
     """
-    start_x, start_y = _last_mouse_positions.get(id(tab), (x + random.uniform(-120, 120), y + random.uniform(-80, 80)))
+    tab_key = _tab_cache_id(tab)
+    start_x, start_y = _last_mouse_positions.get(tab_key, (x + random.uniform(-120, 120), y + random.uniform(-80, 80)))
     for step in range(1, MOUSE_MOVE_STEPS + 1):
         progress = step / MOUSE_MOVE_STEPS
         eased = progress * progress * (3 - 2 * progress)
@@ -891,8 +1248,8 @@ async def move_mouse(tab: Tab, x: float, y: float) -> None:
             x=start_x + (x - start_x) * eased + jitter,
             y=start_y + (y - start_y) * eased + jitter,
         ))
-    _last_mouse_positions.pop(id(tab), None)
-    _last_mouse_positions[id(tab)] = (x, y)
+    _last_mouse_positions.pop(tab_key, None)
+    _last_mouse_positions[tab_key] = (x, y)
     while len(_last_mouse_positions) > MAX_TRACKED_TABS:
         _last_mouse_positions.pop(next(iter(_last_mouse_positions)))
 
@@ -939,9 +1296,16 @@ async def focus_node(tab: Tab, backend_node_id: int) -> None:
         tab (Tab): Browser tab.
         backend_node_id (int): Target node.
     """
+    target_tab = _node_tabs.get(backend_node_id, tab)
     try:
-        await tab.send(cdp.dom.focus(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
+        await target_tab.send(cdp.dom.focus(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
     except Exception:
+        if target_tab is not tab:
+            try:
+                await tab.send(cdp.dom.focus(backend_node_id=cdp.dom.BackendNodeId(backend_node_id)))
+                return
+            except Exception:
+                pass
         await call_on_node(tab, backend_node_id, FOCUS_JS)
 
 

@@ -578,7 +578,7 @@ async def click_element(
         selector (str): CSS selector, deep selector (host >>> button), or XPath.
         text_match (Optional[str]): Click element with matching text.
         timeout (int): Timeout in milliseconds.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if clicked successfully.
@@ -614,7 +614,7 @@ async def type_text(
         delay_ms (int): Delay between keystrokes in milliseconds.
         parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
         shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if typed successfully.
@@ -644,7 +644,7 @@ async def paste_text(
         selector (str): CSS selector, deep selector, or XPath.
         text (str): Text to paste.
         clear_first (bool): Clear field before pasting.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if pasted successfully.
@@ -678,7 +678,7 @@ async def press_key(
         selector (Optional[str]): CSS selector, deep selector, or XPath to focus before pressing. Presses on the focused element when omitted.
         count (int): Number of times to press the key.
         delay_ms (int): Delay between presses in milliseconds.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -801,7 +801,7 @@ async def choose_option(
         option_text (str): Visible text of the option to pick.
         filter_text (Optional[str]): Optional text to type into the combobox to filter options.
         timeout (int): Timeout in milliseconds to wait for elements. Defaults to 10000.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         Dict[str, Any]: { "success": True, "selected": str, "option": str, "verification": str }
@@ -858,7 +858,7 @@ async def wait_for_element(
         timeout (int): Timeout in milliseconds.
         visible (bool): Wait for element to be visible.
         text_content (Optional[str]): Wait for specific text content.
-        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if element found.

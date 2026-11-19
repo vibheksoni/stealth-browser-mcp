@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cross-Origin Iframe Fixture</title>
+</head>
+<body>
+  <h1>Cross-Origin Iframe Fixture</h1>
+  <div>
+    <label for="outer-input">Outer Input:</label>
+    <input type="text" id="outer-input" placeholder="Outer frame text" value="outer-val">
+  </div>
+
+  <div style="margin-top: 15px;">
+    <iframe id="cross-iframe" name="cross-iframe" src="about:blank" style="width: 500px; height: 300px; border: 1px solid #ccc;"></iframe>
+  </div>
+
+  <div id="outer-status-panel" style="margin-top: 10px;">
+    <p>Outer Status: <span id="outer-status">ready</span></p>
+  </div>
+
+  <script>
+    (function() {
+      const params = new URLSearchParams(window.location.search);
+      const frameSrc = params.get("frame_src") || params.get("src");
+      if (frameSrc) {
+        document.getElementById("cross-iframe").src = frameSrc;
+      }
+    })();
+  </script>
+</body>
+</html>
