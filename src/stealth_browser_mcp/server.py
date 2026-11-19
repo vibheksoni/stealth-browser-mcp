@@ -385,6 +385,55 @@ async def navigate(
     )
 
 @section_tool("browser-management")
+async def wait_for(
+    instance_id: str,
+    selector: Optional[str] = None,
+    visible: bool = True,
+    present: bool = False,
+    state: Optional[str] = None,
+    text: Optional[str] = None,
+    url: Optional[str] = None,
+    networkidle: bool = False,
+    timeout: int = 30000,
+) -> Dict[str, Any]:
+    """
+    Wait for page or element conditions.
+
+    Supports waiting for:
+    - Element visibility or presence (selector + visible/present/state)
+    - Text content (in selector element or on page)
+    - URL navigation / match (exact, substring, or regex)
+    - Network idle (~500 ms with no in-flight requests)
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (Optional[str]): CSS selector or XPath.
+        visible (bool): Wait for element to be visible (default: True).
+        present (bool): Wait for element to be present in DOM (not necessarily visible).
+        state (Optional[str]): State to wait for ('visible' or 'present'/'attached').
+        text (Optional[str]): Text content to wait for.
+        url (Optional[str]): URL or URL substring/regex to wait for.
+        networkidle (bool): Wait for network to become idle (~500 ms with no in-flight requests).
+        timeout (int): Timeout in milliseconds (default: 30000).
+
+    Returns:
+        Dict[str, Any]: Result indicating success and elapsed time.
+    """
+    if isinstance(timeout, str):
+        timeout = int(timeout)
+    return await browser_manager.wait_for(
+        instance_id=instance_id,
+        selector=selector,
+        visible=visible,
+        present=present,
+        state=state,
+        text=text,
+        url=url,
+        networkidle=networkidle,
+        timeout=timeout,
+    )
+
+@section_tool("browser-management")
 async def go_back(instance_id: str) -> bool:
     """
     Navigate back in history.

@@ -3,6 +3,7 @@
 import json
 import asyncio
 import os
+import re
 import time
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -14,7 +15,9 @@ from nodriver import Browser, Tab
 from . import cdp_raw
 from .browser_launcher import launch_browser
 from .debug_logger import debug_logger
+from .dom_handler import DOMHandler
 from .models import BrowserInstance, BrowserState, BrowserOptions, PageState
+from .network_idle import NetworkIdleTracker, wait_for_network_idle
 from .persistent_storage import persistent_storage
 from .dynamic_hook_system import dynamic_hook_system
 from .platform_utils import get_platform_info, check_browser_executable, merge_browser_args
@@ -939,6 +942,8 @@ class BrowserManager:
         wait_until: str,
         timeout_seconds: float,
         fired: asyncio.Event,
+        idle_tracker: Optional[NetworkIdleTracker] = None,
+        tab: Optional[Any] = None,
     ) -> None:
         """
         Wait for a navigation milestone within the remaining timeout budget.
@@ -950,15 +955,35 @@ class BrowserManager:
             wait_until (str): Desired wait condition.
             timeout_seconds (float): Remaining timeout budget in seconds.
             fired (asyncio.Event): Set by the page event handler registered before navigation.
+            idle_tracker (Optional[NetworkIdleTracker]): Active tracker if wait_until is networkidle.
+            tab (Optional[Any]): Fallback tab instance if no tracker was passed.
         """
         if timeout_seconds <= 0:
             raise asyncio.TimeoutError("Navigation wait budget exhausted")
 
+        wait_budget = timeout_seconds - min(2.0, timeout_seconds * 0.2)
         if wait_until == "networkidle":
-            await asyncio.sleep(min(timeout_seconds, 2.0))
+            if idle_tracker is not None:
+                idle = await idle_tracker.wait(timeout=wait_budget)
+                if not idle:
+                    debug_logger.log_warning(
+                        "browser_manager",
+                        "navigate",
+                        f"Page did not reach 'networkidle' within {wait_budget:.1f}s, returning current state",
+                    )
+                return
+            if tab is not None:
+                idle = await wait_for_network_idle(tab, idle_time=0.5, timeout=wait_budget)
+                if not idle:
+                    debug_logger.log_warning(
+                        "browser_manager",
+                        "navigate",
+                        f"Page did not reach 'networkidle' within {wait_budget:.1f}s, returning current state",
+                    )
+                return
+            await asyncio.sleep(min(timeout_seconds, 0.5))
             return
 
-        wait_budget = timeout_seconds - min(2.0, timeout_seconds * 0.2)
         try:
             await asyncio.wait_for(fired.wait(), timeout=wait_budget)
         except asyncio.TimeoutError:
@@ -1008,8 +1033,13 @@ class BrowserManager:
             start_time = time.monotonic()
             fired = asyncio.Event()
             event_type = self._navigation_event_type(wait_until)
-            handler = lambda _event: fired.set()
+            handler = lambda _event, *args: fired.set()
             tab.add_handler(event_type, handler)
+
+            idle_tracker: Optional[NetworkIdleTracker] = None
+            if wait_until == "networkidle":
+                idle_tracker = NetworkIdleTracker(tab, idle_time=0.5)
+                await idle_tracker.start()
 
             try:
                 await asyncio.wait_for(
@@ -1022,6 +1052,8 @@ class BrowserManager:
                     wait_until,
                     timeout_seconds - elapsed,
                     fired,
+                    idle_tracker=idle_tracker,
+                    tab=tab,
                 )
 
                 elapsed = time.monotonic() - start_time
@@ -1068,6 +1100,210 @@ class BrowserManager:
                     raise
             finally:
                 self._remove_tab_handler(tab, event_type, handler)
+                if idle_tracker is not None:
+                    await idle_tracker.stop()
+
+    async def wait_for_network_idle(
+        self,
+        instance_id: str,
+        timeout: int = 30000,
+        idle_time: float = 0.5,
+    ) -> bool:
+        """
+        Wait until network traffic on the instance tab is idle.
+
+        Args:
+            instance_id (str): Browser instance ID.
+            timeout (int): Timeout in milliseconds.
+            idle_time (float): Idle window duration in seconds (default: 0.5).
+
+        Returns:
+            bool: True if idle was reached, False on timeout.
+        """
+        tab = await self.get_tab(instance_id)
+        if not tab:
+            raise Exception(f"Instance not found: {instance_id}")
+        await self.touch_instance(instance_id)
+        timeout_seconds = max(timeout, 0) / 1000
+        return await wait_for_network_idle(tab, idle_time=idle_time, timeout=timeout_seconds)
+
+    async def wait_for(
+        self,
+        instance_id: str,
+        selector: Optional[str] = None,
+        visible: bool = True,
+        present: bool = False,
+        state: Optional[str] = None,
+        text: Optional[str] = None,
+        url: Optional[str] = None,
+        networkidle: bool = False,
+        timeout: int = 30000,
+        raise_on_timeout: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Wait for page or element conditions.
+
+        Supports waiting for:
+        - Element visibility or presence (selector + visible/present/state)
+        - Text content (in selector element or on page)
+        - URL navigation / match (exact, substring, or regex)
+        - Network idle (~500 ms with no in-flight requests)
+
+        Args:
+            instance_id (str): Browser instance ID.
+            selector (Optional[str]): CSS selector or XPath.
+            visible (bool): Wait for element to be visible (default: True).
+            present (bool): Wait for element to be present in DOM (not necessarily visible).
+            state (Optional[str]): State to wait for ('visible' or 'present'/'attached').
+            text (Optional[str]): Text content to wait for.
+            url (Optional[str]): URL or URL substring/regex to wait for.
+            networkidle (bool): Wait for network to become idle (~500 ms with no in-flight requests).
+            timeout (int): Timeout in milliseconds (default: 30000).
+            raise_on_timeout (bool): If True, raise TimeoutError on timeout.
+
+        Returns:
+            Dict[str, Any]: Result dictionary with success, conditions met, and elapsed time.
+        """
+        tab = await self.get_tab(instance_id)
+        if not tab:
+            raise Exception(f"Instance not found: {instance_id}")
+
+        await self.touch_instance(instance_id)
+
+        timeout_ms = max(int(timeout), 0) if timeout is not None else 30000
+        timeout_seconds = timeout_ms / 1000
+        start_time = time.monotonic()
+        deadline = start_time + timeout_seconds
+
+        if present or (state and state.lower() in ("present", "attached")):
+            wait_visible = False
+        elif state and state.lower() in ("visible",):
+            wait_visible = True
+        else:
+            wait_visible = visible
+
+        conditions_met: List[str] = []
+
+        if networkidle:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if raise_on_timeout:
+                    raise TimeoutError(f"Wait for networkidle timed out after {timeout_ms}ms")
+                return {
+                    "success": False,
+                    "error": f"Wait for networkidle timed out after {timeout_ms}ms",
+                    "elapsed_ms": round((time.monotonic() - start_time) * 1000, 1),
+                }
+            idle = await wait_for_network_idle(tab, idle_time=0.5, timeout=remaining)
+            if not idle:
+                if raise_on_timeout:
+                    raise TimeoutError(f"Wait for networkidle timed out after {timeout_ms}ms")
+                return {
+                    "success": False,
+                    "error": f"Wait for networkidle timed out after {timeout_ms}ms",
+                    "elapsed_ms": round((time.monotonic() - start_time) * 1000, 1),
+                }
+            conditions_met.append("networkidle")
+
+        if selector:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if raise_on_timeout:
+                    raise TimeoutError(f"Wait for selector '{selector}' timed out after {timeout_ms}ms")
+                return {
+                    "success": False,
+                    "error": f"Wait for selector '{selector}' timed out after {timeout_ms}ms",
+                    "elapsed_ms": round((time.monotonic() - start_time) * 1000, 1),
+                }
+            found = await DOMHandler.wait_for_element(
+                tab,
+                selector=selector,
+                timeout=int(remaining * 1000),
+                visible=wait_visible,
+                text_content=text,
+            )
+            if not found:
+                state_str = "visible" if wait_visible else "present"
+                if raise_on_timeout:
+                    raise TimeoutError(
+                        f"Wait for selector '{selector}' ({state_str}) timed out after {timeout_ms}ms"
+                    )
+                return {
+                    "success": False,
+                    "error": f"Wait for selector '{selector}' ({state_str}) timed out after {timeout_ms}ms",
+                    "elapsed_ms": round((time.monotonic() - start_time) * 1000, 1),
+                }
+            conditions_met.append(f"selector:{selector}")
+
+        elif text:
+            escaped_text = json.dumps(text)
+            matched = False
+            while time.monotonic() < deadline:
+                try:
+                    matched = await tab.evaluate(
+                        f"(document.body ? (document.body.innerText || document.body.textContent || '') : '').includes({escaped_text})"
+                    )
+                    if matched:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+            if not matched:
+                if raise_on_timeout:
+                    raise TimeoutError(f"Wait for text '{text}' timed out after {timeout_ms}ms")
+                return {
+                    "success": False,
+                    "error": f"Wait for text '{text}' timed out after {timeout_ms}ms",
+                    "elapsed_ms": round((time.monotonic() - start_time) * 1000, 1),
+                }
+            conditions_met.append(f"text:{text}")
+
+        if url:
+            matched = False
+            current_url = ""
+            while time.monotonic() < deadline:
+                try:
+                    current_url = getattr(tab, "url", None)
+                    if not current_url:
+                        current_url = await tab.evaluate("window.location.href")
+                    if current_url:
+                        if url == current_url or url in current_url:
+                            matched = True
+                            break
+                        try:
+                            if re.search(url, current_url):
+                                matched = True
+                                break
+                        except re.error:
+                            pass
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+            if not matched:
+                if raise_on_timeout:
+                    raise TimeoutError(
+                        f"Wait for url '{url}' timed out after {timeout_ms}ms (current: '{current_url}')"
+                    )
+                return {
+                    "success": False,
+                    "error": f"Wait for url '{url}' timed out after {timeout_ms}ms (current: '{current_url}')",
+                    "elapsed_ms": round((time.monotonic() - start_time) * 1000, 1),
+                }
+            conditions_met.append(f"url:{url}")
+
+        if not conditions_met:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            conditions_met.append(f"delay:{timeout_ms}ms")
+
+        elapsed_ms = round((time.monotonic() - start_time) * 1000, 1)
+        return {
+            "success": True,
+            "instance_id": instance_id,
+            "conditions": conditions_met,
+            "elapsed_ms": elapsed_ms,
+        }
 
     async def get_tab(
         self,

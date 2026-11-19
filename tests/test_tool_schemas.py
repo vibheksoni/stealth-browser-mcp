@@ -21,6 +21,7 @@ NULL_DEFAULT_PARAMS = {
     "save_session": ["file_path", "origins"],
     "restore_session": ["file_path", "session_data"],
     "choose_option": ["filter_text", "frame"],
+    "wait_for": ["selector", "state", "text", "url"],
 }
 
 
