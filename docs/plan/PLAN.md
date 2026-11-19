@@ -241,7 +241,7 @@ SB-37 (folded into SB-41/42/44/46), SB-40.
 | SB-30 | `doctor` tool: binaries per family, keyring / password store reachable (Linux), seed ages, live sessions vs cap, stale locks, data dir writable | S | SB-03, SB-43 | Fake-environment tests per check; output redacted |
 | SB-31 | HAR 1.2 export | S | - | Fixture capture -> HAR shape check; tool registered in `test_tool_schemas.py` |
 
-### agy lane (order: SB-21, 16, 36, 46, 47, 48, 14, 15, 49, 50, 19, 34, 33, 32, 35, 38, 17, 22)
+### agy lane (order: SB-21, 16, 36, 46, 47, 48, 14, 15, 49, 50, 19, 34, 33, 32, 35, 38, 17, 22, 60)
 
 | ID | Title | Size | Deps | Acceptance |
 |---|---|---|---|---|
@@ -263,6 +263,7 @@ SB-37 (folded into SB-41/42/44/46), SB-40.
 | SB-38 | Seed snapshots / rollback | M | SB-44 | Snapshot under seed lock; restore exact file set |
 | SB-17 | Cross-origin iframe targeting | M | SB-16 | Two-port fixture |
 | SB-22 | Grapheme-aware typing + IME option | S | SB-14 | Emoji ZWJ + CJK read back exactly |
+| SB-60 | Remote MCP transport + agent ergonomics: streamable HTTP with bearer-token auth (token from env var `STEALTH_MCP_TOKEN` or file `STEALTH_MCP_TOKEN_FILE`, never committed, never logged), binds 127.0.0.1 by default with configurable host and port; (a) screenshot tools return MCP image content (not only paths); (b) each MCP client session automatically gets its own isolated browser session (SB-47 per-chat session), closed on disconnect; (c) every action returns a compact page summary (url, title, interactive elements list, size-capped) | M | SB-47, SB-34, SB-36 | Tests: missing/wrong/malformed token -> 401 and no tool runs; correct token works; token never in logs/output; two client sessions get distinct browser sessions and cannot see each other's tabs; closing one leaves the other; screenshot result contains an image content block; every action result has summary fields within the size cap. No Nginx, DNS or deployment work (owned by Rudy and Alan) |
 
 macOS sources and Keychain (later pass): one slice pair, SB-41/SB-48 style, after Windows is green.
 
@@ -292,3 +293,6 @@ macOS sources and Keychain (later pass): one slice pair, SB-41/SB-48 style, afte
 - Q7: Seed from profile A; Alan accepts the sign-out risk from token-rotating sites. [Verified: Alan widget]
 - Q8: Windows seed refresh: best-effort copy while Chrome is open (skip locked files, report what was skipped). [Verified: Alan widget]
 - Q9: No limit on concurrent browsers (no default cap; resource use is the operator's call). [Verified: Alan widget]
+
+## Added 2026-11-19 12:53 PM ET (Alan approved)
+- SB-60 (agy lane, last in the agy order): remote MCP transport (streamable HTTP + bearer token, localhost default, configurable host/port), image content for screenshots, per-MCP-session isolated browser session, compact page summary on every action. Out of scope: Nginx, DNS, deployment (Rudy and Alan).
