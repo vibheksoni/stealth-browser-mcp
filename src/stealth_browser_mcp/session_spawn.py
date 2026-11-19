@@ -29,11 +29,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from . import browser_sources
 from . import cdp_raw
 from . import profiles
+from . import seed_extensions
 from . import session_registry
 from .file_lock import FileLock
 from .platform_utils import BROWSER_EXECUTABLE_ENV, check_browser_executable
@@ -264,6 +265,23 @@ def clone_seed_to_session(
                         continue
                     _copy_entry_recursive(item, sub_target / item.name)
 
+        # SB-50: Fix unpacked extension paths only when clone contains extensions
+        session_pdir = (
+            dst_dir / profile_subdir
+            if profile_subdir and profile_subdir not in (".", "", "/")
+            else dst_dir
+        )
+        if seed_extensions.clone_has_extensions(session_pdir):
+            source_dir = seed_data.get("source_dir")
+            source_pdir = (
+                Path(source_dir) / profile_subdir
+                if source_dir and profile_subdir and profile_subdir not in (".", "", "/")
+                else (Path(source_dir) if source_dir else src_dir)
+            )
+            report = seed_extensions.fixup_extension_paths(session_pdir, source_pdir)
+            if report.load_extension_args:
+                seed_data["load_extension_args"] = list(report.load_extension_args)
+
     clone_ms = round((time.monotonic() - t0) * 1000.0, 2)
     return clone_ms
 
@@ -292,6 +310,11 @@ def build_spawn_args_and_config(
     profile_subdir = seed_data.get("profile_subdir")
     if profile_subdir and not any(a.startswith("--profile-directory=") for a in args):
         args.append(f"--profile-directory={profile_subdir}")
+
+    # SB-50: Pass --load-extension for unpacked extensions found in the clone
+    for ext_arg in seed_data.get("load_extension_args") or []:
+        if ext_arg not in args:
+            args.append(ext_arg)
 
     args_modifier: Optional[Callable[[List[str]], List[str]]] = None
     if plat == "linux":
