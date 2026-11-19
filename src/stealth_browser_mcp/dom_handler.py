@@ -19,7 +19,8 @@ DEFAULT_ELEMENT_TIMEOUT = 10.0
 WAIT_POLL_INTERVAL = 0.1
 ELEMENT_READY_JS = """function (visible, text) {
   if (visible) {
-    const style = window.getComputedStyle(this);
+    const win = this.ownerDocument ? (this.ownerDocument.defaultView || window) : window;
+    const style = win.getComputedStyle(this);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
   }
   return !text || (this.innerText || this.textContent || '').includes(text);
@@ -91,8 +92,9 @@ class DOMHandler:
                              {'text_filter': text_filter, 'visible_only': visible_only,
                               'limit': limit, 'processed_limit': processed_limit})
         try:
-            if selector.startswith('//'):
-                elements = await tab.xpath(selector)
+            if selector.startswith('//') or selector.lower().startswith('xpath='):
+                xpath_sel = selector[6:].strip() if selector.lower().startswith('xpath=') else selector
+                elements = await tab.xpath(xpath_sel)
                 debug_logger.log_info('DOMHandler', 'query_elements',
                                      f'XPath query returned {len(elements)} elements')
             else:
@@ -186,21 +188,28 @@ class DOMHandler:
             return []
 
     @staticmethod
-    async def _resolve_target(tab: Tab, selector: str, timeout: float) -> int:
+    async def _resolve_target(
+        tab: Tab,
+        selector: str,
+        timeout: float,
+        frame: Optional[str] = None
+    ) -> int:
         """
         Resolve a selector to a backend node id or raise.
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector.
+            selector (str): CSS selector, deep selector, or XPath.
             timeout (float): Seconds to wait for the element.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
 
         Returns:
             int: Backend node id.
         """
-        backend_node_id = await input_actions.find_node(tab, selector, timeout)
+        backend_node_id = await input_actions.find_node(tab, selector, timeout, frame=frame)
         if backend_node_id is None:
-            raise Exception(f"Element not found: {selector}")
+            target_desc = f"{selector} (in frame {frame})" if frame else selector
+            raise Exception(f"Element not found: {target_desc}")
         return backend_node_id
 
     @staticmethod
@@ -208,7 +217,8 @@ class DOMHandler:
         tab: Tab,
         selector: str,
         text_match: Optional[str] = None,
-        timeout: int = 10000
+        timeout: int = 10000,
+        frame: Optional[str] = None
     ) -> bool:
         """
         Click an element with trusted mouse events.
@@ -220,9 +230,10 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the element.
+            selector (str): CSS selector, deep selector, or XPath for the element.
             text_match (Optional[str]): Match element by text content.
             timeout (int): Timeout in milliseconds.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
 
         Returns:
             bool: True if click succeeded.
@@ -234,7 +245,7 @@ class DOMHandler:
                     raise Exception(f"Element not found with text: {text_match}")
                 backend_node_id = int(element.backend_node_id)
             else:
-                backend_node_id = await DOMHandler._resolve_target(tab, selector, timeout / 1000)
+                backend_node_id = await DOMHandler._resolve_target(tab, selector, timeout / 1000, frame=frame)
             await input_actions.click_node(tab, backend_node_id)
             return True
         except Exception as e:
@@ -248,7 +259,8 @@ class DOMHandler:
         clear_first: bool = True,
         delay_ms: int = 50,
         parse_newlines: bool = False,
-        shift_enter: bool = False
+        shift_enter: bool = False,
+        frame: Optional[str] = None
     ) -> bool:
         """
         Type text with trusted keyboard events and human-like delays.
@@ -259,18 +271,19 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the input element.
+            selector (str): CSS selector, deep selector, or XPath for the input element.
             text (str): Text to type.
             clear_first (bool): Clear input before typing.
             delay_ms (int): Delay between keystrokes in milliseconds.
-            parse_newlines (bool): If True, press Enter for each \n instead of inserting a line break.
-            shift_enter (bool): If True, press Shift+Enter for each \n (for chat apps).
+            parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
+            shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
 
         Returns:
             bool: True if typing succeeded.
         """
         try:
-            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT)
+            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame)
             await input_actions.focus_node(tab, backend_node_id)
             if clear_first:
                 await input_actions.clear_field(tab, backend_node_id)
@@ -288,7 +301,8 @@ class DOMHandler:
         tab: Tab,
         selector: str,
         text: str,
-        clear_first: bool = True
+        clear_first: bool = True,
+        frame: Optional[str] = None
     ) -> bool:
         """
         Insert text in one step, like a paste.
@@ -298,9 +312,10 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the input element.
+            selector (str): CSS selector, deep selector, or XPath for the input element.
             text (str): Text to paste.
             clear_first (bool): Clear input before pasting.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
 
         Returns:
             bool: True if pasting succeeded.
@@ -308,7 +323,7 @@ class DOMHandler:
         from nodriver import cdp
 
         try:
-            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT)
+            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame)
             await input_actions.focus_node(tab, backend_node_id)
             if clear_first:
                 await input_actions.clear_field(tab, backend_node_id)
@@ -324,7 +339,8 @@ class DOMHandler:
         modifiers: Optional[List[str]] = None,
         selector: Optional[str] = None,
         count: int = 1,
-        delay_ms: int = 50
+        delay_ms: int = 50,
+        frame: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Press a real key using trusted CDP Input.dispatchKeyEvent events.
@@ -337,9 +353,10 @@ class DOMHandler:
             tab (Tab): The browser tab object.
             key (str): DOM KeyboardEvent.key name (Enter, Tab, ArrowDown, F5, ...) or a single printable character.
             modifiers (Optional[List[str]]): Modifier keys to hold: Shift, Control/Ctrl, Alt, Meta/Cmd.
-            selector (Optional[str]): CSS selector to focus before pressing. Presses on the active element when omitted.
+            selector (Optional[str]): CSS selector, deep selector, or XPath to focus before pressing. Presses on the active element when omitted.
             count (int): Number of times to press the key.
             delay_ms (int): Delay between presses in milliseconds.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
 
         Returns:
             Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -354,7 +371,7 @@ class DOMHandler:
             modifier_mask, canonical_modifiers = resolve_modifiers(modifiers)
 
             if selector:
-                backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT)
+                backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame)
                 await input_actions.focus_node(tab, backend_node_id)
 
             text = descriptor["text"]
@@ -570,7 +587,8 @@ class DOMHandler:
         selector: str,
         timeout: int = 30000,
         visible: bool = True,
-        text_content: Optional[str] = None
+        text_content: Optional[str] = None,
+        frame: Optional[str] = None
     ) -> bool:
         """
         Wait for element to appear and match conditions.
@@ -580,10 +598,11 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the element.
+            selector (str): CSS selector, deep selector, or XPath for the element.
             timeout (int): Timeout in milliseconds.
             visible (bool): Wait for element to be visible.
             text_content (Optional[str]): Wait for element to contain text.
+            frame (Optional[str]): Same-origin iframe selector, name, or id.
 
         Returns:
             bool: True if element matches conditions, False otherwise.
@@ -591,7 +610,7 @@ class DOMHandler:
         deadline = time.monotonic() + max(timeout, 0) / 1000
         while True:
             try:
-                backend_node_id = await input_actions.find_node(tab, selector)
+                backend_node_id = await input_actions.find_node(tab, selector, frame=frame)
                 if backend_node_id is not None and await input_actions.call_on_node(
                     tab,
                     backend_node_id,

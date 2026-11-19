@@ -1,9 +1,10 @@
 """Trusted mouse and keyboard input through CDP Input events."""
 
 import asyncio
+import json
 import random
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from nodriver import Tab, cdp
 
@@ -22,8 +23,18 @@ PRESS_DURATION_RANGE = (0.04, 0.09)
 MAX_TRACKED_TABS = 64
 
 HIT_TEST_JS = """function (x, y) {
-  const hit = document.elementFromPoint(x, y);
-  return !!hit && (hit === this || this.contains(hit) || (hit.shadowRoot && hit.shadowRoot.contains(this)));
+  let hit = document.elementFromPoint(x, y);
+  if (!hit) return false;
+  if (hit === this || this.contains(hit)) return true;
+  if (hit.contentDocument && hit.contentDocument.contains(this)) return true;
+  while (hit && hit.shadowRoot) {
+    if (hit.shadowRoot.contains(this)) return true;
+    const inner = hit.shadowRoot.elementFromPoint(x, y);
+    if (!inner || inner === hit) break;
+    hit = inner;
+    if (hit === this || this.contains(hit)) return true;
+  }
+  return false;
 }"""
 JS_CLICK = "function () { this.click(); }"
 FOCUS_JS = "function () { if (typeof this.focus === 'function') this.focus(); }"
@@ -42,30 +53,252 @@ SELECT_CONTENTS_JS = """function () {
   return true;
 }"""
 
+RESOLVE_ELEMENT_JS = """function (selector, frameRef, parts, isXPath, xpathExpr) {
+  let root = document;
+  if (frameRef) {
+    let iframe = null;
+    if (frameRef.startsWith('//') || frameRef.toLowerCase().startsWith('xpath=')) {
+      const fXpath = frameRef.toLowerCase().startsWith('xpath=') ? frameRef.substring(6).trim() : frameRef;
+      try {
+        const res = document.evaluate(fXpath, document, null, 9, null);
+        iframe = res ? res.singleNodeValue : null;
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try {
+        iframe = document.querySelector(frameRef);
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try {
+        iframe = document.querySelector('iframe[name="' + frameRef + '"], iframe#' + frameRef);
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try {
+        let frameWin = window.frames[frameRef];
+        if (!frameWin && /^\\d+$/.test(frameRef)) {
+          frameWin = window.frames[parseInt(frameRef, 10)];
+        }
+        if (frameWin && frameWin.document) {
+          root = frameWin.document;
+        }
+      } catch (e) {}
+      if (root === document) {
+        return null;
+      }
+    } else {
+      try {
+        root = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+      } catch (e) {
+        return null;
+      }
+      if (!root) return null;
+    }
+  }
+
+  if (isXPath) {
+    const doc = root.ownerDocument || root;
+    try {
+      const result = doc.evaluate(xpathExpr, root, null, 9 /* FIRST_ORDERED_NODE_TYPE */, null);
+      const node = result ? result.singleNodeValue : null;
+      if (!node) return null;
+      if (node.nodeType === 1) return node;
+      if (node.nodeType === 2) return node.ownerElement;
+      if (node.nodeType === 3) return node.parentElement;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  if (parts && parts.length > 1) {
+    let curr = root;
+    for (let i = 0; i < parts.length; i++) {
+      if (!curr) return null;
+      let found = null;
+      try {
+        found = curr.querySelector(parts[i]);
+      } catch (e) {
+        return null;
+      }
+      if (!found) return null;
+      if (i === parts.length - 1) {
+        return found;
+      }
+      if (!found.shadowRoot) return null;
+      curr = found.shadowRoot;
+    }
+    return null;
+  }
+
+  try {
+    return root.querySelector(selector);
+  } catch (e) {
+    return null;
+  }
+}"""
+
+
+def is_xpath_selector(selector: str) -> bool:
+    """Return True if selector begins with // or xpath=."""
+    s = selector.strip()
+    return s.startswith("//") or s.lower().startswith("xpath=")
+
+
+def extract_xpath(selector: str) -> str:
+    """Extract XPath expression by stripping optional xpath= prefix."""
+    s = selector.strip()
+    if s.lower().startswith("xpath="):
+        return s[6:].strip()
+    return s
+
+
+def split_deep_selector(selector: str) -> List[str]:
+    """
+    Split a deep selector on >>> or >> combinators outside quotes.
+
+    Returns a list of selector segments. If the selector contains no deep
+    combinator, a single-element list [selector.strip()] is returned.
+    """
+    s = selector.strip()
+    parts = []
+    current = []
+    in_quote = None
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if in_quote:
+            current.append(c)
+            if c == in_quote and (i == 0 or s[i - 1] != "\\"):
+                in_quote = None
+            i += 1
+        elif c in ('"', "'"):
+            in_quote = c
+            current.append(c)
+            i += 1
+        elif s[i:i + 3] == ">>>":
+            parts.append("".join(current).strip())
+            current = []
+            i += 3
+        elif s[i:i + 2] == ">>" and (
+            (current and current[-1].isspace()) or (i + 2 < n and s[i + 2].isspace())
+        ):
+            parts.append("".join(current).strip())
+            current = []
+            i += 2
+        else:
+            current.append(c)
+            i += 1
+    if current:
+        parts.append("".join(current).strip())
+    cleaned = [p for p in parts if p]
+    return cleaned if cleaned else [s]
+
+
+def is_deep_selector(selector: str) -> bool:
+    """Return True if the selector uses deep combinators (>>> or >>) to pierce shadow roots."""
+    return len(split_deep_selector(selector)) > 1
+
+
+def build_resolve_expression(
+    selector: str,
+    frame: Optional[str] = None,
+    parts: Optional[List[str]] = None,
+    is_xpath: bool = False,
+    xpath_expr: str = "",
+) -> str:
+    """Build a JavaScript expression that resolves an element across shadow roots, frames, or XPath."""
+    args_json = (
+        f"{json.dumps(selector)}, "
+        f"{json.dumps(frame)}, "
+        f"{json.dumps(parts)}, "
+        f"{'true' if is_xpath else 'false'}, "
+        f"{json.dumps(xpath_expr)}"
+    )
+    return f"({RESOLVE_ELEMENT_JS})({args_json})"
+
+
 _last_mouse_positions: Dict[int, Tuple[float, float]] = {}
 
 
-async def find_node(tab: Tab, selector: str, timeout: float = 0.0) -> Optional[int]:
+async def find_node(
+    tab: Tab,
+    selector: str,
+    timeout: float = 0.0,
+    frame: Optional[str] = None,
+) -> Optional[int]:
     """
-    Resolve a CSS selector to a backend node id.
+    Resolve a selector to a backend node id.
 
-    Only the document root is fetched, so lookups stay fast on large pages.
+    Supports:
+      - Standard CSS selectors (e.g. #id, .class)
+      - Deep selectors that pierce open shadow roots using >>> or >>
+        combinators (e.g. host-tag >>> .inner-button or host >> child)
+      - XPath expressions using xpath= prefix or starting with //
+        (e.g. xpath=//input[@name='q'] or //button[text()='Submit'])
+      - Same-origin iframe targeting via the frame argument (accepts iframe
+        CSS selector, name, or id attribute)
+
+    Only the document root is fetched for standard selectors with no frame,
+    so lookups stay fast on large pages.
 
     Args:
         tab (Tab): Browser tab.
-        selector (str): CSS selector.
+        selector (str): CSS selector, deep selector, or XPath.
         timeout (float): Seconds to keep polling while the element is missing.
+        frame (Optional[str]): Same-origin iframe selector, name, or id.
 
     Returns:
         Optional[int]: Backend node id, or None when nothing matched in time.
     """
     deadline = time.monotonic() + max(timeout, 0.0)
+    parts = split_deep_selector(selector)
+    is_deep = len(parts) > 1
+    is_xpath = is_xpath_selector(selector)
+    use_cdp_query = (frame is None and not is_deep and not is_xpath)
+
     while True:
-        document = await tab.send(cdp.dom.get_document(depth=0))
-        node_id = await tab.send(cdp.dom.query_selector(document.node_id, selector))
-        if node_id:
-            node = await tab.send(cdp.dom.describe_node(node_id=node_id))
-            return int(node.backend_node_id)
+        if use_cdp_query:
+            try:
+                document = await tab.send(cdp.dom.get_document(depth=0))
+                if document and hasattr(document, "node_id"):
+                    node_id = await tab.send(cdp.dom.query_selector(document.node_id, selector))
+                    if node_id:
+                        node = await tab.send(cdp.dom.describe_node(node_id=node_id))
+                        if node and hasattr(node, "backend_node_id"):
+                            return int(node.backend_node_id)
+            except Exception:
+                pass
+        else:
+            try:
+                xpath_expr = extract_xpath(selector) if is_xpath else ""
+                expression = build_resolve_expression(
+                    selector=selector,
+                    frame=frame,
+                    parts=parts if is_deep else None,
+                    is_xpath=is_xpath,
+                    xpath_expr=xpath_expr,
+                )
+                eval_result = await tab.send(cdp.runtime.evaluate(
+                    expression=expression,
+                    return_by_value=False,
+                    await_promise=True,
+                ))
+                remote_obj = eval_result[0] if isinstance(eval_result, tuple) else eval_result
+                if remote_obj and getattr(remote_obj, "object_id", None):
+                    obj_id = cdp.runtime.RemoteObjectId(remote_obj.object_id)
+                    node = await tab.send(cdp.dom.describe_node(object_id=obj_id))
+                    try:
+                        await tab.send(cdp.runtime.release_object(object_id=obj_id))
+                    except Exception:
+                        pass
+                    if node and hasattr(node, "backend_node_id"):
+                        return int(node.backend_node_id)
+            except Exception:
+                pass
+
         if time.monotonic() >= deadline:
             return None
         await asyncio.sleep(NODE_POLL_INTERVAL)

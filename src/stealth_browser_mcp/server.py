@@ -483,16 +483,18 @@ async def click_element(
     instance_id: str,
     selector: str,
     text_match: Optional[str] = None,
-    timeout: int = 10000
+    timeout: int = 10000,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Click an element.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector, deep selector (host >>> button), or XPath.
         text_match (Optional[str]): Click element with matching text.
         timeout (int): Timeout in milliseconds.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
 
     Returns:
         bool: True if clicked successfully.
@@ -502,7 +504,7 @@ async def click_element(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.click_element(tab, selector, text_match, timeout)
+    return await dom_handler.click_element(tab, selector, text_match, timeout, frame=frame)
 
 @section_tool("element-interaction")
 async def type_text(
@@ -512,7 +514,8 @@ async def type_text(
     clear_first: bool = True,
     delay_ms: int = 50,
     parse_newlines: bool = False,
-    shift_enter: bool = False
+    shift_enter: bool = False,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Type text into an input field with trusted keyboard events.
@@ -521,12 +524,13 @@ async def type_text(
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector.
+        selector (str): CSS selector, deep selector (host >>> input), or XPath.
         text (str): Text to type.
         clear_first (bool): Clear field before typing.
         delay_ms (int): Delay between keystrokes in milliseconds.
-        parse_newlines (bool): If True, press Enter for each \n instead of inserting a line break.
-        shift_enter (bool): If True, press Shift+Enter for each \n (for chat apps).
+        parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
+        shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
 
     Returns:
         bool: True if typed successfully.
@@ -536,23 +540,27 @@ async def type_text(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.type_text(tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter)
+    return await dom_handler.type_text(
+        tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter, frame=frame
+    )
 
 @section_tool("element-interaction")
 async def paste_text(
     instance_id: str,
     selector: str,
     text: str,
-    clear_first: bool = True
+    clear_first: bool = True,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Paste text instantly into an input field.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector, deep selector, or XPath.
         text (str): Text to paste.
         clear_first (bool): Clear field before pasting.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
 
     Returns:
         bool: True if pasted successfully.
@@ -560,7 +568,7 @@ async def paste_text(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.paste_text(tab, selector, text, clear_first)
+    return await dom_handler.paste_text(tab, selector, text, clear_first, frame=frame)
 
 @section_tool("element-interaction")
 async def press_key(
@@ -569,7 +577,8 @@ async def press_key(
     modifiers: Optional[List[str]] = None,
     selector: Optional[str] = None,
     count: int = 1,
-    delay_ms: int = 50
+    delay_ms: int = 50,
+    frame: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Press a real key using trusted CDP key events.
@@ -582,9 +591,10 @@ async def press_key(
         instance_id (str): Browser instance ID.
         key (str): DOM KeyboardEvent.key name (Enter, Tab, Escape, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, Backspace, Delete, Home, End, PageUp, PageDown, Space, F1-F12) or a single printable character.
         modifiers (Optional[List[str]]): Modifier keys to hold: Shift, Control (Ctrl), Alt, Meta (Cmd).
-        selector (Optional[str]): CSS selector to focus before pressing. Presses on the focused element when omitted.
+        selector (Optional[str]): CSS selector, deep selector, or XPath to focus before pressing. Presses on the focused element when omitted.
         count (int): Number of times to press the key.
         delay_ms (int): Delay between presses in milliseconds.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
 
     Returns:
         Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -598,7 +608,7 @@ async def press_key(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.press_key(tab, key, modifiers, selector, count, delay_ms)
+    return await dom_handler.press_key(tab, key, modifiers, selector, count, delay_ms, frame=frame)
 
 @section_tool("element-interaction")
 async def file_upload(
@@ -686,17 +696,19 @@ async def wait_for_element(
     selector: str,
     timeout: int = 30000,
     visible: bool = True,
-    text_content: Optional[str] = None
+    text_content: Optional[str] = None,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Wait for an element to appear.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector, deep selector, or XPath.
         timeout (int): Timeout in milliseconds.
         visible (bool): Wait for element to be visible.
         text_content (Optional[str]): Wait for specific text content.
+        frame (Optional[str]): Target element within a same-origin iframe (selector, name, or id).
 
     Returns:
         bool: True if element found.
@@ -706,7 +718,7 @@ async def wait_for_element(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.wait_for_element(tab, selector, timeout, visible, text_content)
+    return await dom_handler.wait_for_element(tab, selector, timeout, visible, text_content, frame=frame)
 
 @section_tool("element-interaction")
 async def scroll_page(

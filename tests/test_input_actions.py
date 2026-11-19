@@ -15,10 +15,11 @@ from stealth_browser_mcp import input_actions
 class RecordingTab:
     """Tab that records Input events and answers DOM and Runtime calls."""
 
-    def __init__(self, quads=None, hit=True):
+    def __init__(self, quads=None, hit=True, backend_node_id=42):
         self.events = []
         self.quads = quads if quads is not None else [[10, 20, 30, 20, 30, 40, 10, 40]]
         self.hit = hit
+        self.backend_node_id = backend_node_id
 
     async def send(self, command):
         request = next(command)
@@ -33,6 +34,21 @@ class RecordingTab:
         if method == "Runtime.callFunctionOn":
             self.events.append(("callFunctionOn", params["functionDeclaration"], None, 0))
             return SimpleNamespace(value=self.hit), None
+        if method == "DOM.getDocument":
+            self.events.append(("DOM.getDocument", params.get("depth"), None, 0))
+            return SimpleNamespace(node_id=uc.cdp.dom.NodeId(1))
+        if method == "DOM.querySelector":
+            self.events.append(("DOM.querySelector", params.get("selector"), None, 0))
+            return uc.cdp.dom.NodeId(10)
+        if method == "DOM.describeNode":
+            self.events.append(("DOM.describeNode", params.get("objectId") or params.get("nodeId"), None, 0))
+            return SimpleNamespace(backend_node_id=uc.cdp.dom.BackendNodeId(self.backend_node_id))
+        if method == "Runtime.evaluate":
+            self.events.append(("Runtime.evaluate", params.get("expression"), None, 0))
+            return SimpleNamespace(object_id=uc.cdp.runtime.RemoteObjectId("elem-obj-1")), None
+        if method == "Runtime.releaseObject":
+            self.events.append(("Runtime.releaseObject", params.get("objectId"), None, 0))
+            return None
         return None
 
 
@@ -77,6 +93,54 @@ class ClickTests(unittest.TestCase):
             self.assertFalse(used_mouse)
             self.assertFalse(any(event[0] == "Input.dispatchMouseEvent" for event in tab.events))
             self.assertTrue(any("click()" in (event[1] or "") for event in tab.events))
+
+
+class FindNodeTests(unittest.TestCase):
+    def test_existing_css_selector_uses_cdp_query(self):
+        tab = RecordingTab(backend_node_id=42)
+        node_id = asyncio.run(input_actions.find_node(tab, "button.submit"))
+        self.assertEqual(node_id, 42)
+        methods = [e[0] for e in tab.events]
+        self.assertIn("DOM.getDocument", methods)
+        self.assertIn("DOM.querySelector", methods)
+        self.assertIn("DOM.describeNode", methods)
+        self.assertNotIn("Runtime.evaluate", methods)
+
+    def test_xpath_slash_slash_uses_runtime_evaluate(self):
+        tab = RecordingTab(backend_node_id=42)
+        node_id = asyncio.run(input_actions.find_node(tab, "//button[@id='save']"))
+        self.assertEqual(node_id, 42)
+        eval_events = [e for e in tab.events if e[0] == "Runtime.evaluate"]
+        self.assertEqual(len(eval_events), 1)
+        self.assertIn("//button[@id='save']", eval_events[0][1])
+        self.assertNotIn("DOM.querySelector", [e[0] for e in tab.events])
+
+    def test_xpath_prefix_uses_runtime_evaluate(self):
+        tab = RecordingTab(backend_node_id=42)
+        node_id = asyncio.run(input_actions.find_node(tab, "xpath=//input[@name='q']"))
+        self.assertEqual(node_id, 42)
+        eval_events = [e for e in tab.events if e[0] == "Runtime.evaluate"]
+        self.assertEqual(len(eval_events), 1)
+        self.assertIn("//input[@name='q']", eval_events[0][1])
+
+    def test_deep_selector_uses_runtime_evaluate(self):
+        tab = RecordingTab(backend_node_id=42)
+        node_id = asyncio.run(input_actions.find_node(tab, "custom-card >>> button.action"))
+        self.assertEqual(node_id, 42)
+        eval_events = [e for e in tab.events if e[0] == "Runtime.evaluate"]
+        self.assertEqual(len(eval_events), 1)
+        self.assertIn("custom-card", eval_events[0][1])
+        self.assertIn("button.action", eval_events[0][1])
+        self.assertIn("shadowRoot", eval_events[0][1])
+
+    def test_same_origin_frame_uses_runtime_evaluate(self):
+        tab = RecordingTab(backend_node_id=42)
+        node_id = asyncio.run(input_actions.find_node(tab, "input#email", frame="iframe#auth"))
+        self.assertEqual(node_id, 42)
+        eval_events = [e for e in tab.events if e[0] == "Runtime.evaluate"]
+        self.assertEqual(len(eval_events), 1)
+        self.assertIn("iframe#auth", eval_events[0][1])
+        self.assertIn("input#email", eval_events[0][1])
 
 
 if __name__ == "__main__":
