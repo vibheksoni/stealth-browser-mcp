@@ -2252,6 +2252,22 @@ async def restore_session(
     )
 
 
+
+_BROWSER_RESOURCE_NOT_FOUND = json.dumps({"error": "Instance not found"})
+
+
+def _browser_resource_allowed(instance_id: str) -> bool:
+    """Return True when the current MCP session may read this browser resource."""
+    sid = get_current_mcp_session_id()
+    if _HTTP_MODE and not sid:
+        return False
+    try:
+        mcp_session_manager.check_access(instance_id, sid)
+        return True
+    except Exception:
+        return False
+
+
 @mcp.resource("browser://{instance_id}/state")
 async def get_browser_state_resource(instance_id: str) -> str:
     """
@@ -2263,10 +2279,12 @@ async def get_browser_state_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of the browser state or error message.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     state = await browser_manager.get_page_state(instance_id)
     if state:
         return to_json(state, indent=2).decode()
-    return json.dumps({"error": "Instance not found"})
+    return _BROWSER_RESOURCE_NOT_FOUND
 
 
 @mcp.resource("browser://{instance_id}/cookies")
@@ -2280,11 +2298,13 @@ async def get_cookies_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of cookies or error message.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     tab = await browser_manager.get_tab(instance_id)
     if tab:
         cookies = await network_interceptor.get_cookies(tab)
         return to_json(cookies, indent=2).decode()
-    return json.dumps({"error": "Instance not found"})
+    return _BROWSER_RESOURCE_NOT_FOUND
 
 
 @mcp.resource("browser://{instance_id}/network")
@@ -2298,6 +2318,8 @@ async def get_network_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of network requests.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     requests = await network_interceptor.list_requests(instance_id)
     return to_json(requests, indent=2).decode()
 
@@ -2313,10 +2335,12 @@ async def get_console_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of console logs or error message.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     state = await browser_manager.get_page_state(instance_id)
     if state:
         return json.dumps(state.console_logs, indent=2)
-    return json.dumps({"error": "Instance not found"})
+    return _BROWSER_RESOURCE_NOT_FOUND
 
 
 @section_tool("debugging")
