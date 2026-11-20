@@ -256,7 +256,7 @@ Stealth Browser MCP provides built-in agent instructions at connect, an input pl
 
 This server exposes powerful local browser-control primitives: CDP execution, page JavaScript execution, cookie/storage access, network interception, dynamic hooks, header mutation, navigation, and file uploads from allowlisted local paths.
 
-Treat the MCP client or agent as the security principal. The recommended deployment is local `stdio` transport with a trusted desktop MCP client. HTTP transport always requires a bearer token, binds to loopback by default, and rejects unexpected Host and Origin values. Do not bind HTTP off loopback. See [docs/SECURITY.md](docs/SECURITY.md).
+Treat the MCP client or agent as the security principal. The recommended deployment is local `stdio` transport with a trusted desktop MCP client. HTTP transport always requires a bearer token, binds to loopback by default, and rejects unexpected Host and Origin values. Do not bind HTTP off loopback. See [docs/SECURITY.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/SECURITY.md).
 
 ---
 
@@ -351,6 +351,7 @@ These are environment variables for the MCP server process. Set them in your she
 | `STEALTH_ALLOW_CODE_HOOKS` | unset | Allow `create_dynamic_hook` / `validate_hook_function` to compile caller Python on the server. Off by default. The server refuses to start if this is set and HTTP is bound off loopback. Use `create_simple_dynamic_hook` instead. |
 | `STEALTH_MANAGED_PROFILES_ROOT` | `data_dir()` | Directory that `spawn_browser(user_data_dir=...)` must stay under. Paths outside this root, including symlink escapes, are rejected. Also used as the default when a relative `user_data_dir` is given. |
 | `STEALTH_ALLOW_FILE_URLS` | unset | Allow `navigate` / `new_tab` to open `file:`, `chrome:`, or `devtools:` URLs. Off by default because those schemes can read host files or browser internals. |
+| `STEALTH_ALLOW_RAW_CDP` | unset | Allow `execute_cdp_command` to call methods outside the allowlist. Off by default. Navigation URLs still go through the file:/chrome: block. `setDownloadBehavior` still requires a `download_path` under the data directory. The server refuses to start if this is set and HTTP is bound off loopback. |
 
 **PowerShell example:**
 
@@ -405,7 +406,7 @@ client = Client(
 
 ## Security
 
-This server is for a single-user host. Spawned Chrome exposes a loopback DevTools port with no DevTools authentication, so other local users can attach to it. Do not run it on a shared login or a shared netns. See [docs/SECURITY.md](docs/SECURITY.md).
+This server is for a single-user host. Spawned Chrome exposes a loopback DevTools port with no DevTools authentication, so other local users can attach to it. Do not run it on a shared login or a shared netns. See [docs/SECURITY.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/SECURITY.md).
 
 ---
 

@@ -37,6 +37,7 @@ from .file_based_element_cloner import file_based_element_cloner
 from starlette.middleware import Middleware as ASGIMiddleware
 from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
 from .path_policy import reject_blocked_url, resolve_managed_path, write_private_bytes
+from .cdp_policy import refuse_raw_cdp_off_loopback
 from .hook_policy import code_hooks_enabled, code_hooks_disabled_result, refuse_code_hooks_off_loopback
 from .http_auth import (
     BearerAuthMiddleware,
@@ -4383,6 +4384,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             token = ensure_http_token(announce=True)
             validate_bind(args.host, token)
             refuse_code_hooks_off_loopback(args.host)
+            refuse_raw_cdp_off_loopback(args.host)
         except (ValueError, TokenConfigError) as e:
             sys.stderr.write(f"Error: {e}\n")
             sys.exit(1)

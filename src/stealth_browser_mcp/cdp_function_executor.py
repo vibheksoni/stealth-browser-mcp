@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import nodriver as uc
 from nodriver import Tab
 
+from .cdp_policy import ALLOWED_CDP_METHODS, prepare_cdp_command
 from .debug_logger import debug_logger
 
 CONTEXT_COLLECT_SECONDS = 0.3
@@ -126,24 +127,7 @@ class CDPFunctionExecutor:
         Returns:
             List[str]: List of command names.
         """
-        commands = [
-            "evaluate", "callFunctionOn", "addBinding", "removeBinding",
-            "compileScript", "runScript", "awaitPromise", "getProperties",
-            "getExceptionDetails", "globalLexicalScopeNames", "queryObjects",
-            "releaseObject", "releaseObjectGroup", "terminateExecution",
-            "setAsyncCallStackDepth", "setCustomObjectFormatterEnabled",
-            "setMaxCallStackSizeToCapture", "runIfWaitingForDebugger",
-            "discardConsoleEntries", "getHeapUsage", "getIsolateId",
-            "addScriptToEvaluateOnNewDocument",
-            "removeScriptToEvaluateOnNewDocument",
-            "reload", "navigate", "stopLoading", "getFrameTree",
-            "setBypassCSP", "setDocumentContent",
-            "page.enable", "page.addScriptToEvaluateOnNewDocument",
-            "page.removeScriptToEvaluateOnNewDocument",
-            "page.reload", "page.navigate", "page.stopLoading",
-            "page.getFrameTree", "page.setBypassCSP", "page.setDocumentContent",
-        ]
-        return commands
+        return sorted(ALLOWED_CDP_METHODS)
 
     def _resolve_cdp_method(self, command: str):
         """
@@ -189,6 +173,7 @@ class CDPFunctionExecutor:
             Dict[str, Any]: Result of the command execution.
         """
         try:
+            params = prepare_cdp_command(command, params)
             cdp_domain, cdp_method = self._resolve_cdp_method(command)
             if not cdp_method:
                 raise ValueError(f"Unknown CDP command: {command}")

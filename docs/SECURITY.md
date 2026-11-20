@@ -15,4 +15,8 @@ HTTP transport always requires a bearer token, binds to loopback by default,
 and rejects unexpected Host and Origin values. `STEALTH_ALLOW_REMOTE_ATTACH=1`
 is ignored when HTTP is bound off loopback. Caller file paths stay under the
 data directory. Caller Python hooks stay off unless `STEALTH_ALLOW_CODE_HOOKS=1`
-on loopback HTTP.
+on loopback HTTP. `execute_cdp_command` uses a method allowlist;
+navigation URLs go through the same file:/chrome: block as `navigate`.
+`Page.setDownloadBehavior` is off the allowlist. Methods outside the
+allowlist require `STEALTH_ALLOW_RAW_CDP=1` on loopback HTTP, and even
+then a download path must stay under the data directory.
