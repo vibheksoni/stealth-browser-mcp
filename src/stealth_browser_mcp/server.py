@@ -4,8 +4,9 @@ import argparse
 import asyncio
 import base64
 import importlib
-import json
 import ipaddress
+import json
+import logging
 import os
 import sys
 import tempfile
@@ -98,6 +99,7 @@ DEBUG_LOGGING_ENABLED = (
     or parse_bool_env("DEBUG", default=False)
 )
 HTTP_AUTH_TOKEN = get_http_auth_token()
+_HTTP_MODE = False
 
 def is_loopback_host(host: str) -> bool:
     """
@@ -138,6 +140,71 @@ def apply_disabled_sections() -> None:
                 # Tool may already be removed by another section policy.
                 continue
 
+class _ClosedResourceNoiseFilter(logging.Filter):
+    """Filter out benign ClosedResourceError logs emitted on client disconnect."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name == "mcp.server.streamable_http"
+            and record.exc_info
+            and getattr(
+                record.exc_info[0]
+                if isinstance(record.exc_info, tuple) and len(record.exc_info) > 0
+                else record.exc_info,
+                "__name__",
+                None,
+            )
+            == "ClosedResourceError"
+        ):
+            return False
+        return True
+
+
+async def shutdown_all() -> None:
+    """Shut down all browser instances, reaper tasks, and background processes."""
+    debug_logger.log_info("server", "shutdown", "Shutting down Browser Automation MCP Server...")
+    try:
+        await browser_manager.stop_idle_reaper()
+    except Exception as e:
+        debug_logger.log_error("server", "cleanup", e)
+    try:
+        await browser_manager.close_all()
+        debug_logger.log_info("server", "cleanup", "All browser instances closed")
+    except Exception as e:
+        debug_logger.log_error("server", "cleanup", e)
+
+    try:
+        process_cleanup._cleanup_all_tracked()
+        debug_logger.log_info("server", "cleanup", "Process cleanup complete")
+    except Exception as e:
+        debug_logger.log_error("server", "cleanup", f"Process cleanup failed: {e}")
+    try:
+        persistent_instances = persistent_storage.list_instances()
+        if persistent_instances.get("instances"):
+            debug_logger.log_info(
+                "server",
+                "storage_cleanup",
+                f"Clearing in-memory storage with {len(persistent_instances['instances'])} instances...",
+            )
+            persistent_storage.clear_all()
+            debug_logger.log_info("server", "storage_cleanup", "In-memory storage cleared")
+    except Exception as e:
+        debug_logger.log_error("server", "storage_cleanup", e)
+    debug_logger.log_info("server", "shutdown", "Browser Automation MCP Server shutdown complete")
+
+
+def run_shutdown_sync() -> None:
+    """Synchronously run global shutdown and process cleanup."""
+    try:
+        asyncio.run(shutdown_all())
+    except Exception:
+        pass
+    try:
+        process_cleanup._cleanup_all_tracked()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def app_lifespan(server):
     """
@@ -151,35 +218,8 @@ async def app_lifespan(server):
         await browser_manager.start_idle_reaper()
         yield
     finally:
-        debug_logger.log_info("server", "shutdown", "Shutting down Browser Automation MCP Server...")
-        try:
-            await browser_manager.stop_idle_reaper()
-        except Exception as e:
-            debug_logger.log_error("server", "cleanup", e)
-        try:
-            await browser_manager.close_all()
-            debug_logger.log_info("server", "cleanup", "All browser instances closed")
-        except Exception as e:
-            debug_logger.log_error("server", "cleanup", e)
-        
-        try:
-            process_cleanup._cleanup_all_tracked()
-            debug_logger.log_info("server", "cleanup", "Process cleanup complete")
-        except Exception as e:
-            debug_logger.log_error("server", "cleanup", f"Process cleanup failed: {e}")
-        try:
-            persistent_instances = persistent_storage.list_instances()
-            if persistent_instances.get("instances"):
-                debug_logger.log_info(
-                    "server",
-                    "storage_cleanup",
-                    f"Clearing in-memory storage with {len(persistent_instances['instances'])} instances...",
-                )
-                persistent_storage.clear_all()
-                debug_logger.log_info("server", "storage_cleanup", "In-memory storage cleared")
-        except Exception as e:
-            debug_logger.log_error("server", "storage_cleanup", e)
-        debug_logger.log_info("server", "shutdown", "Browser Automation MCP Server shutdown complete")
+        if not _HTTP_MODE:
+            await shutdown_all()
 
 mcp = FastMCP(
     name="Browser Automation MCP",
@@ -3798,6 +3838,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     Returns:
         None
     """
+    global _HTTP_MODE
     parser = argparse.ArgumentParser(
         description=f"Stealth Browser MCP Server with {sum(len(tools) for tools in SECTION_TOOLS.values())} tools"
     )
@@ -3904,6 +3945,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
     
     if args.transport == "http":
+        _HTTP_MODE = True
         token = get_http_auth_token()
         try:
             validate_bind(args.host, token)
@@ -3918,12 +3960,16 @@ def main(argv: Optional[List[str]] = None) -> None:
             ASGIMiddleware(BearerAuthMiddleware, expected_token=token),
             ASGIMiddleware(SessionLifecycleMiddleware, session_manager=mcp_session_manager),
         ]
-        mcp.run(
-            transport="http",
-            host=args.host,
-            port=args.port,
-            middleware=http_middleware,
-        )
+        logging.getLogger("mcp.server.streamable_http").addFilter(_ClosedResourceNoiseFilter())
+        try:
+            mcp.run(
+                transport="http",
+                host=args.host,
+                port=args.port,
+                middleware=http_middleware,
+            )
+        finally:
+            run_shutdown_sync()
     else:
         install_stdio_guard()
         mcp.run(transport="stdio")
