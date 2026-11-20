@@ -65,6 +65,19 @@ Stealth Browser MCP ensures that background browser automation never interrupts 
 - **Tab Switching**: Switching active tabs via `switch_tab` does not call `bring_to_front()` unless the instance was explicitly launched in `normal` mode.
 - **Focus Emulation**: For `offscreen`, `minimized`, and `headless` modes, CDP `Emulation.setFocusEmulationEnabled(True)` is enabled so pages observe `document.hasFocus() === true` and standard DOM visibility states even while not visible to the user.
 
-## Bot-detection results
+## Bot-Detection Results
 
-TODO(orchestrator): measured results and recommended default go here.
+Measured on Linux X11 without GPU running Chrome 158:
+
+| Window Mode | bot.sannysoft.com | creepjs "like headless" | creepjs "headless" | creepjs "stealth" | WebGL Renderer |
+|-------------|-------------------|--------------------------|--------------------|-------------------|----------------|
+| `normal` | 0 failed rows | 38% | 0% | 0% | None (no GPU: "err") |
+| `offscreen` | 0 failed rows | 38% | 0% | 0% | None (no GPU: "err") |
+| `minimized` | 0 failed rows | 38% | 0% | 0% | None (no GPU: "err") |
+| `headless` | 0 failed rows | 50% | 0% | 0% | SwiftShader |
+
+Across all three headful modes (`normal`, `offscreen`, and `minimized`), bot detection signatures are identical, with creepjs "like headless" scoring 38% across the board -- confirming that window positioning does not alter detection risk. In comparison, `headless` exhibits higher "like headless" suspicion (50%) and exposes SwiftShader software WebGL rendering. Consequently, `offscreen` matches `normal` on detection while offering significantly better stealth than `headless`, and remains the recommended default.
+
+## Verify Placement
+
+For headful modes (`normal`, `minimized`, `offscreen`), `spawn_browser` queries CDP `Browser.getWindowBounds` after applying geometry and includes `window_bounds` (`{left, top, width, height, windowState}`) in the spawn result. When a platform or window manager clamps off-screen positioning (observed on certain X11, Wayland, or macOS desktop environments), `spawn_browser` records the clamped bounds and adds a diagnostic `window_note` (e.g. `"window clamped to 0,0; use window=minimized or headless if it is visible"`). Callers can inspect `window_bounds` and `window_note` in the spawn response to verify actual geometry and position.

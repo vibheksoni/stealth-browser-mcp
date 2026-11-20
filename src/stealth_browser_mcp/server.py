@@ -472,6 +472,8 @@ async def spawn_browser(
             "viewport": instance.viewport,
             "spawn_diagnostics": spawn_diagnostics or {},
         }
+        if getattr(instance, "window_bounds", None) is not None:
+            result["window_bounds"] = instance.window_bounds
         if getattr(instance, "window_note", None) is not None:
             result["window_note"] = instance.window_note
         if session_info:
@@ -575,6 +577,8 @@ async def get_instance_state(instance_id: str) -> Optional[Dict[str, Any]]:
                 result["window"] = inst.window
             if hasattr(inst, "headless") and "headless" not in result:
                 result["headless"] = inst.headless
+            if getattr(inst, "window_bounds", None) is not None:
+                result["window_bounds"] = inst.window_bounds
             if getattr(inst, "window_note", None) is not None:
                 result["window_note"] = inst.window_note
         return result

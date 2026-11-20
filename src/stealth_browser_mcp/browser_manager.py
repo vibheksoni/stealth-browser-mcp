@@ -33,6 +33,7 @@ from .proxy_utils import (
 from .window_mode import (
     apply_window_mode,
     effective_window_mode,
+    format_window_bounds,
     open_background_tab,
     resolve_window_mode,
     window_launch_args,
@@ -567,6 +568,7 @@ class BrowserManager:
                 debug_logger.log_warning("browser_manager", "spawn_browser", 
                                        f"Browser {instance_id} has no process to track")
 
+            window_bounds: Optional[Dict[str, Any]] = None
             if mode == "normal":
                 await tab.set_window_size(
                     left=0,
@@ -574,19 +576,39 @@ class BrowserManager:
                     width=options.viewport_width,
                     height=options.viewport_height
                 )
+                try:
+                    w_res = await asyncio.wait_for(
+                        tab.send(uc.cdp.browser.get_window_for_target()),
+                        timeout=3.0,
+                    )
+                    if isinstance(w_res, (tuple, list)) and len(w_res) >= 2:
+                        window_bounds = format_window_bounds(w_res[1])
+                    elif hasattr(w_res, "left") or isinstance(w_res, dict):
+                        window_bounds = format_window_bounds(w_res)
+                except Exception:
+                    pass
             try:
-                await apply_window_mode(
+                apply_res = await apply_window_mode(
                     tab,
                     mode,
                     options.viewport_width,
                     options.viewport_height,
                 )
+                if apply_res.get("window_bounds"):
+                    window_bounds = apply_res["window_bounds"]
+                if apply_res.get("window_note"):
+                    if window_note:
+                        window_note = f"{window_note}; {apply_res['window_note']}"
+                    else:
+                        window_note = apply_res["window_note"]
             except Exception as e:
                 debug_logger.log_warning(
                     "browser_manager",
                     "spawn_browser",
                     f"Failed to apply window mode {mode} for {instance_id}: {e}",
                 )
+            instance.window_note = window_note
+            instance.window_bounds = window_bounds
             debug_logger.log_info(
                 "browser_manager",
                 "spawn_browser",
@@ -641,6 +663,7 @@ class BrowserManager:
                     'options': options,
                     'window': mode,
                     'window_note': window_note,
+                    'window_bounds': window_bounds,
                     'navigation_count': 0,
                     'init_scripts': init_scripts,
                     'configured_tabs': configured_tabs,
@@ -2070,6 +2093,7 @@ class BrowserManager:
             inst_window = getattr(inst, "window", None) if inst else None
             inst_headless = getattr(inst, "headless", None) if inst else None
             inst_note = getattr(inst, "window_note", None) if inst else None
+            inst_bounds = getattr(inst, "window_bounds", None) if inst else None
 
             return PageState(
                 instance_id=instance_id,
@@ -2083,6 +2107,7 @@ class BrowserManager:
                 headless=inst_headless,
                 window=inst_window,
                 window_note=inst_note,
+                window_bounds=inst_bounds,
             )
 
         except Exception as e:

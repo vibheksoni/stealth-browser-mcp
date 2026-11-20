@@ -26,6 +26,7 @@ class BrowserInstance(BaseModel):
     headless: bool = Field(default=False)
     window: Optional[str] = Field(default=None, description="Window mode: normal, minimized, offscreen, or headless")
     window_note: Optional[str] = Field(default=None, description="Window fallback diagnostic note")
+    window_bounds: Optional[Dict[str, Any]] = Field(default=None, description="Window bounds: left, top, width, height, windowState")
     user_agent: Optional[str] = None
     viewport: Dict[str, int] = Field(default_factory=lambda: {"width": 1920, "height": 1080})
     session_id: Optional[str] = None
@@ -86,6 +87,7 @@ class PageState(BaseModel):
     headless: Optional[bool] = None
     window: Optional[str] = None
     window_note: Optional[str] = None
+    window_bounds: Optional[Dict[str, Any]] = None
 
 
 class BrowserOptions(BaseModel):

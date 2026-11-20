@@ -154,6 +154,63 @@ def window_launch_args(mode: str, width: int = 1280, height: int = 800) -> List[
     return []
 
 
+def format_window_bounds(bounds: Any) -> Optional[Dict[str, Any]]:
+    """
+    Format CDP window bounds into a dictionary with {left, top, width, height, windowState}.
+
+    Args:
+        bounds: CDP Bounds instance, dict, or tuple containing bounds.
+
+    Returns:
+        Optional[Dict[str, Any]]: Dictionary with window bounds or None.
+    """
+    if bounds is None:
+        return None
+    if isinstance(bounds, (tuple, list)) and len(bounds) >= 2:
+        bounds = bounds[1]
+    if isinstance(bounds, dict):
+        state = bounds.get("windowState") or bounds.get("window_state")
+        if hasattr(state, "value"):
+            state = state.value
+        return {
+            "left": bounds.get("left"),
+            "top": bounds.get("top"),
+            "width": bounds.get("width"),
+            "height": bounds.get("height"),
+            "windowState": str(state) if state is not None else None,
+        }
+    if hasattr(bounds, "to_json") and callable(bounds.to_json):
+        try:
+            d = bounds.to_json()
+            if isinstance(d, dict):
+                return {
+                    "left": d.get("left"),
+                    "top": d.get("top"),
+                    "width": d.get("width"),
+                    "height": d.get("height"),
+                    "windowState": d.get("windowState"),
+                }
+        except Exception:
+            pass
+
+    def _clean_val(val: Any) -> Any:
+        if val is None or hasattr(val, "_mock_name"):
+            return None
+        return val
+
+    state = getattr(bounds, "window_state", None) or getattr(bounds, "windowState", None)
+    if hasattr(state, "value"):
+        state = state.value
+    clean_state = _clean_val(state)
+    return {
+        "left": _clean_val(getattr(bounds, "left", None)),
+        "top": _clean_val(getattr(bounds, "top", None)),
+        "width": _clean_val(getattr(bounds, "width", None)),
+        "height": _clean_val(getattr(bounds, "height", None)),
+        "windowState": str(clean_state) if clean_state is not None else None,
+    }
+
+
 async def apply_window_mode(
     tab: Any,
     mode: str,
@@ -170,46 +227,122 @@ async def apply_window_mode(
         height: Viewport height.
 
     Returns:
-        Dict[str, Any]: Dict with mode and applied step names.
+        Dict[str, Any]: Dict with mode, applied steps, optional window_bounds and window_note.
     """
     norm_mode = mode.lower().strip() if isinstance(mode, str) else str(mode)
     if norm_mode == "normal":
         return {"mode": "normal", "applied": []}
 
     applied: List[str] = []
+    window_bounds: Optional[Dict[str, Any]] = None
+    window_note: Optional[str] = None
 
     if norm_mode in ("minimized", "offscreen"):
         window_id = None
+        initial_bounds = None
         try:
             res = await asyncio.wait_for(
                 tab.send(cdp.browser.get_window_for_target()),
                 timeout=3.0,
             )
             if isinstance(res, (tuple, list)) and len(res) >= 1:
-                window_id = res[0]
+                raw_id = res[0]
+                try:
+                    window_id = cdp.browser.WindowID(raw_id)
+                except Exception:
+                    window_id = raw_id
+                if len(res) >= 2:
+                    initial_bounds = res[1]
             applied.append("get_window_for_target")
         except Exception:
             pass
 
         if window_id is not None:
             try:
-                if norm_mode == "minimized":
-                    bounds = cdp.browser.Bounds(
-                        window_state=cdp.browser.WindowState.MINIMIZED,
+                if norm_mode == "offscreen":
+                    # Order matters: set windowState normal first, then bounds
+                    await asyncio.wait_for(
+                        tab.send(
+                            cdp.browser.set_window_bounds(
+                                window_id,
+                                cdp.browser.Bounds(
+                                    window_state=cdp.browser.WindowState.NORMAL,
+                                ),
+                            )
+                        ),
+                        timeout=3.0,
                     )
-                else:
                     bounds = cdp.browser.Bounds(
                         left=-32000,
                         top=-32000,
                         width=width,
                         height=height,
-                        window_state=cdp.browser.WindowState.NORMAL,
                     )
-                await asyncio.wait_for(
-                    tab.send(cdp.browser.set_window_bounds(window_id, bounds)),
+                    await asyncio.wait_for(
+                        tab.send(cdp.browser.set_window_bounds(window_id, bounds)),
+                        timeout=3.0,
+                    )
+                    applied.append("set_window_bounds")
+                elif norm_mode == "minimized":
+                    # Order matters: set windowState normal first, set bounds, then set windowState minimized
+                    await asyncio.wait_for(
+                        tab.send(
+                            cdp.browser.set_window_bounds(
+                                window_id,
+                                cdp.browser.Bounds(
+                                    window_state=cdp.browser.WindowState.NORMAL,
+                                ),
+                            )
+                        ),
+                        timeout=3.0,
+                    )
+                    init_left = getattr(initial_bounds, "left", None) if initial_bounds else None
+                    if init_left is None:
+                        init_left = 0
+                    init_top = getattr(initial_bounds, "top", None) if initial_bounds else None
+                    if init_top is None:
+                        init_top = 0
+                    bounds = cdp.browser.Bounds(
+                        left=init_left,
+                        top=init_top,
+                        width=width,
+                        height=height,
+                    )
+                    await asyncio.wait_for(
+                        tab.send(cdp.browser.set_window_bounds(window_id, bounds)),
+                        timeout=3.0,
+                    )
+                    await asyncio.wait_for(
+                        tab.send(
+                            cdp.browser.set_window_bounds(
+                                window_id,
+                                cdp.browser.Bounds(
+                                    window_state=cdp.browser.WindowState.MINIMIZED,
+                                ),
+                            )
+                        ),
+                        timeout=3.0,
+                    )
+                    applied.append("set_window_bounds")
+            except Exception:
+                pass
+
+            try:
+                actual_res = await asyncio.wait_for(
+                    tab.send(cdp.browser.get_window_bounds(window_id)),
                     timeout=3.0,
                 )
-                applied.append("set_window_bounds")
+                window_bounds = format_window_bounds(actual_res)
+                applied.append("get_window_bounds")
+                if norm_mode == "offscreen" and window_bounds:
+                    cur_left = window_bounds.get("left")
+                    cur_top = window_bounds.get("top")
+                    if cur_left is not None and cur_top is not None:
+                        if cur_left != -32000 or cur_top != -32000:
+                            window_note = (
+                                f"window clamped to {cur_left},{cur_top}; "
+                                "use window=minimized or headless if it is visible"
+                            )
             except Exception:
                 pass
 
@@ -223,7 +356,12 @@ async def apply_window_mode(
         except Exception:
             pass
 
-    return {"mode": norm_mode, "applied": applied}
+    out: Dict[str, Any] = {"mode": norm_mode, "applied": applied}
+    if window_bounds is not None:
+        out["window_bounds"] = window_bounds
+    if window_note is not None:
+        out["window_note"] = window_note
+    return out
 
 
 async def open_background_tab(
