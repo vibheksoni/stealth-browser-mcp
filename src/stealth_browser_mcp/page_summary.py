@@ -1,13 +1,15 @@
-"""Compact page summary generation and action tool decoration (SB-60).
+"""Compact page summary generation and action tool decoration (SB-60, SB-63).
 
 Returns a size-capped page summary containing:
 - url: Current page URL
 - title: Current page title
-- interactive_elements: Up to ~40 interactive elements with ref, role, and name
+- elements: Up to ~25 interactive elements with ref, role, and name
   using the existing a11y_snapshot extraction.
 
 Also provides with_page_summary decorator applied centrally to all action tools
-so every action result returns a 'page' summary field.
+so every action result returns a 'page' summary field. Action tools accept an optional
+keyword-only include_summary parameter (default True); when set to False, the page
+summary computation is skipped and results are returned without the 'page' key.
 
 ASCII only. No stdout prints in server paths.
 """
@@ -37,11 +39,24 @@ except Exception:
         get_current_mcp_session_id = None
         mcp_session_manager = None
 
-MAX_SUMMARY_ELEMENTS = 40
+MAX_SUMMARY_ELEMENTS = 25
 MAX_NAME_CHARS = 100
 MAX_TITLE_CHARS = 200
 MAX_URL_CHARS = 500
 MAX_SUMMARY_BYTES = 8192
+
+EMPTY_NAME_ALLOWED_ROLES = {
+    "textbox",
+    "searchbox",
+    "combobox",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "textarea",
+    "input",
+}
 
 ACTION_TOOL_NAMES = {
     "navigate",
@@ -188,17 +203,16 @@ async def get_page_summary(
     Args:
         tab: Browser tab instance.
         instance_id (Optional[str]): Browser instance ID.
-        max_elements (int): Maximum interactive elements to include (default 40).
+        max_elements (int): Maximum interactive elements to include (default 25).
 
     Returns:
-        Dict[str, Any]: Compact summary with url, title, interactive_elements,
-            and elements fields within size limits.
+        Dict[str, Any]: Compact summary with url, title, elements,
+            and truncated fields within size limits.
     """
     if tab is None:
         return {
             "url": "",
             "title": "",
-            "interactive_elements": [],
             "elements": [],
             "truncated": False,
         }
@@ -250,14 +264,18 @@ async def get_page_summary(
     elements: List[Dict[str, str]] = []
     if snapshot:
         ref_source = snapshot.get("ref_details") or snapshot.get("refs") or {}
-        for ref_id, details in list(ref_source.items())[:max_elements]:
+        for ref_id, details in ref_source.items():
+            if len(elements) >= max_elements:
+                break
             if isinstance(details, dict):
-                role = str(details.get("role") or "element")
+                role = str(details.get("role") or "element").lower()
                 raw_name = str(details.get("name") or "")
                 name = " ".join(raw_name.split())[:MAX_NAME_CHARS]
             else:
                 role = "element"
                 name = ""
+            if not name and role not in EMPTY_NAME_ALLOWED_ROLES:
+                continue
             elements.append({
                 "ref": str(ref_id),
                 "role": role,
@@ -267,15 +285,13 @@ async def get_page_summary(
     summary: Dict[str, Any] = {
         "url": str(url or "")[:MAX_URL_CHARS],
         "title": str(title or "")[:MAX_TITLE_CHARS],
-        "interactive_elements": elements[:max_elements],
-        "elements": elements[:max_elements],
+        "elements": elements,
         "truncated": False,
     }
 
     # Size cap enforcement (keep within MAX_SUMMARY_BYTES)
     while elements and len(json.dumps(summary)) > MAX_SUMMARY_BYTES:
         elements.pop()
-        summary["interactive_elements"] = elements
         summary["elements"] = elements
         summary["truncated"] = True
 
@@ -286,7 +302,8 @@ def with_page_summary(func: Callable) -> Callable:
     """Decorator applied centrally to action tools to attach page summary to results.
 
     Synthesizes a wrapper matching the original function parameter signature
-    to ensure full compatibility with FastMCP's schema generation.
+    plus an optional keyword-only include_summary parameter to ensure full
+    compatibility with FastMCP's schema generation.
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
@@ -303,6 +320,10 @@ def with_page_summary(func: Callable) -> Callable:
         else:
             param_strs.append(p.name)
         arg_names.append(f"{p.name}={p.name}")
+
+    if not kw_only_seen:
+        param_strs.append("*")
+    param_strs.append("include_summary=True")
 
     params_code = ", ".join(param_strs)
     args_code = ", ".join(arg_names)
@@ -323,6 +344,29 @@ def with_page_summary(func: Callable) -> Callable:
                 mgr.check_access(instance_id)
 
     async def _post_process(res: Any, call_locals: Dict[str, Any]) -> Any:
+        raw_include_summary = call_locals.get("include_summary", True)
+        if raw_include_summary is False or (
+            isinstance(raw_include_summary, str)
+            and raw_include_summary.strip().lower() in {"false", "0"}
+        ):
+            include_summary = False
+        else:
+            include_summary = True
+
+        if not include_summary:
+            if isinstance(res, dict):
+                return res
+            elif isinstance(res, bool):
+                return {"success": res}
+            else:
+                try:
+                    from fastmcp.tools.tool import ToolResult
+                except Exception:
+                    ToolResult = None
+                if ToolResult is not None and isinstance(res, ToolResult):
+                    return res
+                return {"result": res, "success": bool(res)}
+
         instance_id = call_locals.get("instance_id") or call_locals.get("instance")
         if not instance_id:
             try:
@@ -347,7 +391,6 @@ def with_page_summary(func: Callable) -> Callable:
         summary = {
             "url": "",
             "title": "",
-            "interactive_elements": [],
             "elements": [],
             "truncated": False,
         }
@@ -396,10 +439,24 @@ def with_page_summary(func: Callable) -> Callable:
     )
     exec(code, scope)
     wrapper = scope["wrapper"]
-    wrapper.__defaults__ = func.__defaults__
-    wrapper.__kwdefaults__ = func.__kwdefaults__
     functools.update_wrapper(wrapper, func)
+    wrapper.__defaults__ = func.__defaults__
+    wrapper.__kwdefaults__ = {**(func.__kwdefaults__ or {}), "include_summary": True}
     wrapper.__annotations__ = dict(getattr(wrapper, "__annotations__", {}))
     wrapper.__annotations__["return"] = Dict[str, Any]
-    wrapper.__signature__ = inspect.signature(func).replace(return_annotation=Dict[str, Any])
+    wrapper.__annotations__["include_summary"] = bool
+
+    new_params = list(params)
+    new_params.append(
+        inspect.Parameter(
+            "include_summary",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=True,
+            annotation=bool,
+        )
+    )
+    wrapper.__signature__ = sig.replace(
+        parameters=new_params,
+        return_annotation=Dict[str, Any],
+    )
     return wrapper

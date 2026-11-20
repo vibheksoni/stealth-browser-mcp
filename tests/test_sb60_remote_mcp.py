@@ -388,7 +388,7 @@ class PageSummaryTests(unittest.TestCase):
         summary = asyncio.run(run())
         self.assertEqual(summary["url"], "https://example.com/login")
         self.assertEqual(summary["title"], "Login Page")
-        self.assertIn("interactive_elements", summary)
+        self.assertNotIn("interactive_elements", summary)
         self.assertIn("elements", summary)
         self.assertFalse(summary["truncated"])
 
@@ -397,23 +397,22 @@ class PageSummaryTests(unittest.TestCase):
 
         # Force a large synthetic summary
         async def run():
-            sum_res = await page_summary.get_page_summary(tab, max_elements=40)
+            sum_res = await page_summary.get_page_summary(tab, max_elements=25)
             # Add synthetic large elements
-            sum_res["interactive_elements"] = [
+            sum_res["elements"] = [
                 {"ref": f"e{i}", "role": "button", "name": "Long button name " * 20}
                 for i in range(100)
             ]
-            sum_res["elements"] = sum_res["interactive_elements"]
             # Enforce size cap
-            while sum_res["interactive_elements"] and len(json.dumps(sum_res)) > page_summary.MAX_SUMMARY_BYTES:
-                sum_res["interactive_elements"].pop()
-                sum_res["elements"] = sum_res["interactive_elements"]
+            while sum_res["elements"] and len(json.dumps(sum_res)) > page_summary.MAX_SUMMARY_BYTES:
+                sum_res["elements"].pop()
                 sum_res["truncated"] = True
             return sum_res
 
         capped = asyncio.run(run())
         self.assertLessEqual(len(json.dumps(capped)), page_summary.MAX_SUMMARY_BYTES)
         self.assertTrue(capped["truncated"])
+        self.assertNotIn("interactive_elements", capped)
 
     def test_action_tool_decorator_attaches_page_summary(self):
         # Decorate a mock action tool
@@ -422,11 +421,14 @@ class PageSummaryTests(unittest.TestCase):
 
         wrapped = page_summary.with_page_summary(mock_action)
 
-        # Check signature matches original
+        # Check signature matches original plus include_summary
         import inspect
         sig_orig = inspect.signature(mock_action)
         sig_wrapped = inspect.signature(wrapped)
-        self.assertEqual(list(sig_orig.parameters.keys()), list(sig_wrapped.parameters.keys()))
+        self.assertEqual(
+            list(sig_orig.parameters.keys()) + ["include_summary"],
+            list(sig_wrapped.parameters.keys()),
+        )
 
         async def run():
             return await wrapped(instance_id="non-existent", value="test")
@@ -435,7 +437,8 @@ class PageSummaryTests(unittest.TestCase):
         self.assertTrue(res["success"])
         self.assertIn("page", res)
         self.assertIn("url", res["page"])
-        self.assertIn("interactive_elements", res["page"])
+        self.assertIn("elements", res["page"])
+        self.assertNotIn("interactive_elements", res["page"])
 
 
 class ScreenshotReturnsImageContentTests(unittest.TestCase):

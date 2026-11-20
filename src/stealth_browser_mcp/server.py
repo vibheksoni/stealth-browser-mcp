@@ -1407,12 +1407,13 @@ async def get_accessibility_snapshot(
     max_nodes: int = 500,
     max_chars: int = 50000,
     interactive_only: bool = False,
-    frame: Optional[str] = None
+    frame: Optional[str] = None,
+    include_json: bool = False,
 ) -> Dict[str, Any]:
     """
     Get an accessibility snapshot of the page.
 
-    Returns a compact text and JSON tree with stable short refs (e.g. ref=e12)
+    Returns a compact text tree with stable short refs (e.g. ref=e12)
     for interactive nodes, with hard size caps (max_nodes and max_chars) and
     a truncated flag. Stored refs can be targeted with click_element, fill,
     and type_text using selector="ref=<id>".
@@ -1423,18 +1424,21 @@ async def get_accessibility_snapshot(
         max_chars (int): Maximum characters for the text tree. Defaults to 50000.
         interactive_only (bool): When True, only include interactive elements. Defaults to False.
         frame (Optional[str]): Target frame selector, name, or id. Defaults to None (root document).
+        include_json (bool): When True, include full JSON node tree under 'nodes'. Defaults to False.
 
     Returns:
-        Dict[str, Any]: { "tree": str, "text": str, "nodes": dict, "truncated": bool, "node_count": int, "refs": dict }
+        Dict[str, Any]: { "tree": str, "node_count": int, "truncated": bool, "refs": dict, optional "nodes" when include_json }
     """
     if isinstance(max_nodes, str):
         max_nodes = int(max_nodes)
     if isinstance(max_chars, str):
         max_chars = int(max_chars)
+    if isinstance(include_json, str):
+        include_json = include_json.strip().lower() in {"1", "true", "yes", "on"}
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.get_accessibility_snapshot(
+    result = await dom_handler.get_accessibility_snapshot(
         tab,
         instance_id=instance_id,
         max_nodes=max_nodes,
@@ -1442,6 +1446,8 @@ async def get_accessibility_snapshot(
         interactive_only=interactive_only,
         frame=frame,
     )
+    from .a11y_snapshot import cap_snapshot_response
+    return cap_snapshot_response(result, max_chars=max_chars, include_json=include_json)
 
 
 @section_tool("element-interaction")
@@ -1450,7 +1456,8 @@ async def take_accessibility_snapshot(
     max_nodes: int = 500,
     max_chars: int = 50000,
     interactive_only: bool = False,
-    frame: Optional[str] = None
+    frame: Optional[str] = None,
+    include_json: bool = False,
 ) -> Dict[str, Any]:
     """
     Take an accessibility snapshot of the page (alias for get_accessibility_snapshot).
@@ -1461,9 +1468,10 @@ async def take_accessibility_snapshot(
         max_chars (int): Maximum characters for the text tree. Defaults to 50000.
         interactive_only (bool): When True, only include interactive elements. Defaults to False.
         frame (Optional[str]): Target frame selector, name, or id. Defaults to None.
+        include_json (bool): When True, include full JSON node tree under 'nodes'. Defaults to False.
 
     Returns:
-        Dict[str, Any]: { "tree": str, "text": str, "nodes": dict, "truncated": bool, "node_count": int, "refs": dict }
+        Dict[str, Any]: { "tree": str, "node_count": int, "truncated": bool, "refs": dict, optional "nodes" when include_json }
     """
     return await get_accessibility_snapshot(
         instance_id=instance_id,
@@ -1471,6 +1479,7 @@ async def take_accessibility_snapshot(
         max_chars=max_chars,
         interactive_only=interactive_only,
         frame=frame,
+        include_json=include_json,
     )
 
 

@@ -894,3 +894,50 @@ async def get_accessibility_snapshot(
 
 
 take_accessibility_snapshot = get_accessibility_snapshot
+
+
+def cap_snapshot_response(
+    result: Dict[str, Any],
+    max_chars: int,
+    include_json: bool = False,
+) -> Dict[str, Any]:
+    """Build a compact, size-capped response dictionary for accessibility snapshot.
+
+    Args:
+        result (Dict[str, Any]): Raw snapshot result from get_accessibility_snapshot.
+        max_chars (int): Maximum characters for text tree.
+        include_json (bool): When True, include full node tree under 'nodes'.
+
+    Returns:
+        Dict[str, Any]: Capped response dictionary with tree, node_count, truncated, refs,
+            and optional nodes.
+    """
+    text = result.get("tree") or result.get("text") or ""
+    response: Dict[str, Any] = {
+        "tree": text,
+        "node_count": result.get("node_count", 0),
+        "truncated": bool(result.get("truncated", False)),
+    }
+
+    raw_refs = result.get("refs") or {}
+    filtered_refs: Dict[str, Any] = {}
+    if isinstance(raw_refs, dict):
+        for ref_id, details in raw_refs.items():
+            needle = "ref=" + str(ref_id) + ")"
+            if needle in text:
+                filtered_refs[ref_id] = details
+    response["refs"] = filtered_refs
+
+    if include_json:
+        response["nodes"] = result.get("nodes") or result.get("json")
+
+    threshold = max(3 * max_chars, 20000)
+    while response["refs"] and len(json.dumps(response, default=str)) > threshold:
+        response["refs"].popitem()
+        response["truncated"] = True
+
+    if include_json and "nodes" in response and len(json.dumps(response, default=str)) > threshold:
+        response.pop("nodes", None)
+        response["truncated"] = True
+
+    return response
