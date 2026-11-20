@@ -18,7 +18,15 @@ import asyncio
 import functools
 import inspect
 import json
-from typing import Any, Callable, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+try:
+    import nodriver as uc
+except Exception:
+    uc = None
+
+from .history_nav import decide_history_move
 
 try:
     from .mcp_sessions import get_current_mcp_session_id, mcp_session_manager
@@ -57,6 +65,119 @@ ACTION_TOOL_NAMES = {
 }
 
 
+async def _wait_for_ready(
+    tab: Any,
+    timeout: float = 3.0,
+    interval: float = 0.1,
+) -> str:
+    """Poll document.readyState until complete or timeout.
+
+    Args:
+        tab: Browser tab instance.
+        timeout (float): Max seconds to wait (default 3.0).
+        interval (float): Sleep interval between polls (default 0.1).
+
+    Returns:
+        str: Last readyState string or '' if evaluation is impossible.
+    """
+    if not hasattr(tab, "send") or not callable(getattr(tab, "send")):
+        return ""
+
+    global uc
+    if uc is None:
+        try:
+            import nodriver as uc
+        except Exception:
+            pass
+    if uc is None:
+        return ""
+
+    last_state = ""
+    start_time = time.monotonic()
+    max_iterations = max(1, int(timeout / interval) + 1) if interval > 0 else 1
+    iterations = 0
+
+    while True:
+        try:
+            cmd = uc.cdp.runtime.evaluate(
+                expression="document.readyState",
+                return_by_value=True,
+            )
+            res = await asyncio.wait_for(tab.send(cmd), timeout=1.0)
+            remote = res[0] if isinstance(res, tuple) and len(res) > 0 else res
+            val = getattr(remote, "value", None)
+            if val is None and isinstance(remote, dict):
+                val = remote.get("value")
+            if isinstance(remote, str):
+                val = remote
+            if val is not None:
+                last_state = str(val)
+                if last_state == "complete":
+                    return last_state
+        except Exception:
+            pass
+
+        iterations += 1
+        elapsed = time.monotonic() - start_time
+        if elapsed >= timeout or iterations >= max_iterations:
+            break
+
+        await asyncio.sleep(interval)
+
+    return last_state
+
+
+async def _read_location(tab: Any) -> Tuple[str, str]:
+    """Read settled (url, title) using a single evaluate expression.
+
+    Args:
+        tab: Browser tab instance.
+
+    Returns:
+        Tuple[str, str]: (url, title) or ('', '') on any failure.
+    """
+    if not hasattr(tab, "send") or not callable(getattr(tab, "send")):
+        return ("", "")
+
+    global uc
+    if uc is None:
+        try:
+            import nodriver as uc
+        except Exception:
+            pass
+    if uc is None:
+        return ("", "")
+
+    try:
+        cmd = uc.cdp.runtime.evaluate(
+            expression="JSON.stringify({u: location.href, t: document.title})",
+            return_by_value=True,
+        )
+        res = await asyncio.wait_for(tab.send(cmd), timeout=1.0)
+        remote = res[0] if isinstance(res, tuple) and len(res) > 0 else res
+        val = getattr(remote, "value", None)
+        if val is None and isinstance(remote, dict):
+            val = remote.get("value")
+        if isinstance(remote, str):
+            val = remote
+
+        if isinstance(val, str):
+            data = json.loads(val)
+        elif isinstance(val, dict):
+            data = val
+        else:
+            return ("", "")
+
+        if isinstance(data, dict):
+            url = str(data.get("u") or "")
+            title = str(data.get("t") or "")
+            return (url, title)
+    except Exception:
+        pass
+
+    return ("", "")
+
+
 async def get_page_summary(
     tab: Any,
     instance_id: Optional[str] = None,
@@ -85,17 +206,23 @@ async def get_page_summary(
     url = ""
     title = ""
 
-    # Extract URL
-    if hasattr(tab, "url") and tab.url:
-        url = str(tab.url)
-    elif hasattr(tab, "target") and hasattr(tab.target, "url") and tab.target.url:
-        url = str(tab.target.url)
+    # If tab has a callable send, wait for ready and read live location first
+    if hasattr(tab, "send") and callable(getattr(tab, "send")):
+        await _wait_for_ready(tab)
+        url, title = await _read_location(tab)
 
-    # Extract Title
-    if hasattr(tab, "title") and tab.title:
-        title = str(tab.title)
-    elif hasattr(tab, "target") and hasattr(tab.target, "title") and tab.target.title:
-        title = str(tab.target.title)
+    # Fall back to cached tab.url/tab.title (and tab.target.url/title) only when empty
+    if not url:
+        if hasattr(tab, "url") and tab.url:
+            url = str(tab.url)
+        elif hasattr(tab, "target") and hasattr(tab.target, "url") and tab.target.url:
+            url = str(tab.target.url)
+
+    if not title:
+        if hasattr(tab, "title") and tab.title:
+            title = str(tab.title)
+        elif hasattr(tab, "target") and hasattr(tab.target, "title") and tab.target.title:
+            title = str(tab.target.title)
 
     # Attempt to extract accessibility snapshot
     snapshot: Optional[Dict[str, Any]] = None
@@ -136,37 +263,6 @@ async def get_page_summary(
                 "role": role,
                 "name": name,
             })
-
-    # If title or url are still empty and tab has an evaluate method, try once
-    if (not url or not title) and hasattr(tab, "send"):
-        try:
-            import nodriver as uc
-            if not url:
-                res_url = await asyncio.wait_for(
-                    tab.send(uc.cdp.runtime.evaluate(
-                        expression="window.location.href",
-                        return_by_value=True,
-                    )),
-                    timeout=1.0,
-                )
-                remote = res_url[0] if isinstance(res_url, tuple) else res_url
-                val = getattr(remote, "value", None)
-                if val:
-                    url = str(val)
-            if not title:
-                res_title = await asyncio.wait_for(
-                    tab.send(uc.cdp.runtime.evaluate(
-                        expression="document.title",
-                        return_by_value=True,
-                    )),
-                    timeout=1.0,
-                )
-                remote = res_title[0] if isinstance(res_title, tuple) else res_title
-                val = getattr(remote, "value", None)
-                if val:
-                    title = str(val)
-        except Exception:
-            pass
 
     summary: Dict[str, Any] = {
         "url": str(url or "")[:MAX_URL_CHARS],

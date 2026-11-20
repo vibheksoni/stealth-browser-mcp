@@ -38,6 +38,7 @@ from .http_auth import (
 )
 from .page_summary import (
     ACTION_TOOL_NAMES,
+    decide_history_move,
     with_page_summary,
 )
 from .mcp_sessions import (
@@ -552,7 +553,7 @@ async def wait_for(
     )
 
 @section_tool("browser-management")
-async def go_back(instance_id: str) -> bool:
+async def go_back(instance_id: str) -> Dict[str, Any]:
     """
     Navigate back in history.
 
@@ -560,16 +561,37 @@ async def go_back(instance_id: str) -> bool:
         instance_id (str): Browser instance ID.
 
     Returns:
-        bool: True if navigation was successful.
+        Dict[str, Any]: Navigation result with success flag and optional message.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
+
+    try:
+        history = await tab.send(uc.cdp.page.get_navigation_history())
+        if isinstance(history, tuple) and len(history) == 2:
+            current_index, entries = history
+        elif isinstance(history, dict):
+            current_index = int(history.get("currentIndex", 0))
+            entries = history.get("entries", [])
+        else:
+            current_index, entries = history
+
+        urls = [
+            getattr(e, "url", "") if hasattr(e, "url") else (e.get("url", "") if isinstance(e, dict) else str(e))
+            for e in entries
+        ]
+        refusal = decide_history_move("back", current_index, urls)
+        if refusal is not None:
+            return {"success": False, "message": refusal}
+    except Exception:
+        pass
+
     await tab.back()
-    return True
+    return {"success": True}
 
 @section_tool("browser-management")
-async def go_forward(instance_id: str) -> bool:
+async def go_forward(instance_id: str) -> Dict[str, Any]:
     """
     Navigate forward in history.
 
@@ -577,13 +599,34 @@ async def go_forward(instance_id: str) -> bool:
         instance_id (str): Browser instance ID.
 
     Returns:
-        bool: True if navigation was successful.
+        Dict[str, Any]: Navigation result with success flag and optional message.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
+
+    try:
+        history = await tab.send(uc.cdp.page.get_navigation_history())
+        if isinstance(history, tuple) and len(history) == 2:
+            current_index, entries = history
+        elif isinstance(history, dict):
+            current_index = int(history.get("currentIndex", 0))
+            entries = history.get("entries", [])
+        else:
+            current_index, entries = history
+
+        urls = [
+            getattr(e, "url", "") if hasattr(e, "url") else (e.get("url", "") if isinstance(e, dict) else str(e))
+            for e in entries
+        ]
+        refusal = decide_history_move("forward", current_index, urls)
+        if refusal is not None:
+            return {"success": False, "message": refusal}
+    except Exception:
+        pass
+
     await tab.forward()
-    return True
+    return {"success": True}
 
 @section_tool("browser-management")
 async def reload_page(instance_id: str, ignore_cache: bool = False) -> bool:
