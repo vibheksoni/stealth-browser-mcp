@@ -55,7 +55,7 @@ jobs:
         env:
           STEALTH_BROWSER_EXECUTABLE: ${{ matrix.exe }}
         run: |
-          python -m unittest tests.test_seed_tools tests.test_session_spawn -v > "$GITHUB_ARTIFACT_PATH/gated.log" 2>&1
+          python -m unittest tests.test_seed_tools tests.test_session_spawn -v 2>&1 | tee "$GITHUB_ARTIFACT_PATH/gated.log"
 
       - name: Cookie carryover (DPAPI / App-Bound), record failure point
         continue-on-error: true
@@ -94,4 +94,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-gated-output-${{ matrix.browser }}
-          path: $GITHUB_ARTIFACT_PATH
+          path: test-output
