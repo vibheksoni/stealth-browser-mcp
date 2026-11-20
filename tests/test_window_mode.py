@@ -41,6 +41,11 @@ from stealth_browser_mcp.window_mode import (
     window_launch_args,
 )
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -551,6 +556,7 @@ class TestGatedRealBrowserWindowModes(unittest.TestCase):
 
     def test_gated_real_browser_modes(self) -> None:
         """Spawn real browser instances in normal, offscreen, minimized, and headless modes."""
+        window_matrix.skip_if_no_display(self)
         async def _run() -> None:
             tmp_dir = Path(tempfile.mkdtemp(prefix="stealth-gated-window-"))
             manager = BrowserManager()
@@ -602,7 +608,9 @@ class TestGatedRealBrowserWindowModes(unittest.TestCase):
                 return bool(val)
 
             try:
-                # 1. Normal mode: outer width within 100px of requested viewport width
+                # 1. Normal mode: outer width within tolerance of requested viewport width
+                # Headful mode tolerates window-manager adjustments (up to 150 px).
+                tolerance_norm = 150 if window_matrix.HEADFUL else 100
                 d_norm = tmp_dir / "norm"
                 d_norm.mkdir(parents=True, exist_ok=True)
                 opts_norm = BrowserOptions(
@@ -616,10 +624,22 @@ class TestGatedRealBrowserWindowModes(unittest.TestCase):
                 self.assertIsNotNone(inst_norm.window_bounds)
                 tab_norm = await manager.get_tab(inst_norm.instance_id)
                 self.assertIsNotNone(tab_norm)
-                res_norm = await _eval_window_size(tab_norm)
-                outer_w_norm = res_norm.get("width")
+
+                async def _poll_normal_width():
+                    res = await _eval_window_size(tab_norm)
+                    w = res.get("width")
+                    if w is not None and abs(w - 1280) <= tolerance_norm:
+                        return w
+                    return None
+
+                outer_w_norm = await window_matrix.wait_until_async(
+                    _poll_normal_width,
+                    timeout=5.0,
+                    interval=0.1,
+                    message=f"Normal window width not within {tolerance_norm}px of 1280",
+                )
                 self.assertIsNotNone(outer_w_norm)
-                self.assertLessEqual(abs(outer_w_norm - 1280), 100)
+                self.assertLessEqual(abs(outer_w_norm - 1280), tolerance_norm)
                 await manager.close_instance(inst_norm.instance_id)
 
                 # 2. Offscreen mode: outer width within 100px of requested viewport width
@@ -636,8 +656,20 @@ class TestGatedRealBrowserWindowModes(unittest.TestCase):
                 self.assertIsNotNone(inst_off.window_bounds)
                 tab_off = await manager.get_tab(inst_off.instance_id)
                 self.assertIsNotNone(tab_off)
-                res_off = await _eval_window_size(tab_off)
-                outer_w_off = res_off.get("width")
+
+                async def _poll_offscreen_width():
+                    res = await _eval_window_size(tab_off)
+                    w = res.get("width")
+                    if w is not None and abs(w - 1280) <= 100:
+                        return w
+                    return None
+
+                outer_w_off = await window_matrix.wait_until_async(
+                    _poll_offscreen_width,
+                    timeout=5.0,
+                    interval=0.1,
+                    message="Offscreen window width not within 100px of 1280",
+                )
                 self.assertIsNotNone(outer_w_off)
                 self.assertLessEqual(abs(outer_w_off - 1280), 100)
 

@@ -24,6 +24,11 @@ from stealth_browser_mcp import browser_sources, paths, profiles, seed_copy, see
 from stealth_browser_mcp.file_lock import FileLock
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -433,12 +438,13 @@ class TestRefreshSeedGatedRealBrowser(_TempDataDir):
                 executable = check_browser_executable() or "/usr/bin/google-chrome"
 
         async def run_gated_test():
+            window_matrix.skip_if_no_display(self)
             temp_user_data_dir = tempfile.mkdtemp(prefix="stealth_sb46_source_")
             browser = None
             try:
                 with FixtureServer() as fixture_srv:
                     config = uc.Config(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
                         user_data_dir=temp_user_data_dir,
                         browser_executable_path=executable,
                         browser_args=merge_browser_args(["--disable-gpu"]),
@@ -462,10 +468,14 @@ class TestRefreshSeedGatedRealBrowser(_TempDataDir):
                     await asyncio.sleep(0.5)
 
                     # Confirm cookie was registered in the browser session
-                    cookies_str = await tab.evaluate("document.cookie")
-                    self.assertIn("session_token", cookies_str)
+                    async def _has_cookie():
+                        c_str = await tab.evaluate("document.cookie")
+                        return "session_token" in c_str
+
+                    await window_matrix.wait_until_async(_has_cookie, timeout=5.0)
 
                 # Orderly shutdown of Chrome to ensure cookie store is flushed to disk
+                proc = getattr(browser, "_process", None)
                 if getattr(browser, "connection", None) is not None:
                     try:
                         await asyncio.wait_for(
@@ -474,13 +484,62 @@ class TestRefreshSeedGatedRealBrowser(_TempDataDir):
                         )
                     except Exception:
                         pass
-                if getattr(browser, "_process", None) is not None:
+                if proc is not None:
                     try:
-                        await _stop_process(browser._process)
+                        await _stop_process(proc)
                     except Exception:
                         pass
+
+                # Wait for browser process to exit; kill if still alive after 10 s
+                if proc is not None:
+                    deadline_proc = time.monotonic() + 10.0
+                    while time.monotonic() < deadline_proc:
+                        poll_val = proc.poll() if hasattr(proc, "poll") else None
+                        if poll_val is not None:
+                            break
+                        await asyncio.sleep(0.1)
+                    else:
+                        try:
+                            if hasattr(proc, "kill"):
+                                proc.kill()
+                        except Exception:
+                            pass
                 browser._process = None
-                await asyncio.sleep(0.5)
+
+                # Wait for SQLite cookie store to be flushed to disk before refresh_seed
+                def _source_cookies_flushed() -> bool:
+                    candidates = [
+                        Path(temp_user_data_dir) / "Default" / "Network" / "Cookies",
+                        Path(temp_user_data_dir) / "Default" / "Cookies",
+                        Path(temp_user_data_dir) / "Network" / "Cookies",
+                        Path(temp_user_data_dir) / "Cookies",
+                    ]
+                    target_db = None
+                    for cand in candidates:
+                        if cand.is_file():
+                            target_db = cand
+                            break
+                    if not target_db:
+                        return False
+                    try:
+                        con = sqlite3.connect(f"file:{target_db}?mode=ro", uri=True)
+                        try:
+                            cursor = con.cursor()
+                            cursor.execute("SELECT name FROM cookies")
+                            rows = cursor.fetchall()
+                            names = [r[0] for r in rows]
+                            return any("session_token" in n or "auth_user" in n for n in names)
+                        finally:
+                            con.close()
+                    except Exception:
+                        return False
+
+                await window_matrix.wait_until_async(
+                    _source_cookies_flushed,
+                    timeout=15.0,
+                    interval=0.1,
+                    message="Source cookies DB was not flushed to disk with login cookies",
+                )
 
                 # 1. Take hash of the source tree before refresh
                 before_hashes = source_hashes(temp_user_data_dir)

@@ -39,6 +39,11 @@ from stealth_browser_mcp.browser_manager import BrowserManager
 from stealth_browser_mcp.models import BrowserOptions
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -618,6 +623,7 @@ class TestSaveToSeedGatedRealBrowser(_TempDataDir):
                 executable = check_browser_executable() or "/usr/bin/google-chrome"
 
         async def run_acceptance():
+            window_matrix.skip_if_no_display(self)
             temp_source_dir = tempfile.mkdtemp(prefix="stealth_sb49_gated_source_")
             browser_source = None
             manager = BrowserManager()
@@ -632,7 +638,7 @@ class TestSaveToSeedGatedRealBrowser(_TempDataDir):
 
                     # Step 1: Create clean source directory with unauthenticated browser
                     config = uc.Config(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
                         user_data_dir=temp_source_dir,
                         browser_executable_path=executable,
                         browser_args=merge_browser_args(["--disable-gpu"]),
@@ -675,7 +681,8 @@ class TestSaveToSeedGatedRealBrowser(_TempDataDir):
 
                     # Step 3: Spawn session 1 from seed
                     opt1 = BrowserOptions(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
+                        window=window_matrix.window_mode(),
                         sandbox=sandbox_flag,
                         seed=seed_name,
                     )
@@ -717,7 +724,8 @@ class TestSaveToSeedGatedRealBrowser(_TempDataDir):
 
                     # Step 6: Spawn NEW session 2 from the updated seed
                     opt2 = BrowserOptions(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
+                        window=window_matrix.window_mode(),
                         sandbox=sandbox_flag,
                         seed=seed_name,
                         check_url=login_url,

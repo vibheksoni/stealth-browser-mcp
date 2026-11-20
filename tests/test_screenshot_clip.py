@@ -40,6 +40,11 @@ from stealth_browser_mcp.screenshot_clip import (
 )
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -296,12 +301,14 @@ class TestScreenshotClipGated(unittest.IsolatedAsyncioTestCase):
     """Gated real-browser integration tests for element and region screenshots."""
 
     async def asyncSetUp(self) -> None:
-        """Start local fixture server and spawn headless browser instance."""
+        """Start local fixture server and spawn browser instance."""
+        window_matrix.skip_if_no_display(self)
         self.server = FixtureServer().start()
         self.temp_dir = tempfile.mkdtemp(prefix="stealth_clip_")
         self.manager = server.browser_manager
         options = BrowserOptions(
-            headless=True,
+            headless=window_matrix.HEADLESS,
+            window=window_matrix.window_mode(),
             user_data_dir=self.temp_dir,
             sandbox=False if sandbox_must_be_disabled() else True,
         )

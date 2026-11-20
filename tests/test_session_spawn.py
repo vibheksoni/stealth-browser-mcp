@@ -33,6 +33,11 @@ from stealth_browser_mcp.browser_manager import BrowserManager
 from stealth_browser_mcp.models import BrowserOptions
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -560,6 +565,7 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
                 executable = check_browser_executable() or "/usr/bin/google-chrome"
 
         async def run_acceptance():
+            window_matrix.skip_if_no_display(self)
             temp_source_dir = tempfile.mkdtemp(prefix="stealth_sb47_gated_source_")
             browser_seed_creator = None
             manager = BrowserManager()
@@ -572,7 +578,7 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
                     # Step 1: Create synthetic source by logging in on temp profile
                     sandbox_flag = False if sandbox_must_be_disabled() else True
                     config = uc.Config(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
                         user_data_dir=temp_source_dir,
                         browser_executable_path=executable,
                         browser_args=merge_browser_args(["--disable-gpu"]),
@@ -594,6 +600,7 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
                     await asyncio.sleep(0.5)
 
                     # Orderly shutdown of source browser to flush SQLite cookie store
+                    proc = getattr(browser_seed_creator, "_process", None)
                     if getattr(browser_seed_creator, "connection", None) is not None:
                         try:
                             await asyncio.wait_for(
@@ -602,13 +609,59 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
                             )
                         except Exception:
                             pass
-                    if getattr(browser_seed_creator, "_process", None) is not None:
+                    if proc is not None:
                         try:
-                            await _stop_process(browser_seed_creator._process)
+                            await _stop_process(proc)
                         except Exception:
                             pass
+
+                    # Wait for browser process to exit; kill if still alive after 10 s
+                    if proc is not None:
+                        deadline_proc = time.monotonic() + 10.0
+                        while time.monotonic() < deadline_proc:
+                            poll_val = proc.poll() if hasattr(proc, "poll") else None
+                            if poll_val is not None:
+                                break
+                            await asyncio.sleep(0.1)
+                        else:
+                            try:
+                                if hasattr(proc, "kill"):
+                                    proc.kill()
+                            except Exception:
+                                pass
                     browser_seed_creator = None
-                    await asyncio.sleep(0.5)
+
+                    # Wait for Cookies sqlite file to exist and contain rows before reading/copying
+                    def _cookies_db_has_rows() -> bool:
+                        candidates = [
+                            Path(temp_source_dir) / "Default" / "Network" / "Cookies",
+                            Path(temp_source_dir) / "Default" / "Cookies",
+                            Path(temp_source_dir) / "Network" / "Cookies",
+                            Path(temp_source_dir) / "Cookies",
+                        ]
+                        target_db = None
+                        for cand in candidates:
+                            if cand.is_file():
+                                target_db = cand
+                                break
+                        if not target_db:
+                            return False
+                        try:
+                            con = sqlite3.connect(f"file:{target_db}?mode=ro", uri=True)
+                            try:
+                                count = con.execute("SELECT COUNT(*) FROM cookies").fetchone()
+                                return bool(count and count[0] > 0)
+                            finally:
+                                con.close()
+                        except Exception:
+                            return False
+
+                    await window_matrix.wait_until_async(
+                        _cookies_db_has_rows,
+                        timeout=15.0,
+                        interval=0.1,
+                        message="Cookies sqlite file was not flushed with rows",
+                    )
 
                     # Step 2: Refresh seed using seed_tools
                     ref_res = seed_tools.refresh_seed(
@@ -622,7 +675,8 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
 
                     # Step 3: Spawn two sessions from the one seed
                     opt1 = BrowserOptions(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
+                        window=window_matrix.window_mode(),
                         sandbox=sandbox_flag,
                         seed=seed_name,
                         check_url=login_url,
@@ -638,7 +692,8 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
                     self.assertTrue(s1_dir.is_dir())
 
                     opt2 = BrowserOptions(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
+                        window=window_matrix.window_mode(),
                         sandbox=sandbox_flag,
                         seed=seed_name,
                         check_url=login_url,
@@ -667,7 +722,11 @@ class TestSessionSpawnGatedRealBrowser(_TempDataDir):
 
                     # Step 5: Logout in session 1; leaves session 2 logged in
                     await tab1.evaluate("document.getElementById('logout-button').click()")
-                    await asyncio.sleep(0.3)
+                    async def _check_logged_out():
+                        text = await tab1.evaluate("document.getElementById('auth-state').textContent")
+                        return text == "logged_out"
+                    await window_matrix.wait_until_async(_check_logged_out, timeout=5.0)
+
                     state1_after_logout = await tab1.evaluate(
                         "document.getElementById('auth-state').textContent"
                     )

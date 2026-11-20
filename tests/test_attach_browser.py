@@ -38,6 +38,11 @@ from stealth_browser_mcp import server
 from stealth_browser_mcp.browser_manager import BrowserManager
 from stealth_browser_mcp.models import BrowserInstance, BrowserOptions, BrowserState
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 
 class TestAttachBrowserLoopbackValidation(unittest.IsolatedAsyncioTestCase):
     """Test loopback host validation and security restrictions."""
@@ -327,6 +332,7 @@ class TestAttachBrowserGated(unittest.IsolatedAsyncioTestCase):
     )
     async def test_attach_real_chrome_and_navigate(self) -> None:
         """Attach to a real Chrome process, navigate, read title, and verify process survives close."""
+        window_matrix.skip_if_no_display(self)
         chrome_exe = find_chrome()
         if not chrome_exe:
             self.skipTest("No Chrome executable found")
@@ -336,10 +342,13 @@ class TestAttachBrowserGated(unittest.IsolatedAsyncioTestCase):
             port = s.getsockname()[1]
 
         temp_dir = tempfile.mkdtemp(prefix="stealth_gated_managed_")
+        extra_args = ["--no-sandbox"]
+        if window_matrix.HEADLESS:
+            extra_args.append("--headless=new")
         chrome_args = build_chrome_args(
             temp_dir,
             port=port,
-            extra_args=["--headless=new", "--no-sandbox"],
+            extra_args=extra_args,
         )
 
         proc = subprocess.Popen(

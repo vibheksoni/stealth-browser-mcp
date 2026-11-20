@@ -675,7 +675,7 @@ See the live plan in [ROADMAP.md](https://github.com/vibheksoni/stealth-browser-
 
 ## Contributing
 
-Read [CONTRIBUTING.md](https://github.com/vibheksoni/stealth-browser-mcp/blob/master/CONTRIBUTING.md) and open a PR. First-time contributors welcome.
+Read [CONTRIBUTING.md](https://github.com/vibheksoni/stealth-browser-mcp/blob/master/CONTRIBUTING.md) and open a PR. See [docs/TESTING.md](https://github.com/vibheksoni/stealth-browser-mcp/blob/master/docs/TESTING.md) for the test matrix and gated suite instructions. First-time contributors welcome.
 
 If this project saves you time, star the repo. It helps more than you think.
 

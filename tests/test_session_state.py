@@ -22,6 +22,11 @@ from stealth_browser_mcp.browser_manager import BrowserManager
 from stealth_browser_mcp.models import BrowserOptions, BrowserState
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -553,6 +558,7 @@ class TestSessionStateGated(unittest.TestCase):
         from stealth_browser_mcp.process_cleanup import process_cleanup
 
         async def run_test() -> None:
+            window_matrix.skip_if_no_display(self)
             start_time = time.monotonic()
             temp_dir_a = tempfile.mkdtemp(prefix="stealth_session_real_a_")
             temp_dir_b = tempfile.mkdtemp(prefix="stealth_session_real_b_")
@@ -569,7 +575,8 @@ class TestSessionStateGated(unittest.TestCase):
 
                     # Phase 1: Launch Profile A, log in, and save session
                     opts_a = BrowserOptions(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
+                        window=window_matrix.window_mode(),
                         user_data_dir=temp_dir_a,
                         sandbox=False if sandbox_must_be_disabled() else True,
                     )
@@ -621,7 +628,8 @@ class TestSessionStateGated(unittest.TestCase):
 
                     # Phase 2: Launch fresh Profile B (empty profile dir)
                     opts_b = BrowserOptions(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
+                        window=window_matrix.window_mode(),
                         user_data_dir=temp_dir_b,
                         sandbox=False if sandbox_must_be_disabled() else True,
                     )

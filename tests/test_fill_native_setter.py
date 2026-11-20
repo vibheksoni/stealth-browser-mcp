@@ -17,6 +17,11 @@ from stealth_browser_mcp.fill_native_setter import (
     fill_native_setter,
 )
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 
 class RecordingTab:
     """Tab that records CDP commands and answers DOM and Runtime calls."""
@@ -202,7 +207,8 @@ class TestFillNativeSetterUnit(unittest.TestCase):
 class TestFillNativeSetterRealBrowser(unittest.TestCase):
     def test_native_setter_on_real_browser(self):
         async def run():
-            browser = await uc.start(headless=True)
+            window_matrix.skip_if_no_display(self)
+            browser = await uc.start(headless=window_matrix.HEADLESS)
             try:
                 html = (
                     "data:text/html,"
@@ -219,16 +225,27 @@ class TestFillNativeSetterRealBrowser(unittest.TestCase):
                 tab = await browser.get(html)
                 result = await fill_native_setter(tab, "#target", "react-verified-val")
                 self.assertEqual(result, "react-verified-val")
-                val = await tab.evaluate("document.getElementById('target').value")
-                self.assertEqual(val, "react-verified-val")
-                events_raw = await tab.evaluate("JSON.stringify(window.__events)")
-                if isinstance(events_raw, dict) and "value" in events_raw:
-                    events_raw = events_raw["value"]
-                events = (
-                    json.loads(events_raw)
-                    if isinstance(events_raw, str)
-                    else [item["value"] if isinstance(item, dict) and "value" in item else item for item in events_raw]
-                )
+
+                async def _check_value():
+                    v = await tab.evaluate("document.getElementById('target').value")
+                    return v == "react-verified-val"
+
+                await window_matrix.wait_until_async(_check_value, timeout=5.0)
+
+                async def _check_events():
+                    events_raw = await tab.evaluate("JSON.stringify(window.__events)")
+                    if isinstance(events_raw, dict) and "value" in events_raw:
+                        events_raw = events_raw["value"]
+                    events = (
+                        json.loads(events_raw)
+                        if isinstance(events_raw, str)
+                        else [item["value"] if isinstance(item, dict) and "value" in item else item for item in events_raw]
+                    )
+                    if "input" in events and "change" in events:
+                        return events
+                    return None
+
+                events = await window_matrix.wait_until_async(_check_events, timeout=5.0)
                 self.assertIn("input", events)
                 self.assertIn("change", events)
             finally:

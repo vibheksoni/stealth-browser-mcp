@@ -31,6 +31,11 @@ from stealth_browser_mcp.a11y_snapshot import (
 )
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -568,13 +573,15 @@ class RealBrowserA11ySnapshotTests(unittest.IsolatedAsyncioTestCase):
         from stealth_browser_mcp.models import BrowserOptions
         from stealth_browser_mcp.platform_utils import sandbox_must_be_disabled
 
+        window_matrix.skip_if_no_display(self)
         self.temp_dir = tempfile.mkdtemp(prefix="stealth_a11y_test_")
         self.server = FixtureServer().start()
         self.manager = BrowserManager()
         self.instance = await asyncio.wait_for(
             self.manager.spawn_browser(
                 BrowserOptions(
-                    headless=True,
+                    headless=window_matrix.HEADLESS,
+                    window=window_matrix.window_mode(),
                     user_data_dir=self.temp_dir,
                     user_agent=HEADLESS_USER_AGENT,
                     sandbox=False if sandbox_must_be_disabled() else True,

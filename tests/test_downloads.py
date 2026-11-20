@@ -31,6 +31,11 @@ from stealth_browser_mcp.downloads import (
 )
 from tests.browser_harness.server import PAGES_DIR, FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -357,11 +362,12 @@ class TestDownloadsGated(unittest.TestCase):
             self.assertTrue(ready, "FixtureServer failed to start on 127.0.0.1")
 
             async def run_test():
+                window_matrix.skip_if_no_display(self)
                 temp_profile = tempfile.mkdtemp(prefix="stealth_dl_browser_")
                 browser = None
                 try:
                     config = uc.Config(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
                         user_data_dir=temp_profile,
                         browser_executable_path=executable,
                         browser_args=merge_browser_args(["--disable-gpu"]),

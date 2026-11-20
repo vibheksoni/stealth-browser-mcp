@@ -29,6 +29,11 @@ from stealth_browser_mcp.secrets_env import (
 )
 from tests.browser_harness.server import FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -711,12 +716,13 @@ class TestFillToolGatedBrowser(unittest.TestCase):
                 executable = check_browser_executable() or "/usr/bin/google-chrome"
 
         async def run_test():
+            window_matrix.skip_if_no_display(self)
             temp_dir = tempfile.mkdtemp(prefix="stealth_fill_test_")
             browser = None
             try:
                 with FixtureServer() as fixture_srv:
                     config = uc.Config(
-                        headless=True,
+                        headless=window_matrix.HEADLESS,
                         user_data_dir=temp_dir,
                         browser_executable_path=executable,
                         browser_args=merge_browser_args(["--disable-gpu"]),

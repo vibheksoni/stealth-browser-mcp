@@ -25,6 +25,11 @@ from stealth_browser_mcp.profile_policy import (
     parse_policy_rows,
 )
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 
 class TestParsePolicyRows(unittest.TestCase):
     """Test parse_policy_rows pure function."""
@@ -366,8 +371,12 @@ class TestGatedRealBrowserProfilePolicy(unittest.TestCase):
     """Gated integration test using a real browser instance."""
 
     def test_real_browser_policy_report(self) -> None:
+        window_matrix.skip_if_no_display(self)
         async def run():
-            inst = await server.spawn_browser.fn(window="offscreen")
+            inst = await server.spawn_browser.fn(
+                headless=window_matrix.HEADLESS,
+                window=window_matrix.window_mode() if window_matrix.HEADFUL else "offscreen",
+            )
             inst_id = inst["instance_id"]
             try:
                 report = await server.profile_policy_report.fn(inst_id)

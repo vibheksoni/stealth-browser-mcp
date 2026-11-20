@@ -9,6 +9,7 @@ seed left intact.
 
 import hashlib
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -77,56 +78,68 @@ class ConsistencyTests(CopyEngineBase):
     def test_sqlite_copy_stays_consistent_while_writer_inserts(self):
         """A writer thread inserting rows while the copy runs yields a consistent
         snapshot that opens and passes PRAGMA integrity_check."""
-        cookies = self.source / "Cookies"
-        make_sqlite_db(str(cookies), seed_rows=100)
-        plan = self.build_plan()
+        max_attempts = 3
+        last_error = None
+        for attempt in range(max_attempts):
+            shutil.rmtree(self.source, ignore_errors=True)
+            shutil.rmtree(self.dest, ignore_errors=True)
+            self.source.mkdir(exist_ok=True)
+            self.dest.mkdir(exist_ok=True)
 
-        stop = threading.Event()
-        insertions = [0]
-        lock = threading.Lock()
+            cookies = self.source / "Cookies"
+            make_sqlite_db(str(cookies), seed_rows=100)
+            plan = self.build_plan()
 
-        def writer():
-            con = sqlite3.connect(str(cookies))
+            stop = threading.Event()
+            insertions = [0]
+            lock = threading.Lock()
+
+            def writer():
+                con = sqlite3.connect(str(cookies))
+                try:
+                    counter = 100
+                    while not stop.is_set():
+                        with lock:
+                            for i in range(20):
+                                counter += 1
+                                con.execute(
+                                    "INSERT INTO rows (value) VALUES (?)",
+                                    ("live-{}".format(counter),),
+                                )
+                            con.commit()
+                            insertions[0] += 20
+                        time.sleep(0.001)
+                finally:
+                    con.close()
+
+            writer_thread = threading.Thread(target=writer)
+            writer_thread.start()
             try:
-                counter = 100
-                while not stop.is_set():
-                    with lock:
-                        for i in range(20):
-                            counter += 1
-                            con.execute(
-                                "INSERT INTO rows (value) VALUES (?)",
-                                ("live-{}".format(counter),),
-                            )
-                        con.commit()
-                        insertions[0] += 20
-                    time.sleep(0.001)
+                result = sc.copy_seed(plan, str(self.source), str(self.dest))
+            finally:
+                stop.set()
+                writer_thread.join()
+
+            self.assertEqual(result.status, "ok", result.errors)
+            self.assertIn("Cookies", result.copied)
+
+            # The destination opens, rows are present, and the database is clean.
+            dest_db = self.dest / "Cookies"
+            self.assertTrue(dest_db.is_file())
+            con = sqlite3.connect(str(dest_db))
+            try:
+                integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+                row_count = con.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
             finally:
                 con.close()
 
-        writer_thread = threading.Thread(target=writer)
-        writer_thread.start()
-        try:
-            result = sc.copy_seed(plan, str(self.source), str(self.dest))
-        finally:
-            stop.set()
-            writer_thread.join()
+            self.assertEqual(integrity, "ok")
+            self.assertGreaterEqual(row_count, 100)
+            if insertions[0] >= 20:
+                return
+            last_error = f"Only {insertions[0]} rows inserted during copy on attempt {attempt + 1}"
 
-        self.assertEqual(result.status, "ok", result.errors)
-        self.assertIn("Cookies", result.copied)
-
-        # The destination opens, rows are present, and the database is clean.
-        dest_db = self.dest / "Cookies"
-        self.assertTrue(dest_db.is_file())
-        con = sqlite3.connect(str(dest_db))
-        try:
-            integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
-            row_count = con.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
-        finally:
-            con.close()
-
-        self.assertEqual(integrity, "ok")
-        self.assertGreaterEqual(row_count, 100)
-        self.assertGreaterEqual(insertions[0], 20)
+        self.fail(last_error or "Consistency check failed after bounded retries")
 
     def test_source_is_never_modified(self):
         """Every source file hashes identically before and after the copy."""
