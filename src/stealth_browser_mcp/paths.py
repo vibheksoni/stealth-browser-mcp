@@ -64,9 +64,14 @@ def clone_output_dir() -> Path:
     Return the directory for element clone and large response files.
 
     Returns:
-        Path: data_dir() joined with element_clones.
+        Path: session workspace joined with element_clones.
     """
-    return data_dir() / "element_clones"
+    try:
+        from .path_policy import session_workspace_dir
+        base = session_workspace_dir()
+    except Exception:
+        base = data_dir()
+    return base / "element_clones"
 
 
 def default_upload_root() -> Path:

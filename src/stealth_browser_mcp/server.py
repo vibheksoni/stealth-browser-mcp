@@ -1660,7 +1660,7 @@ async def take_screenshot(
         target_clip = validated_clip
 
     if file_path:
-        save_path = resolve_managed_path(file_path)
+        save_path = resolve_managed_path(file_path, for_write=True)
         if target_clip:
             raw_bytes = await capture_clip_screenshot(tab, target_clip, format=format, quality=quality)
         else:

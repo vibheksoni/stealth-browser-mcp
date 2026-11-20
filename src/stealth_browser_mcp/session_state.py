@@ -9,8 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from . import cdp_raw
 from .debug_logger import debug_logger
-from .path_policy import read_managed_text, resolve_managed_path, write_private_text
-from .paths import data_dir
+from .path_policy import read_managed_text, resolve_managed_path, session_workspace_dir, write_private_text
 
 
 def default_session_path(instance_id: Optional[str] = None) -> Path:
@@ -23,7 +22,7 @@ def default_session_path(instance_id: Optional[str] = None) -> Path:
     Returns:
         Path: Target session file location under the data directory.
     """
-    sessions_dir = data_dir() / "sessions"
+    sessions_dir = session_workspace_dir() / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
     slug = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(instance_id)) if instance_id else "default"
     return sessions_dir / f"session_{slug}.json"

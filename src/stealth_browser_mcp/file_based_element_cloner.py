@@ -25,11 +25,14 @@ class FileBasedElementCloner:
                 path that avoids startup failures when the host process uses a
                 read-only cwd.
         """
-        if output_dir is None:
-            self.output_dir = clone_output_dir()
-        else:
-            self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._output_dir_override = Path(output_dir) if output_dir is not None else None
+
+    @property
+    def output_dir(self) -> Path:
+        """Directory for this caller's clone files (per MCP session when set)."""
+        path = self._output_dir_override if self._output_dir_override is not None else clone_output_dir()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _safe_process_framework_handlers(self, framework_handlers):
         """Safely process framework handlers that might be dict or list."""

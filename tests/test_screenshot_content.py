@@ -158,7 +158,11 @@ class ScreenshotContentTests(unittest.TestCase):
         self.assertEqual(result.structured_content["sha256"], hashlib.sha256(image).hexdigest())
 
     def test_explicit_file_export_stays_available(self):
-        target = Path(self.directory.name) / "exports" / "capture.png"
+        export_root = Path(self.directory.name) / "exports"
+        export_root.mkdir(parents=True, exist_ok=True)
+        target = export_root / "capture.png"
+        os.environ["STEALTH_EXPORT_DIRS"] = str(export_root)
+        self.addCleanup(lambda: os.environ.pop("STEALTH_EXPORT_DIRS", None))
         result = self.call(file_path=str(target))
         self.assertFalse(result.isError)
         self.assertTrue(target.is_file())

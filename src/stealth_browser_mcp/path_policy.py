@@ -1,7 +1,9 @@
 """Confine caller file paths to data_dir and block dangerous URL schemes (SB-83 / F7, F12)."""
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Iterable, List, Optional, Union
 from urllib.parse import urlparse
@@ -41,19 +43,58 @@ def _configured_roots(env_name: str) -> List[Path]:
     return roots
 
 
+def session_workspace_dir() -> Path:
+    """Return the caller's file workspace.
+
+    stdio (no MCP session) uses data_dir(). HTTP sessions are confined to
+    data_dir()/clients/<session>/ so one session cannot read or write
+    another's saved sessions, exports, or clone files.
+    """
+    root = data_dir().resolve()
+    try:
+        from .mcp_sessions import get_current_mcp_session_id
+        sid = get_current_mcp_session_id()
+    except Exception:
+        sid = None
+    if not sid:
+        return root
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(sid))[:80].strip("._")
+    if not safe:
+        safe = hashlib.sha256(str(sid).encode("utf-8")).hexdigest()[:16]
+    path = (root / "clients" / safe)
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return path
+    clients_root = (root / "clients").resolve()
+    if not _is_under(resolved, clients_root):
+        fallback = clients_root / hashlib.sha256(str(sid).encode("utf-8")).hexdigest()[:16]
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+    return resolved
+
+
 def allowed_read_roots() -> List[Path]:
-    """Directories that caller file paths may be read from (data dir + upload list)."""
-    roots = [data_dir().resolve()]
+    """Directories that caller file paths may be read from (workspace + upload list)."""
+    roots = [session_workspace_dir()]
     roots.extend(_configured_roots(FILE_UPLOAD_ALLOWED_DIRS_ENV))
     return roots
 
 
 def allowed_write_roots() -> List[Path]:
-    """Directories that caller file paths may be written under (data dir + export list).
+    """Directories that caller file paths may be written under (workspace + export list).
 
     BROWSER_FILE_UPLOAD_ALLOWED_DIRS is read-only and is not included.
+    The shared data_dir() root is replaced by the per-session workspace when
+    an MCP session is active, so one session cannot read another session's files.
     """
-    roots = [data_dir().resolve()]
+    roots = [session_workspace_dir()]
     roots.extend(_configured_roots(EXPORT_DIRS_ENV))
     return roots
 
