@@ -29,10 +29,13 @@ from .comprehensive_element_cloner import comprehensive_element_cloner
 from .debug_logger import debug_logger
 from .dom_handler import DOMHandler
 from .element_cloner import element_cloner
+from .content_cap import DEFAULT_PAGE_CONTENT_CHARS, clamp_max_chars
+from .errors import instance_not_found_error, no_active_tab_error, tab_not_found_error
 from .file_based_element_cloner import file_based_element_cloner
 from starlette.middleware import Middleware as ASGIMiddleware
 from .http_auth import (
     BearerAuthMiddleware,
+    McpPathRewriteMiddleware,
     create_http_auth_provider,
     get_mcp_token as get_http_auth_token,
     validate_bind,
@@ -749,7 +752,7 @@ async def go_back(instance_id: str) -> Dict[str, Any]:
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
 
     try:
         history = await tab.send(uc.cdp.page.get_navigation_history())
@@ -787,7 +790,7 @@ async def go_forward(instance_id: str) -> Dict[str, Any]:
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
 
     try:
         history = await tab.send(uc.cdp.page.get_navigation_history())
@@ -826,7 +829,7 @@ async def reload_page(instance_id: str, ignore_cache: bool = False) -> bool:
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     await tab.reload(ignore_cache=ignore_cache)
     return True
 
@@ -992,7 +995,7 @@ async def query_elements(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     debug_logger.log_info('Server', 'query_elements', f'Received limit parameter: {limit} (type: {type(limit)})')
     elements = await dom_handler.query_elements(
         tab, selector, text_filter, visible_only, limit
@@ -1037,7 +1040,7 @@ async def click_element(
         timeout = int(timeout)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.click_element(
         tab, selector, text_match, timeout, frame=frame, instance_id=instance_id
     )
@@ -1075,7 +1078,7 @@ async def type_text(
         delay_ms = int(delay_ms)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.type_text(
         tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter, frame=frame, instance_id=instance_id
     )
@@ -1114,7 +1117,7 @@ async def fill(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await fill_tool.fill(
         tab,
         selector,
@@ -1186,7 +1189,7 @@ async def paste_text(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.paste_text(
         tab, selector, text, clear_first, frame=frame, instance_id=instance_id, mode=mode
     )
@@ -1228,7 +1231,7 @@ async def press_key(
         modifiers = [modifiers]
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.press_key(
         tab, key, modifiers, selector, count, delay_ms, frame=frame, instance_id=instance_id
     )
@@ -1256,7 +1259,7 @@ async def file_upload(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.file_upload(tab, selector, paths)
 
 @section_tool("element-interaction")
@@ -1306,7 +1309,7 @@ async def select_option(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     
     converted_index = None
     if index is not None:
@@ -1349,7 +1352,7 @@ async def choose_option(
         timeout = int(timeout)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.choose_option(
         tab,
         selector,
@@ -1376,7 +1379,7 @@ async def get_element_state(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.get_element_state(tab, selector)
 
 @section_tool("element-interaction")
@@ -1406,7 +1409,7 @@ async def wait_for_element(
         timeout = int(timeout)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.wait_for_element(tab, selector, timeout, visible, text_content, frame=frame)
 
 @section_tool("element-interaction")
@@ -1432,7 +1435,7 @@ async def scroll_page(
         amount = int(amount)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.scroll_page(tab, direction, amount, smooth)
 
 @section_tool("element-interaction")
@@ -1454,7 +1457,7 @@ async def execute_script(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     try:
         result = await dom_handler.execute_script(tab, script, args)
         bounded = response_handler.handle_response(result, "script_result")
@@ -1473,7 +1476,8 @@ async def execute_script(
 @section_tool("element-interaction")
 async def get_page_content(
     instance_id: str,
-    include_frames: bool = False
+    include_frames: bool = False,
+    max_chars: int = DEFAULT_PAGE_CONTENT_CHARS,
 ) -> Dict[str, Any]:
     """
     Get page HTML and text content.
@@ -1481,14 +1485,15 @@ async def get_page_content(
     Args:
         instance_id (str): Browser instance ID.
         include_frames (bool): Include iframe information.
+        max_chars (int): Max characters for content (1000..200000). Defaults to 40000.
 
     Returns:
         Dict[str, Any]: Page content including HTML, text, and metadata.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    content = await dom_handler.get_page_content(tab, include_frames)
+        raise instance_not_found_error(instance_id)
+    content = await dom_handler.get_page_content(tab, include_frames, max_chars=max_chars)
     
     return response_handler.handle_response(
         content, 
@@ -1546,7 +1551,7 @@ async def take_screenshot(
 
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
 
     target_clip: Optional[Dict[str, float]] = None
     if selector:
@@ -1649,7 +1654,7 @@ async def get_accessibility_snapshot(
         include_json = include_json.strip().lower() in {"1", "true", "yes", "on"}
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await dom_handler.get_accessibility_snapshot(
         tab,
         instance_id=instance_id,
@@ -1780,7 +1785,7 @@ async def get_response_content(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     body = await network_interceptor.get_response_body(tab, request_id)
     if body:
         try:
@@ -1984,7 +1989,7 @@ async def modify_headers(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await network_interceptor.modify_headers(tab, headers)
 
 
@@ -2005,7 +2010,7 @@ async def get_cookies(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await network_interceptor.get_cookies(tab, urls)
 
 
@@ -2040,7 +2045,7 @@ async def set_cookie(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     
     if not url and not domain:
         current_url = tab.url if hasattr(tab, 'url') else None
@@ -2085,7 +2090,7 @@ async def clear_cookies(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await network_interceptor.clear_cookies(tab, url)
 
 
@@ -2112,7 +2117,7 @@ async def save_session(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await session_state.save_session(
         instance_id=instance_id,
         file_path=file_path,
@@ -2145,7 +2150,7 @@ async def restore_session(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await session_state.restore_session(
         instance_id=instance_id,
         file_path=file_path,
@@ -2424,7 +2429,7 @@ async def get_active_tab(instance_id: str) -> Dict[str, Any]:
         mcp_session_manager.check_access(instance_id)
     tab = await browser_manager.get_active_tab(instance_id)
     if not tab:
-        return {"error": "No active tab found"}
+        raise no_active_tab_error(instance_id)
     browser = await browser_manager.get_browser(instance_id, touch_activity=False)
     if browser:
         try:
@@ -2500,7 +2505,7 @@ async def extract_element_styles(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_styles(
         tab,
         selector=selector,
@@ -2536,7 +2541,7 @@ async def extract_element_structure(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_structure(
         tab,
         selector=selector,
@@ -2572,7 +2577,7 @@ async def extract_element_events(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_events(
         tab,
         selector=selector,
@@ -2608,7 +2613,7 @@ async def extract_element_animations(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_animations(
         tab,
         selector=selector,
@@ -2644,7 +2649,7 @@ async def extract_element_assets(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await element_cloner.extract_element_assets(
         tab,
         selector=selector,
@@ -2682,7 +2687,7 @@ async def extract_element_styles_cdp(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_styles_cdp(
         tab,
         selector=selector,
@@ -2716,7 +2721,7 @@ async def extract_related_files(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await element_cloner.extract_related_files(
         tab,
         analyze_css=analyze_css,
@@ -2763,7 +2768,7 @@ async def clone_element_complete(
             raise Exception(f"Invalid JSON in extraction_options: {extraction_options}")
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await comprehensive_element_cloner.extract_complete_element(
         tab,
         selector=selector,
@@ -2915,7 +2920,7 @@ async def clone_element_progressive(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await progressive_element_cloner.clone_element_progressive(tab, selector, include_children)
 
 
@@ -3103,7 +3108,7 @@ async def clone_element_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     parsed_options = None
     if extraction_options:
         try:
@@ -3137,7 +3142,7 @@ async def extract_complete_element_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_complete_element_to_file(
         tab, selector, include_children
     )
@@ -3171,7 +3176,7 @@ async def extract_complete_element_cdp(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     cdp_cloner = CDPElementCloner()
     return await cdp_cloner.extract_complete_element_cdp(tab, selector, include_children)
 
@@ -3201,7 +3206,7 @@ async def extract_element_styles_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_styles_to_file(
         tab,
         selector=selector,
@@ -3237,7 +3242,7 @@ async def extract_element_structure_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_structure_to_file(
         tab,
         selector=selector,
@@ -3273,7 +3278,7 @@ async def extract_element_events_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_events_to_file(
         tab,
         selector=selector,
@@ -3309,7 +3314,7 @@ async def extract_element_animations_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_animations_to_file(
         tab,
         selector=selector,
@@ -3345,7 +3350,7 @@ async def extract_element_assets_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_assets_to_file(
         tab,
         selector=selector,
@@ -3423,7 +3428,7 @@ async def execute_cdp_command(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.execute_cdp_command(tab, command, params or {})
 
 
@@ -3595,7 +3600,7 @@ async def call_javascript_function(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.call_discovered_function(tab, function_path, args or [])
 
 
@@ -3616,7 +3621,7 @@ async def inspect_function_signature(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.inspect_function_signature(tab, function_path)
 
 
@@ -3639,7 +3644,7 @@ async def inject_and_execute_script(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.inject_and_execute_script(tab, script_code, context_id)
 
 
@@ -3662,7 +3667,7 @@ async def create_persistent_function(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     try:
         source = await cdp_function_executor.prepare_persistent_function(tab, function_name, function_code, instance_id)
         identifier = await browser_manager.add_init_script(instance_id, source)
@@ -3694,7 +3699,7 @@ async def execute_function_sequence(
     from .cdp_function_executor import FunctionCall
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return [{"success": False, "error": f"Instance not found: {instance_id}"}]
+        return [{"success": False, "error": str(instance_not_found_error(instance_id))}]
     calls = []
     for call_data in function_calls:
         calls.append(FunctionCall(
@@ -3734,7 +3739,7 @@ async def create_page_binding(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     try:
         return await page_bindings.create(tab, instance_id, binding_name, auto_resolve, auto_response)
     except Exception as e:
@@ -3833,7 +3838,7 @@ async def execute_python_in_browser(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.execute_python_in_browser(tab, python_code)
 
 
@@ -4095,7 +4100,7 @@ async def profile_policy_report(instance_id: str) -> Dict[str, Any]:
     """
     browser = await browser_manager.get_browser(instance_id)
     if not browser:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
 
     tab = None
     try:
@@ -4127,6 +4132,15 @@ async def profile_policy_report(instance_id: str) -> Dict[str, Any]:
 if parse_bool_env("XPOOL_SAFE_MODE", default=False):
     DISABLED_SECTIONS.add("cdp-functions")
     apply_disabled_sections()
+
+
+def create_http_middleware(token: Optional[str] = None) -> List[ASGIMiddleware]:
+    """Create ASGI middleware stack for HTTP transport with auth and path normalization."""
+    return [
+        ASGIMiddleware(BearerAuthMiddleware, expected_token=token),
+        ASGIMiddleware(McpPathRewriteMiddleware),
+        ASGIMiddleware(SessionLifecycleMiddleware, session_manager=mcp_session_manager),
+    ]
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -4280,10 +4294,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         if token and mcp.auth is None:
             mcp.auth = create_http_auth_provider(token)
 
-        http_middleware = [
-            ASGIMiddleware(BearerAuthMiddleware, expected_token=token),
-            ASGIMiddleware(SessionLifecycleMiddleware, session_manager=mcp_session_manager),
-        ]
+        http_middleware = create_http_middleware(token)
         logging.getLogger("mcp.server.streamable_http").addFilter(_ClosedResourceNoiseFilter())
         try:
             mcp.run(

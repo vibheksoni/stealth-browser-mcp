@@ -20,6 +20,8 @@ from typing import Any, Dict, Generator, List, Optional
 
 from starlette.types import Message, Receive, Scope, Send
 
+from .errors import instance_not_found_error
+
 _current_mcp_session_id: ContextVar[Optional[str]] = ContextVar(
     "current_mcp_session_id",
     default=None,
@@ -133,7 +135,7 @@ class MCPSessionManager:
         """
         sid = mcp_session_id if mcp_session_id is not None else get_current_mcp_session_id()
         if sid and not self.is_instance_accessible(sid, instance_id):
-            raise Exception(f"Instance not found: {instance_id}")
+            raise instance_not_found_error(instance_id)
 
     def filter_instances(
         self,

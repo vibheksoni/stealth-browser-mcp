@@ -233,6 +233,28 @@ class BearerAuthMiddleware:
         })
 
 
+class McpPathRewriteMiddleware:
+    """ASGI middleware that rewrites scope['path'] from /mcp to /mcp/ (and raw_path).
+
+    Placed inside the auth middleware to ensure unauthenticated requests are
+    rejected with 401 first, while allowing authenticated clients to post to
+    either /mcp or /mcp/ without triggering a Starlette 307 redirect.
+    """
+
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") == "http":
+            path = scope.get("path")
+            if path == "/mcp":
+                scope["path"] = "/mcp/"
+                raw_path = scope.get("raw_path")
+                if raw_path == b"/mcp":
+                    scope["raw_path"] = b"/mcp/"
+        await self.app(scope, receive, send)
+
+
 def create_http_auth_provider(token: Optional[str] = None) -> Optional[TokenVerifier]:
     """Create FastMCP token verifier for HTTP transport.
 

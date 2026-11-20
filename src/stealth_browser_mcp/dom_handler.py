@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from nodriver import Tab
 
 from . import input_actions
+from .content_cap import DEFAULT_PAGE_CONTENT_CHARS, cap_content, clamp_max_chars
 from .debug_logger import debug_logger
 from .file_upload_security import validate_upload_paths
 from .js_values import evaluate_to_python
@@ -997,28 +998,44 @@ class DOMHandler:
     @staticmethod
     async def get_page_content(
         tab: Tab,
-        include_frames: bool = False
-    ) -> Dict[str, str]:
+        include_frames: bool = False,
+        max_chars: int = DEFAULT_PAGE_CONTENT_CHARS,
+    ) -> Dict[str, Any]:
         """
-        Get page HTML and text content.
+        Get page HTML and text content with size capping.
 
         Args:
             tab (Tab): The browser tab object.
             include_frames (bool): Include iframe contents.
+            max_chars (int): Maximum characters for content (clamped to 1000..200000).
 
         Returns:
-            Dict[str, str]: Dictionary with page content.
+            Dict[str, Any]: Dictionary with page content and truncation metadata.
         """
         try:
             html = await tab.get_content()
             text = await tab.evaluate("document.body.innerText")
 
-            content = {
-                'html': html,
-                'text': text,
+            limit = clamp_max_chars(max_chars)
+            capped_html = cap_content(html, limit)
+            capped_text = cap_content(text, limit)
+
+            is_truncated = capped_html["truncated"] or capped_text["truncated"]
+
+            content: Dict[str, Any] = {
+                'html': capped_html["content"],
+                'text': capped_text["content"],
                 'url': await tab.evaluate("window.location.href"),
-                'title': await tab.evaluate("document.title")
+                'title': await tab.evaluate("document.title"),
+                'truncated': is_truncated,
+                'original_chars': max(capped_html["original_chars"], capped_text["original_chars"]),
             }
+
+            if is_truncated:
+                content['note'] = (
+                    f"Content truncated due to max_chars limit ({limit}). "
+                    "Pass a selector or higher max_chars, or use get_accessibility_snapshot."
+                )
 
             if include_frames:
                 frames = []

@@ -16,6 +16,7 @@ from . import cdp_raw
 from .browser_launcher import launch_browser
 from .debug_logger import debug_logger
 from .dom_handler import DOMHandler
+from .errors import instance_not_found_error
 from .models import BrowserInstance, BrowserState, BrowserOptions, PageState
 from .network_idle import NetworkIdleTracker, wait_for_network_idle
 from .persistent_storage import persistent_storage
@@ -1892,7 +1893,7 @@ class BrowserManager:
         """
         data = await self.get_instance(instance_id)
         if not data:
-            raise Exception(f"Instance not found: {instance_id}")
+            raise instance_not_found_error(instance_id)
         tab = await open_background_tab(data["browser"], "about:blank")
         options: BrowserOptions = data.get("options")
         if options is not None:
@@ -1975,7 +1976,7 @@ class BrowserManager:
         """
         data = await self.get_instance(instance_id)
         if not data:
-            raise Exception(f"Instance not found: {instance_id}")
+            raise instance_not_found_error(instance_id)
         await self.touch_instance(instance_id)
         script = {
             "source": source,
