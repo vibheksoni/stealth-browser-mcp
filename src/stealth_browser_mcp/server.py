@@ -59,6 +59,11 @@ from .persistent_storage import persistent_storage
 from .progressive_element_cloner import progressive_element_cloner
 from .response_handler import response_handler
 from .screenshot_encoder import DEFAULT_QUALITY, fit_screenshot, validate_options as validate_screenshot_options
+from .screenshot_clip import (
+    capture_clip_screenshot,
+    resolve_element_clip,
+    validate_clip_args,
+)
 from .stdio_guard import install_stdio_guard
 from .platform_utils import validate_browser_environment, get_platform_info
 from .process_cleanup import process_cleanup
@@ -1344,7 +1349,9 @@ async def take_screenshot(
     format: str = "png",
     file_path: Optional[str] = None,
     quality: int = DEFAULT_QUALITY,
-    max_width: Optional[int] = None
+    max_width: Optional[int] = None,
+    selector: Optional[str] = None,
+    clip: Optional[Dict[str, float]] = None,
 ) -> ToolResult:
     """
     Take a screenshot of the page.
@@ -1352,7 +1359,8 @@ async def take_screenshot(
     The image is returned as MCP image content with metadata. It is scaled
     down, keeping its aspect ratio, when it is wider than max_width, longer
     than 8000 pixels on a side, or too large to send inline. The metadata
-    reports the original size and the scale used.
+    reports the original size and the scale used. Optionally captures a
+    specific element via selector or custom region via clip.
 
     Args:
         instance_id (str): Browser instance ID.
@@ -1361,6 +1369,8 @@ async def take_screenshot(
         file_path (Optional[str]): Save the full-resolution screenshot to this path on the server in addition to returning image content.
         quality (int): JPEG quality from 1 to 100. PNG is lossless and ignores it.
         max_width (Optional[int]): Largest width in pixels to return, for a smaller image.
+        selector (Optional[str]): CSS selector to capture just that element's bounding box.
+        clip (Optional[Dict[str, float]]): Region to capture as {"x", "y", "width", "height"} in page CSS pixels.
 
     Returns:
         ToolResult: MCP image content block with format, width, height, original size,
@@ -1378,17 +1388,32 @@ async def take_screenshot(
         mcp_session_manager.check_access(instance_id)
 
     format = validate_screenshot_options(format, quality, max_width)
+    validated_clip = validate_clip_args(selector=selector, clip=clip)
 
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise Exception(f"Instance not found: {instance_id}")
 
+    target_clip: Optional[Dict[str, float]] = None
+    if selector:
+        target_clip = await resolve_element_clip(tab, selector)
+    elif validated_clip:
+        target_clip = validated_clip
+
     if file_path:
         save_path = Path(file_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        await tab.save_screenshot(save_path, format=format, full_page=full_page)
+        if target_clip:
+            raw_bytes = await capture_clip_screenshot(tab, target_clip, format=format, quality=quality)
+            save_path.write_bytes(raw_bytes)
+        else:
+            await tab.save_screenshot(save_path, format=format, full_page=full_page)
         image_bytes, metadata = fit_screenshot(save_path, format, quality, max_width)
         metadata["path"] = str(save_path.absolute())
+        if target_clip is not None:
+            metadata["region"] = target_clip
+        if selector is not None:
+            metadata["selector"] = selector
         return ToolResult(
             content=[
                 TextContent(
@@ -1408,8 +1433,16 @@ async def take_screenshot(
         tmp_path = Path(tmp_file.name)
 
     try:
-        await tab.save_screenshot(tmp_path, format="png", full_page=full_page)
+        if target_clip:
+            raw_bytes = await capture_clip_screenshot(tab, target_clip, format="png")
+            tmp_path.write_bytes(raw_bytes)
+        else:
+            await tab.save_screenshot(tmp_path, format="png", full_page=full_page)
         image_bytes, metadata = fit_screenshot(tmp_path, format, quality, max_width)
+        if target_clip is not None:
+            metadata["region"] = target_clip
+        if selector is not None:
+            metadata["selector"] = selector
         return ToolResult(
             content=[
                 ImageContent(

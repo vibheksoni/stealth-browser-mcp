@@ -13,7 +13,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 from unittest.mock import patch
 
 from fastmcp import Client, FastMCP
@@ -25,7 +25,13 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from stealth_browser_mcp import screenshot_encoder
+from stealth_browser_mcp import screenshot_clip, screenshot_encoder
+from stealth_browser_mcp.screenshot_clip import (
+    capture_clip_screenshot,
+    compute_clip_from_rect,
+    resolve_element_clip,
+    validate_clip_args,
+)
 from stealth_browser_mcp.screenshot_encoder import DEFAULT_QUALITY, fit_screenshot, validate_options
 
 
@@ -65,10 +71,15 @@ class ScreenshotContentTests(unittest.TestCase):
 
         namespace = dict(
             __name__="screenshot_test", section_tool=lambda _: mcp.tool,
-            browser_manager=Manager(), Path=Path, Optional=Optional, Union=Union,
+            browser_manager=Manager(), Path=Path, Any=Any, Dict=Dict, Optional=Optional, Union=Union,
             ToolResult=ToolResult, ImageContent=ImageContent, TextContent=TextContent,
             tempfile=tempfile, os=os, base64=base64, json=json, DEFAULT_QUALITY=DEFAULT_QUALITY,
             fit_screenshot=fit_screenshot, validate_screenshot_options=validate_options,
+            validate_clip_args=validate_clip_args,
+            resolve_element_clip=resolve_element_clip,
+            capture_clip_screenshot=capture_clip_screenshot,
+            compute_clip_from_rect=compute_clip_from_rect,
+            screenshot_clip=screenshot_clip,
         )
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(ROOT / "src/stealth_browser_mcp/server.py"), "exec"), namespace)
         return mcp

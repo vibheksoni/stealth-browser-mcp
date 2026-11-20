@@ -393,7 +393,7 @@ client = Client(
 | `get_page_content()` | Read page HTML and text |
 | `take_screenshot()` | Capture screenshots |
 
-`take_screenshot` returns an MCP image with metadata (format, size, scale, quality, byte count, SHA-256), so remote clients can show it without reading the server's disk. Large captures, such as long full-page screenshots, are scaled down to fit client limits (8000 px per side, about 5 MB), and the metadata reports the original size. Pass `format="jpeg"` with a lower `quality`, or `max_width`, for smaller images, or `file_path` to save the full-resolution image on the server.
+`take_screenshot` returns an MCP image with metadata (format, size, scale, quality, byte count, SHA-256), so remote clients can show it without reading the server's disk. Large captures, such as long full-page screenshots, are scaled down to fit client limits (8000 px per side, about 5 MB), and the metadata reports the original size. Pass `format="jpeg"` with a lower `quality`, or `max_width`, for smaller images, `selector` to capture an element, `clip` for a page region, or `file_path` to save the full-resolution image on the server.
 
 </details>
 
