@@ -304,7 +304,11 @@ async def app_lifespan(server):
 mcp = FastMCP(
     name="Browser Automation MCP",
     instructions=agent_guide.build_connect_instructions(),
-    auth=create_http_auth_provider(HTTP_AUTH_TOKEN),
+    auth=(
+        None
+        if _TOKEN_CONFIG_ERROR is not None
+        else create_http_auth_provider(HTTP_AUTH_TOKEN)
+    ),
     lifespan=app_lifespan,
 )
 
@@ -2437,22 +2441,22 @@ async def export_debug_logs(
         str: Path to the exported file.
     """
     try:
-        filename = str(resolve_managed_path(filename))
-        filepath = await asyncio.wait_for(
-            asyncio.to_thread(
-                debug_logger.export_to_file_paginated,
-                filename,
+        def _export_confined():
+            debug_data = debug_logger.get_debug_view_paginated(
                 max_errors if not include_all else None,
                 max_warnings if not include_all else None,
                 max_info if not include_all else None,
-                format
-            ),
+            )
+            fmt = debug_logger.choose_export_format(debug_data, format)
+            dest = debug_logger.rewrite_export_filename(str(filename), fmt)
+            resolved = resolve_managed_path(dest, for_write=True)
+            payload = debug_logger.serialize_export(debug_data, fmt)
+            return str(write_private_bytes(resolved, payload))
+
+        filepath = await asyncio.wait_for(
+            asyncio.to_thread(_export_confined),
             timeout=30.0
         )
-        try:
-            os.chmod(filepath, 0o600)
-        except OSError:
-            pass
         return filepath
     except asyncio.TimeoutError:
         return "Export timeout - file too large. Try with smaller limits or 'gzip-pickle' format."

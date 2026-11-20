@@ -26,8 +26,11 @@ A loopback bind behind a reverse proxy counts as off loopback. Do not set
 `STEALTH_ALLOW_CODE_HOOKS`, `STEALTH_ALLOW_RAW_CDP`,
 `STEALTH_ALLOW_ATTACH`, `STEALTH_ALLOW_REMOTE_ATTACH`,
 `STEALTH_ALLOW_SEED_PASSWORDS`, or `STEALTH_ALLOW_SEED_REFRESH`, if a proxy will forward to this server.
-Those flags are also ignored on a request that carries `X-Forwarded-For`
-or `Forwarded`.
+Those flags are also ignored on a request that carries `X-Forwarded-For`,
+`Forwarded`, `Via`, `X-Real-IP`, `X-Forwarded-Host`, or `X-Forwarded-Proto`.
+The check uses the live request, not the session's first `initialize`.
+Detection depends on the proxy adding at least one of those headers;
+nginx's default `proxy_pass` adds none of them.
 
 HTTP always requires a token. Binding `--host 0.0.0.0` (or any non-loopback
 address) without `STEALTH_MCP_TOKEN` or `STEALTH_MCP_TOKEN_FILE` set is

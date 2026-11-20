@@ -183,8 +183,66 @@ def cleanup_generated_token_files() -> None:
             pass
 
 
+_PROXY_HEADER_NAMES = frozenset({
+    "x-forwarded-for",
+    "forwarded",
+    "via",
+    "x-real-ip",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+})
+_PROXY_HEADER_BYTES = frozenset(name.encode("ascii") for name in _PROXY_HEADER_NAMES)
+
+
+def headers_appear_proxied(headers) -> bool:
+    """True when headers include a common reverse-proxy forwarding field."""
+    if headers is None:
+        return False
+    items = []
+    if hasattr(headers, "items") and not isinstance(headers, (list, tuple)):
+        try:
+            items = list(headers.items())
+        except Exception:
+            items = []
+            try:
+                for key in headers:
+                    items.append((key, headers.get(key)))
+            except Exception:
+                return False
+    elif isinstance(headers, (list, tuple)):
+        items = list(headers)
+    else:
+        return False
+    for key, value in items:
+        if value in (None, "", b""):
+            continue
+        if isinstance(key, bytes):
+            name = key.lower()
+            if name in _PROXY_HEADER_BYTES:
+                return True
+        else:
+            if str(key).lower() in _PROXY_HEADER_NAMES:
+                return True
+    return False
+
+
 def request_appears_proxied() -> bool:
-    """True when the current HTTP request carries X-Forwarded-For or Forwarded."""
+    """True when the current HTTP request appears to have come through a proxy.
+
+    Prefers the live request headers (so a later tool call is not stuck with
+    the value from session initialize). Falls back to the ASGI middleware
+    ContextVar when no request is in scope. Detection depends on the proxy
+    adding X-Forwarded-For, Forwarded, Via, X-Real-IP, X-Forwarded-Host, or
+    X-Forwarded-Proto; nginx's default proxy_pass adds none of these.
+    """
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+        headers = getattr(request, "headers", None)
+        if headers is not None:
+            return headers_appear_proxied(headers)
+    except Exception:
+        pass
     return bool(_REQUEST_FORWARDED.get())
 
 
@@ -585,7 +643,7 @@ async def _reject_unsupported_protocol(scope: Scope, send: Send) -> None:
     if scope.get("type") == "websocket":
         await send({"type": "websocket.close", "code": 1008, "reason": "Unsupported protocol"})
         return
-    await _reject_unsupported_protocol(scope, send)
+    await _send_status(send, 403, b'{"error":"Forbidden","message":"Unsupported protocol"}')
 
 
 async def _send_status(send: Send, status: int, body: bytes) -> None:
@@ -637,7 +695,7 @@ class HostOriginMiddleware:
         for key, value in scope.get("headers", []):
             if key.lower() not in header_map:
                 header_map[key.lower()] = value
-        forwarded = b"x-forwarded-for" in header_map or b"forwarded" in header_map
+        forwarded = headers_appear_proxied(list(header_map.items()))
         token = _REQUEST_FORWARDED.set(bool(forwarded))
         try:
             await self._enforce_http(scope, receive, send, header_map)
