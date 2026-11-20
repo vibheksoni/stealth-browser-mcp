@@ -84,8 +84,8 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 ## Features
 
 - **Anti-bot resistance** - Has passed Cloudflare and Queue-It style challenges in testing; results vary by site, region, browser version, and detector version.
-- **101 tools across 11 sections** - From basic navigation to advanced CDP function execution.
-- **Modular loading** - Run the full 101-tool surface or a minimal 21-tool core; disable sections you do not need.
+- **119 tools across 11 sections** - From basic navigation to advanced CDP function execution.
+- **Modular loading** - Run the full 119-tool surface or a minimal 35-tool core; disable sections you do not need.
 - **Pixel-accurate element cloning** - Extract complete elements with CSS, DOM structure, events, animations, and assets via CDP.
 - **Network inspection** - Inspect requests, responses, headers, payloads, and captured bodies through your AI agent.
 - **Dynamic hook system** - Restricted Python hooks can intercept, block, redirect, fulfill, or modify request/response flows.
@@ -248,14 +248,19 @@ Treat the MCP client or agent as the security principal. The recommended deploym
 
 ## Modular Architecture
 
-Choose exactly what functionality you need. Run the full 101-tool suite or strip it down to the 21-tool core.
+Choose exactly what functionality you need. Run the full 119-tool suite or strip it down to the 35-tool core.
 
 | Mode | Tools | Use Case |
 |------|-------|----------|
-| **Full** (default) | 101 | Complete browser automation and debugging |
-| **Minimal** (`--minimal`) | 21 | Core browser automation and interaction |
+| **Full** (default) | 119 | Complete browser automation and debugging |
+| **Minimal** (`--minimal`) | 35 | Core browser automation and interaction |
 | **Custom** (`--disable-*`) | Your choice | Disable specific sections |
-| **Xpool safe** (`--xpool-safe`) | 84 | Disable CDP function tools that trigger `Runtime.enable` |
+| **Xpool safe** (`--xpool-safe`) | 102 | Disable CDP function tools that trigger `Runtime.enable` |
+| **Agent** (`--agent`) | About 25 | Optimized lean preset (opt-in) |
+
+- **Agent preset (`--agent`)**: An opt-in preset that reduces the exposed surface to about 25 core browser automation tools, ideal for MCP connectors and LLM context budgets. By default, the full 119-tool surface is exposed. You can also enable it by setting `STEALTH_MCP_PROFILE=agent`.
+- **Compacted tool descriptions**: Tool descriptions and parameter schemas are compacted in place to minimize connect-time token overhead. Verbose docstring sections and redundant schema titles are stripped while preserving argument types, defaults, and validation.
+- **Optional `instance_id`**: For single-browser sessions, `instance_id` is optional across all tools. When omitted, server middleware automatically resolves and injects the session's active browser.
 
 ```bash
 stealth-browser-mcp --minimal
@@ -564,8 +569,8 @@ Detection results are point-in-time and depend on site policy, region, browser v
 | Network debugging | Full request/response inspection through AI tools | Basic |
 | API reverse engineering | Payload inspection through chat | Manual tools only |
 | Dynamic hook system | Restricted Python hooks for real-time interception | Not available |
-| Modular architecture | 11 sections, 21-101 tools | Fixed tool surface |
-| Total tools | 101 customizable tools | About 20 |
+| Modular architecture | 11 sections, 35-119 tools | Fixed tool surface |
+| Total tools | 119 customizable tools | About 20 |
 
 ---
 
@@ -590,7 +595,7 @@ The server reaps idle browser instances automatically and performs startup clean
 Older versions let Chrome copy its app bundle into `com.google.Chrome.code_sign_clone` at every launch, and the copy stayed behind when an instance crashed or was killed. The server now launches Chrome with `MacAppCodeSignClone` turned off, so no new copies are made. To remove copies left by older versions, quit Chrome and run `rm -rf /private/var/folders/*/*/X/com.google.Chrome.code_sign_clone` (use `com.microsoft.edgemac.code_sign_clone` for Edge).
 
 **Too many tools cluttering the AI chat**
-Use `--minimal` for 20 core tools, `--xpool-safe` for xpool-compatible operation, or selectively disable sections:
+Use `--minimal` for 35 core tools, `--xpool-safe` for xpool-compatible operation, or selectively disable sections:
 
 ```bash
 python src/server.py --disable-cdp-functions --disable-dynamic-hooks --disable-progressive-cloning

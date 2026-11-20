@@ -82,6 +82,9 @@ from .profile_policy import (
     parse_policy_rows,
 )
 
+from . import instance_default as _instance_default
+from . import tool_compact
+
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
 SECTION_DESCRIPTIONS = {
@@ -97,6 +100,34 @@ SECTION_DESCRIPTIONS = {
     "debugging": "Debug and system tools",
     "dynamic-hooks": "AI-powered network hook system",
 }
+
+AGENT_PRESET_TOOLS = (
+    "spawn_browser",
+    "list_instances",
+    "close_instance",
+    "get_instance_state",
+    "navigate",
+    "wait_for",
+    "go_back",
+    "reload_page",
+    "query_elements",
+    "click_element",
+    "type_text",
+    "fill",
+    "press_key",
+    "select_option",
+    "scroll_page",
+    "get_page_content",
+    "take_screenshot",
+    "get_accessibility_snapshot",
+    "execute_script",
+    "get_cookies",
+    "set_cookie",
+    "list_tabs",
+    "new_tab",
+    "switch_tab",
+    "close_tab",
+)
 
 
 def parse_bool_env(name: str, default: bool = False) -> bool:
@@ -216,6 +247,53 @@ def run_shutdown_sync() -> None:
     except Exception:
         pass
 
+
+
+def _filter_preset(all_names, preset=None) -> List[str]:
+    """Return the subset of ``all_names`` that survive the agent preset."""
+    if preset is None:
+        preset = AGENT_PRESET_TOOLS
+    return [name for name in all_names if name in preset]
+
+
+def agent_mode_enabled(agent_flag: bool = False) -> bool:
+    """Whether the agent preset should be applied for the current run.
+
+    Enabled when the ``--agent`` flag is set or when the
+    ``STEALTH_MCP_PROFILE`` environment variable equals "agent"
+    (case-insensitive).
+    """
+    return agent_flag or os.getenv("STEALTH_MCP_PROFILE", "").lower() == "agent"
+
+
+def apply_agent_preset(target=None) -> int:
+    """Keep only the agent preset tools on the server.
+
+    Removes every registered tool whose name is not in AGENT_PRESET_TOOLS using
+    the same mechanism as :func:`apply_disabled_sections`.
+
+    Args:
+        target: Optional FastMCP instance to apply the preset to. Defaults to the
+            global ``mcp`` server.
+
+    Returns:
+        The number of tools kept.
+    """
+    if target is None:
+        target = mcp
+    tools = getattr(getattr(target, "_tool_manager", None), "_tools", None)
+    if not isinstance(tools, dict):
+        return 0
+    kept = 0
+    for tool_name in list(tools.keys()):
+        if tool_name in AGENT_PRESET_TOOLS:
+            kept += 1
+        else:
+            try:
+                target.remove_tool(tool_name)
+            except Exception:
+                continue
+    return kept
 
 @asynccontextmanager
 async def app_lifespan(server):
@@ -4035,6 +4113,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         default=parse_bool_env("XPOOL_SAFE_MODE", default=False),
         help="Enable xpool-safe surface (disables cdp-functions tools that trigger Runtime.enable)",
     )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        default=False,
+        help="Reduce to about 25 core agent tools (recommended for MCP connectors); instance_id becomes optional. Also enabled with STEALTH_MCP_PROFILE=agent.",
+    )
     
     args = parser.parse_args(argv)
 
@@ -4083,14 +4167,31 @@ def main(argv: Optional[List[str]] = None) -> None:
         DISABLED_SECTIONS.add("cdp-functions")
 
     apply_disabled_sections()
-    
+
+    agent_mode = agent_mode_enabled(args.agent)
+    if agent_mode:
+        apply_agent_preset()
+
     if DISABLED_SECTIONS:
         debug_logger.log_info(
             "server",
             "startup",
             f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}",
         )
-    
+
+    # Make instance_id optional everywhere and inject the session's only browser
+    # when a call omits it. This runs for both transports, after section/preset
+    # processing, just before the server starts accepting calls.
+    _instance_default.register_default_instance_middleware(mcp)
+    _instance_default.make_instance_id_optional(mcp)
+
+    # Compact tool descriptions and schemas to cut connect-time token cost.
+    # Runs for both transports after sections/preset/make_instance_id_optional.
+    try:
+        tool_compact.compact_tools(mcp)
+    except Exception:
+        pass
+
     if args.transport == "http":
         _HTTP_MODE = True
         token = get_http_auth_token()
