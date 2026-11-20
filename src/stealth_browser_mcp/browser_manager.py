@@ -12,7 +12,7 @@ from datetime import datetime
 import nodriver as uc
 from nodriver import Browser, Tab
 
-from . import cdp_raw
+from . import cdp_raw, nodriver_registry
 from .browser_launcher import launch_browser
 from .debug_logger import debug_logger
 from .dom_handler import DOMHandler
@@ -958,6 +958,13 @@ class BrowserManager:
         return True
 
     async def _disconnect_browser(self, browser: Any) -> None:
+        """Disconnect CDP sessions from an attached browser, then release nodriver's registry reference."""
+        try:
+            await self._disconnect_browser_impl(browser)
+        finally:
+            nodriver_registry.release_browser(browser)
+
+    async def _disconnect_browser_impl(self, browser: Any) -> None:
         """
         Disconnect CDP sessions from an attached browser without terminating it.
         """
@@ -989,6 +996,17 @@ class BrowserManager:
                 pass
 
     async def _shutdown_browser(
+        self,
+        browser: Browser,
+        process_exit_timeout: float = 10.0,
+    ) -> None:
+        """Stop a browser process and its connections, then release nodriver's registry reference."""
+        try:
+            await self._shutdown_browser_impl(browser, process_exit_timeout)
+        finally:
+            nodriver_registry.release_browser(browser)
+
+    async def _shutdown_browser_impl(
         self,
         browser: Browser,
         process_exit_timeout: float = 10.0,
