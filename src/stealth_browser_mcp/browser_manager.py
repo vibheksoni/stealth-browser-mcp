@@ -715,6 +715,118 @@ class BrowserManager:
             raise Exception(f"Failed to spawn browser: {str(e)}") from e
 
         return instance
+
+    async def attach_browser(
+        self,
+        port: int = 9222,
+        host: str = "127.0.0.1",
+        window: str = "keep",
+    ) -> BrowserInstance:
+        """
+        Attach to an already running browser instance via its remote debugging port.
+
+        Args:
+            port (int): Remote debugging port.
+            host (str): Debugging host.
+            window (str): Window mode ('keep').
+
+        Returns:
+            BrowserInstance: The attached browser instance.
+        """
+        instance_id = str(uuid.uuid4())
+        instance = BrowserInstance(
+            instance_id=instance_id,
+            headless=False,
+            window=window,
+            window_note=None,
+            viewport={"width": 1920, "height": 1080},
+            attached=True,
+        )
+
+        browser: Optional[Browser] = None
+        try:
+            config = uc.Config(
+                host=host,
+                port=port,
+            )
+
+            browser = await uc.Browser.create(config)
+            tab = browser.main_tab
+
+            try:
+                await tab.send(uc.cdp.emulation.set_focus_emulation_enabled(True))
+            except Exception:
+                pass
+
+            options = BrowserOptions(
+                window=window,
+            )
+
+            init_scripts: List[Dict[str, Any]] = []
+            configured_tabs: set = set()
+            await self._configure_tab(
+                tab,
+                instance_id,
+                options,
+                init_scripts,
+                configured_tabs,
+            )
+            await self._setup_dynamic_hooks(tab, instance_id)
+
+            spawn_diagnostics = {
+                "attached": True,
+                "host": host,
+                "port": port,
+                "window": window,
+            }
+            self._spawn_diagnostics[instance_id] = spawn_diagnostics
+
+            async with self._lock:
+                self._instances[instance_id] = {
+                    'browser': browser,
+                    'tab': tab,
+                    'instance': instance,
+                    'options': options,
+                    'window': window,
+                    'window_note': None,
+                    'navigation_count': 0,
+                    'init_scripts': init_scripts,
+                    'configured_tabs': configured_tabs,
+                    'idle_timeout_seconds': 0,
+                    'spawn_diagnostics': spawn_diagnostics,
+                    'network_data': [],
+                    'session_id': None,
+                    'session_info': None,
+                    'attached': True,
+                }
+
+            instance.state = BrowserState.READY
+            instance.update_activity()
+
+            persistent_storage.store_instance(instance_id, {
+                'state': instance.state.value,
+                'created_at': instance.created_at.isoformat(),
+                'current_url': getattr(tab, 'url', ''),
+                'title': 'Browser Instance (Attached)',
+                'attached': True,
+            })
+
+            return instance
+        except BaseException as e:
+            try:
+                await dynamic_hook_system.cleanup_instance(instance_id)
+            except Exception:
+                pass
+            if browser is not None:
+                try:
+                    await self._disconnect_browser(browser)
+                except Exception:
+                    pass
+            instance.state = BrowserState.ERROR
+            if not isinstance(e, Exception):
+                raise
+            raise Exception(f"Failed to attach to browser: {str(e)}") from e
+
     
     async def _setup_dynamic_hooks(self, tab: Tab, instance_id: str) -> bool:
         """Setup dynamic hook system for browser instance."""
@@ -805,39 +917,75 @@ class BrowserManager:
         except Exception:
             dynamic_hook_system.cancel_instance(instance_id)
 
-        await self._shutdown_browser(browser, process_exit_timeout=timeout)
+        is_attached = data.get("attached", False) or getattr(data.get("instance"), "attached", False)
 
-        try:
-            await asyncio.to_thread(self._finalize_process_cleanup, instance_id, True)
-        except Exception as error:
-            debug_logger.log_warning(
-                "browser_manager",
-                "close_instance",
-                f"Process cleanup failed for {instance_id}: {error}",
-            )
+        if is_attached:
+            await self._disconnect_browser(browser)
+        else:
+            await self._shutdown_browser(browser, process_exit_timeout=timeout)
 
-        try:
-            await self._close_proxy_forwarder(instance_id)
-        except Exception:
-            pass
-
-        session_id = data.get("session_id")
-        options = data.get("options")
-        effective_keep = keep if keep is not None else (getattr(options, "keep", False) if options else False)
-        if session_id:
             try:
-                from . import session_spawn
-                session_spawn.cleanup_session(session_id, keep=effective_keep)
+                await asyncio.to_thread(self._finalize_process_cleanup, instance_id, True)
             except Exception as error:
                 debug_logger.log_warning(
                     "browser_manager",
                     "close_instance",
-                    f"Session cleanup failed for {session_id}: {error}",
+                    f"Process cleanup failed for {instance_id}: {error}",
                 )
-        self._session_infos.pop(instance_id, None)
+
+            try:
+                await self._close_proxy_forwarder(instance_id)
+            except Exception:
+                pass
+
+            session_id = data.get("session_id")
+            options = data.get("options")
+            effective_keep = keep if keep is not None else (getattr(options, "keep", False) if options else False)
+            if session_id:
+                try:
+                    from . import session_spawn
+                    session_spawn.cleanup_session(session_id, keep=effective_keep)
+                except Exception as error:
+                    debug_logger.log_warning(
+                        "browser_manager",
+                        "close_instance",
+                        f"Session cleanup failed for {session_id}: {error}",
+                    )
+            self._session_infos.pop(instance_id, None)
 
         await self._notify_close_listeners(instance_id)
         return True
+
+    async def _disconnect_browser(self, browser: Any) -> None:
+        """
+        Disconnect CDP sessions from an attached browser without terminating it.
+        """
+        connection = getattr(browser, "connection", None)
+        if connection is not None:
+            handlers = getattr(connection, "handlers", {})
+            for event_type in TARGET_UPDATE_EVENTS:
+                handlers.pop(event_type, None)
+
+        connections = [getattr(tab, "disconnect", None) for tab in list(getattr(browser, "targets", []) or [])]
+        if connection is not None and hasattr(connection, "disconnect"):
+            connections.append(connection.disconnect)
+        disconnect_coros = []
+        for disconnect_fn in connections:
+            if callable(disconnect_fn):
+                try:
+                    res = disconnect_fn()
+                    if asyncio.iscoroutine(res):
+                        disconnect_coros.append(res)
+                except Exception:
+                    pass
+        if disconnect_coros:
+            try:
+                await asyncio.wait(
+                    [asyncio.ensure_future(item) for item in disconnect_coros],
+                    timeout=CLOSE_STEP_TIMEOUT,
+                )
+            except Exception:
+                pass
 
     async def _shutdown_browser(
         self,
@@ -2094,6 +2242,7 @@ class BrowserManager:
             inst_headless = getattr(inst, "headless", None) if inst else None
             inst_note = getattr(inst, "window_note", None) if inst else None
             inst_bounds = getattr(inst, "window_bounds", None) if inst else None
+            inst_attached = getattr(inst, "attached", False) if inst else False
 
             return PageState(
                 instance_id=instance_id,
@@ -2108,6 +2257,7 @@ class BrowserManager:
                 window=inst_window,
                 window_note=inst_note,
                 window_bounds=inst_bounds,
+                attached=inst_attached,
             )
 
         except Exception as e:

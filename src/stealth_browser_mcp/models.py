@@ -30,6 +30,7 @@ class BrowserInstance(BaseModel):
     user_agent: Optional[str] = None
     viewport: Dict[str, int] = Field(default_factory=lambda: {"width": 1920, "height": 1080})
     session_id: Optional[str] = None
+    attached: bool = Field(default=False, description="Whether this instance attached to an existing browser")
     
     def update_activity(self):
         """Update last activity timestamp."""
@@ -88,6 +89,7 @@ class PageState(BaseModel):
     window: Optional[str] = None
     window_note: Optional[str] = None
     window_bounds: Optional[Dict[str, Any]] = None
+    attached: Optional[bool] = None
 
 
 class BrowserOptions(BaseModel):

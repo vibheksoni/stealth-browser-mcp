@@ -23,7 +23,47 @@ Important Chrome constraints:
 
 ## Attaching to an Existing Browser
 
-Attaching directly to an already running Chrome process via CDP debugging port or host is planned for SB-69 and does not yet exist in this checkout. Currently, browser sessions are managed via `spawn_browser()`, which launches and monitors instances directly.
+To automate within a corporate or managed Google Workspace profile, launch Chrome with remote debugging on a dedicated profile directory, complete any required human sign-in (SSO/2FA) once, and attach to the running instance:
+
+### 1. Launch Chrome with the Managed Profile Helper
+
+Use `scripts/launch_chrome_managed.py` to start Chrome detached with remote debugging enabled on a dedicated profile directory:
+
+**Linux:**
+```bash
+python3 scripts/launch_chrome_managed.py --port 9222 --user-data-dir ~/.stealth-mcp/managed-profile
+```
+
+**macOS:**
+```bash
+python3 scripts/launch_chrome_managed.py --port 9222 --user-data-dir ~/.stealth-mcp/managed-profile
+```
+
+**Windows (PowerShell):**
+```powershell
+python scripts\launch_chrome_managed.py --port 9222 --user-data-dir "$HOME\.stealth-mcp\managed-profile"
+```
+
+The launcher verifies that `--user-data-dir` is not the default system profile (which Chrome 136+ disables remote debugging for), starts Chrome detached, waits up to 15 seconds for the debugging port to be ready, and prints the port.
+
+### 2. Initial Human Sign-In
+
+If this is the first time using the profile, sign in to your Google Workspace account, complete your enterprise SSO and 2FA or hardware key verification. Because the dedicated directory persists on disk, your signed-in session, cookies, and tokens persist across MCP restarts.
+
+### 3. Attach from MCP
+
+Attach your AI agent or MCP client to the running Chrome instance using `attach_browser`:
+
+```python
+result = await attach_browser(port=9222)
+instance_id = result["instance_id"]
+```
+
+### Attached Browser Lifecycle and Safety
+
+- **Disconnect Only**: When `close_instance()` or server shutdown occurs, the MCP server only disconnects its CDP websocket sessions. It NEVER kills the browser process or deletes the user data directory. Your browser and tabs remain open.
+- **Window Preservation**: An attached browser keeps its own window position and size (`window="keep"`). Focus emulation is applied without moving or resizing your desktop window.
+- **Security and Remote Attach**: By default, `attach_browser()` strictly rejects non-loopback hosts (`127.0.0.1`, `localhost`, `::1`) to prevent remote connection hijacking. To attach to a remote debugging host, set the environment variable `STEALTH_ALLOW_REMOTE_ATTACH=1`.
 
 ## Enterprise Policy Restrictions
 

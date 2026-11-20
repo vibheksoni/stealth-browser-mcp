@@ -95,6 +95,7 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - **Browser support** - Chrome, Chromium, and Microsoft Edge with automatic executable discovery.
 - **Non-intrusive window modes** - Background automation with `offscreen`, `minimized`, `headless`, or `normal` windows that never steal OS focus ([docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md)).
 - **Enterprise and managed profiles** - Guide for corporate Google Workspace profiles, policy checks, and CDP restrictions ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)).
+- **Attach to running Chrome** - Connect to an already running Chrome browser via remote debugging port to automate within corporate or managed profiles ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)).
 - **Clean MCP integration** - Works through standard MCP clients without custom brokers.
 
 ---

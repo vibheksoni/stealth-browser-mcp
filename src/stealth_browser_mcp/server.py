@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import nodriver as uc
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolResult
 from mcp.types import ImageContent, TextContent
 from pydantic_core import to_json
@@ -159,6 +160,21 @@ def is_loopback_host(host: str) -> bool:
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
+        return False
+
+
+def _probe_version(host: str, port: int, timeout: float = 3.0) -> bool:
+    """Probe Chrome /json/version endpoint with a timeout."""
+    import urllib.request
+    import urllib.error
+
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    url = f"http://{url_host}:{port}/json/version"
+    req = urllib.request.Request(url, headers={"User-Agent": "stealth-browser-mcp"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
         return False
 
 
@@ -486,6 +502,59 @@ async def spawn_browser(
         raise Exception(message) from e
 
 @section_tool("browser-management")
+async def attach_browser(
+    port: int = 9222,
+    host: str = "127.0.0.1",
+    window: str = "keep",
+) -> Dict[str, Any]:
+    """Attach to an already running Chrome browser via its remote debugging port.
+
+    Connects to Chrome without launching a new process or modifying its window.
+    """
+    if isinstance(port, str):
+        try:
+            port = int(port)
+        except ValueError:
+            raise ToolError(f"Invalid port: {port}")
+
+    if window != "keep":
+        raise ToolError("Only window='keep' is valid for attach_browser.")
+
+    allow_remote = parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False)
+    if not is_loopback_host(host) and not allow_remote:
+        raise ToolError(
+            f"Host '{host}' is not a loopback address (127.0.0.1, localhost, ::1). "
+            "Set STEALTH_ALLOW_REMOTE_ATTACH=1 to allow remote attach."
+        )
+
+    reachable = await asyncio.to_thread(_probe_version, host, port, 3.0)
+    if not reachable:
+        raise ToolError(
+            f"Could not connect to Chrome at http://{host}:{port}/json/version. "
+            f"Chrome must be started with --remote-debugging-port={port} and a non-default --user-data-dir. "
+            "See docs/MANAGED_PROFILES.md for instructions."
+        )
+
+    try:
+        instance = await browser_manager.attach_browser(port=port, host=host, window=window)
+        mcp_sid = get_current_mcp_session_id()
+        if mcp_sid:
+            mcp_session_manager.register_session(mcp_sid, instance.instance_id)
+
+        return {
+            "instance_id": instance.instance_id,
+            "state": instance.state,
+            "attached": True,
+            "host": host,
+            "port": port,
+            "window": window,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        raise ToolError(f"Failed to attach to browser: {str(e)}") from e
+
+@section_tool("browser-management")
 async def list_instances() -> List[Dict[str, Any]]:
     """
     List all active browser instances.
@@ -502,7 +571,8 @@ async def list_instances() -> List[Dict[str, Any]]:
             "state": inst.state,
             "current_url": inst.current_url,
             "title": inst.title,
-            "source": "active"
+            "source": "active",
+            "attached": getattr(inst, "attached", False),
         })
     memory_ids = {inst.instance_id for inst in memory_instances}
     for instance_id, inst_data in storage_instances.get("instances", {}).items():
@@ -512,7 +582,8 @@ async def list_instances() -> List[Dict[str, Any]]:
                 "state": inst_data["state"] + " (stored)",
                 "current_url": inst_data["current_url"],
                 "title": inst_data["title"],
-                "source": "stored"
+                "source": "stored",
+                "attached": inst_data.get("attached", False),
             })
     try:
         from .mcp_sessions import mcp_session_manager
@@ -581,6 +652,7 @@ async def get_instance_state(instance_id: str) -> Optional[Dict[str, Any]]:
                 result["window_bounds"] = inst.window_bounds
             if getattr(inst, "window_note", None) is not None:
                 result["window_note"] = inst.window_note
+            result["attached"] = getattr(inst, "attached", inst_data.get("attached", False))
         return result
     return None
 
