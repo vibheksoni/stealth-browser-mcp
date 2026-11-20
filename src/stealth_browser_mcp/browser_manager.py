@@ -30,6 +30,13 @@ from .proxy_utils import (
     parse_proxy_config,
     redact_launch_arg,
 )
+from .window_mode import (
+    apply_window_mode,
+    effective_window_mode,
+    open_background_tab,
+    resolve_window_mode,
+    window_launch_args,
+)
 
 HEADLESS_UA_TOKEN = "HeadlessChrome/"
 HEADLESS_UA_PROBE_TIMEOUT = 40.0
@@ -418,11 +425,17 @@ class BrowserManager:
         elif kwargs:
             options = options.model_copy(update=kwargs)
 
+        mode = resolve_window_mode(options.window, options.headless)
+        mode, window_note = effective_window_mode(mode)
+        options = options.model_copy(update={"headless": mode == "headless", "window": mode})
+
         instance_id = str(uuid.uuid4())
 
         instance = BrowserInstance(
             instance_id=instance_id,
             headless=options.headless,
+            window=mode,
+            window_note=window_note,
             user_agent=options.user_agent,
             viewport={"width": options.viewport_width, "height": options.viewport_height}
         )
@@ -503,6 +516,10 @@ class BrowserManager:
                 caller_args,
                 launch_proxy_server,
             )
+            existing_flags = {arg.split("=", 1)[0].strip() for arg in (options.browser_args or [])}
+            for w_arg in window_launch_args(mode, options.viewport_width, options.viewport_height):
+                if w_arg.split("=", 1)[0].strip() not in existing_flags:
+                    caller_args.append(w_arg)
             launch_args = merge_browser_args(caller_args)
             if options.headless and not self._has_user_agent_arg(launch_args):
                 headful_user_agent = await self._resolve_headless_user_agent(
@@ -550,16 +567,30 @@ class BrowserManager:
                 debug_logger.log_warning("browser_manager", "spawn_browser", 
                                        f"Browser {instance_id} has no process to track")
 
-            await tab.set_window_size(
-                left=0,
-                top=0, 
-                width=options.viewport_width,
-                height=options.viewport_height
-            )
+            if mode == "normal":
+                await tab.set_window_size(
+                    left=0,
+                    top=0, 
+                    width=options.viewport_width,
+                    height=options.viewport_height
+                )
+            try:
+                await apply_window_mode(
+                    tab,
+                    mode,
+                    options.viewport_width,
+                    options.viewport_height,
+                )
+            except Exception as e:
+                debug_logger.log_warning(
+                    "browser_manager",
+                    "spawn_browser",
+                    f"Failed to apply window mode {mode} for {instance_id}: {e}",
+                )
             debug_logger.log_info(
                 "browser_manager",
                 "spawn_browser",
-                f"Set viewport to {options.viewport_width}x{options.viewport_height}",
+                f"Set viewport to {options.viewport_width}x{options.viewport_height} (window mode: {mode})",
             )
 
             init_scripts: List[Dict[str, Any]] = []
@@ -608,6 +639,8 @@ class BrowserManager:
                     'tab': tab,
                     'instance': instance,
                     'options': options,
+                    'window': mode,
+                    'window_note': window_note,
                     'navigation_count': 0,
                     'init_scripts': init_scripts,
                     'configured_tabs': configured_tabs,
@@ -989,20 +1022,37 @@ class BrowserManager:
 
         browser = data["browser"]
         previous_tab = data.get("tab")
+        options: BrowserOptions = data.get("options")
+        mode = getattr(options, "window", "normal") if options else "normal"
         try:
-            new_tab = await browser.get("about:blank", new_tab=True)
+            new_tab = await open_background_tab(browser, "about:blank")
         except Exception:
-            new_tab = await browser.get("about:blank", new_window=True)
-            options: BrowserOptions = data["options"]
+            new_tab = await open_background_tab(browser, "about:blank", new_window=True)
+            if options and mode == "normal":
+                try:
+                    await new_tab.set_window_size(
+                        left=0,
+                        top=0,
+                        width=options.viewport_width,
+                        height=options.viewport_height,
+                    )
+                except Exception:
+                    pass
+
+        if options and mode != "normal":
             try:
-                await new_tab.set_window_size(
-                    left=0,
-                    top=0,
-                    width=options.viewport_width,
-                    height=options.viewport_height,
+                await apply_window_mode(
+                    new_tab,
+                    mode,
+                    options.viewport_width,
+                    options.viewport_height,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                debug_logger.log_warning(
+                    "browser_manager",
+                    "_replace_main_tab",
+                    f"Failed to apply window mode {mode}: {e}",
+                )
 
         if close_existing and previous_tab:
             previous_target_id = self._get_tab_target_id(previous_tab)
@@ -1672,7 +1722,24 @@ class BrowserManager:
         data = await self.get_instance(instance_id)
         if not data:
             raise Exception(f"Instance not found: {instance_id}")
-        tab = await data["browser"].get("about:blank", new_tab=True)
+        tab = await open_background_tab(data["browser"], "about:blank")
+        options: BrowserOptions = data.get("options")
+        if options is not None:
+            mode = getattr(options, "window", "normal") or "normal"
+            if mode != "normal":
+                try:
+                    await apply_window_mode(
+                        tab,
+                        mode,
+                        options.viewport_width,
+                        options.viewport_height,
+                    )
+                except Exception as e:
+                    debug_logger.log_warning(
+                        "browser_manager",
+                        "open_tab",
+                        f"Failed to apply window mode {mode}: {e}",
+                    )
         await self._ensure_tab_configured(instance_id, tab)
         if url and url != "about:blank":
             await tab.send(uc.cdp.page.navigate(url))
@@ -1776,9 +1843,9 @@ class BrowserManager:
 
         return tabs
 
-    async def switch_to_tab(self, instance_id: str, tab_id: str) -> bool:
+    async def switch_tab(self, instance_id: str, tab_id: str) -> bool:
         """
-        Switch to a specific tab by bringing it to front.
+        Switch to a specific tab.
 
         Args:
             instance_id (str): The ID of the browser instance.
@@ -1803,12 +1870,18 @@ class BrowserManager:
             return False
 
         try:
-            await target_tab.bring_to_front()
+            data = await self.get_instance(instance_id)
+            options = data.get("options") if data else None
+            mode = getattr(options, "window", "normal") if options else "normal"
+            if mode == "normal":
+                await target_tab.bring_to_front()
             await self._set_current_tab(instance_id, target_tab)
 
             return True
         except Exception:
             return False
+
+    switch_to_tab = switch_tab
 
     async def get_active_tab(self, instance_id: str) -> Optional[Tab]:
         """
@@ -1992,6 +2065,12 @@ class BrowserManager:
                 })
             """)
 
+            inst_data = await self.get_instance(instance_id)
+            inst = inst_data.get("instance") if inst_data else None
+            inst_window = getattr(inst, "window", None) if inst else None
+            inst_headless = getattr(inst, "headless", None) if inst else None
+            inst_note = getattr(inst, "window_note", None) if inst else None
+
             return PageState(
                 instance_id=instance_id,
                 url=url,
@@ -2000,7 +2079,10 @@ class BrowserManager:
                 cookies=cookies,
                 local_storage=local_storage,
                 session_storage=session_storage,
-                viewport=viewport or {}
+                viewport=viewport or {},
+                headless=inst_headless,
+                window=inst_window,
+                window_note=inst_note,
             )
 
         except Exception as e:

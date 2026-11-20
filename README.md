@@ -93,6 +93,7 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - **Instant text input** - Paste large content via CDP, type with human-like keystrokes, or press real keys with trusted CDP key events.
 - **Cross-platform** - Windows, macOS, Linux, Docker, and CI environments with automatic browser/platform detection.
 - **Browser support** - Chrome, Chromium, and Microsoft Edge with automatic executable discovery.
+- **Non-intrusive window modes** - Background automation with `offscreen`, `minimized`, `headless`, or `normal` windows that never steal OS focus ([docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md)).
 - **Clean MCP integration** - Works through standard MCP clients without custom brokers.
 
 ---
@@ -350,6 +351,7 @@ client = Client(
 
 - `spawn_browser(idle_timeout_seconds=1800)` keeps that instance for 30 minutes of inactivity.
 - `spawn_browser(idle_timeout_seconds=0)` disables idle reaping for that one instance.
+- `spawn_browser(window="offscreen")` configures window mode (`offscreen`, `minimized`, `headless`, `normal`); see [docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md).
 
 ---
 

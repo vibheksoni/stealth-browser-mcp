@@ -70,6 +70,7 @@ from .har_export import build_har, export_to_json
 from . import seed_snapshots
 from . import seed_tools
 from . import seed_save
+from .window_mode import normalize_window_mode
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -308,6 +309,7 @@ async def spawn_browser(
     check_url: Optional[str] = None,
     keep: bool = False,
     cap: Optional[int] = None,
+    window: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Spawn a new browser instance.
@@ -329,10 +331,14 @@ async def spawn_browser(
         check_url (Optional[str]): Optional URL to verify cookie carryover via CDP Network.getCookies.
         keep (bool): Keep session directory on close instead of deleting it.
         cap (Optional[int]): Maximum concurrent sessions cap.
+        window (Optional[str]): normal | minimized | offscreen | headless. Default comes from env STEALTH_WINDOW_MODE, else offscreen (a real but off-screen window that never steals focus). headless=True is the same as window='headless'. Without a display on Linux it falls back to headless.
 
     Returns:
         Dict[str, Any]: Instance information including instance_id.
     """
+    if window is not None:
+        window = normalize_window_mode(window)
+
     try:
         from .platform_utils import sandbox_must_be_disabled
 
@@ -347,6 +353,7 @@ async def spawn_browser(
         
         options = BrowserOptions(
             headless=headless,
+            window=window,
             user_agent=user_agent,
             viewport_width=viewport_width,
             viewport_height=viewport_height,
@@ -373,9 +380,12 @@ async def spawn_browser(
             "instance_id": instance.instance_id,
             "state": instance.state,
             "headless": instance.headless,
+            "window": getattr(instance, "window", None),
             "viewport": instance.viewport,
             "spawn_diagnostics": spawn_diagnostics or {},
         }
+        if getattr(instance, "window_note", None) is not None:
+            result["window_note"] = instance.window_note
         if session_info:
             result.update(session_info)
         return result
@@ -469,7 +479,17 @@ async def get_instance_state(instance_id: str) -> Optional[Dict[str, Any]]:
         mcp_session_manager.check_access(instance_id)
     state = await browser_manager.get_page_state(instance_id)
     if state:
-        return state.dict()
+        result = state.dict()
+        inst_data = await browser_manager.get_instance(instance_id)
+        if inst_data and "instance" in inst_data:
+            inst = inst_data["instance"]
+            if hasattr(inst, "window"):
+                result["window"] = inst.window
+            if hasattr(inst, "headless") and "headless" not in result:
+                result["headless"] = inst.headless
+            if getattr(inst, "window_note", None) is not None:
+                result["window_note"] = inst.window_note
+        return result
     return None
 
 @section_tool("browser-management")

@@ -24,6 +24,8 @@ class BrowserInstance(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     last_activity: datetime = Field(default_factory=datetime.now)
     headless: bool = Field(default=False)
+    window: Optional[str] = Field(default=None, description="Window mode: normal, minimized, offscreen, or headless")
+    window_note: Optional[str] = Field(default=None, description="Window fallback diagnostic note")
     user_agent: Optional[str] = None
     viewport: Dict[str, int] = Field(default_factory=lambda: {"width": 1920, "height": 1080})
     session_id: Optional[str] = None
@@ -81,11 +83,15 @@ class PageState(BaseModel):
     console_logs: List[Dict[str, Any]] = Field(default_factory=list)
     viewport: Dict[str, Union[int, float]] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
+    headless: Optional[bool] = None
+    window: Optional[str] = None
+    window_note: Optional[str] = None
 
 
 class BrowserOptions(BaseModel):
     """Options for spawning a new browser instance."""
     headless: bool = Field(default=False, description="Run browser in headless mode")
+    window: Optional[str] = Field(default=None, description="Window mode: normal, minimized, offscreen or headless (default from STEALTH_WINDOW_MODE or offscreen)")
     user_agent: Optional[str] = Field(default=None, description="Custom user agent string")
     viewport_width: int = Field(default=1920, description="Viewport width in pixels")
     viewport_height: int = Field(default=1080, description="Viewport height in pixels")
