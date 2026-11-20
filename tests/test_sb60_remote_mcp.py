@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import tempfile
+import shutil
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -476,9 +477,10 @@ class ScreenshotReturnsImageContentTests(unittest.TestCase):
         self.assertEqual(img.mimeType, "image/png")
 
     def test_screenshot_with_file_path_returns_image_content_and_path(self):
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-            target_path = tf.name
-
+        tmpdir = tempfile.mkdtemp()
+        target_path = str(Path(tmpdir) / "shot.png")
+        old_data = os.environ.get("STEALTH_BROWSER_MCP_DATA_DIR")
+        os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = tmpdir
         try:
             async def run():
                 fn = getattr(server.take_screenshot, "fn", server.take_screenshot)
@@ -493,11 +495,14 @@ class ScreenshotReturnsImageContentTests(unittest.TestCase):
             text_blocks = [c for c in result.content if isinstance(c, TextContent) or getattr(c, "type", "") == "text"]
             self.assertTrue(len(text_blocks) >= 1)
             self.assertIn("Screenshot saved on the server", text_blocks[0].text)
-            self.assertEqual(result.structured_content.get("path"), str(Path(target_path).absolute()))
+            self.assertEqual(result.structured_content.get("path"), str(Path(target_path).resolve()))
             self.assertTrue(os.path.exists(target_path))
         finally:
-            if os.path.exists(target_path):
-                os.unlink(target_path)
+            if old_data is None:
+                os.environ.pop("STEALTH_BROWSER_MCP_DATA_DIR", None)
+            else:
+                os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = old_data
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class GatedSubprocessIntegrationTests(unittest.TestCase):

@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -299,6 +300,7 @@ class HarExportTests(unittest.TestCase):
     def test_export_to_json(self):
         """Test serializing HAR document to a JSON file."""
         with tempfile.TemporaryDirectory() as tmpdir:
+            os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = tmpdir
             filepath = str(Path(tmpdir) / "nested" / "capture.har")
             har = build_har([{"request": {"url": "https://example.com"}}])
             success = export_to_json(har, filepath)
@@ -402,6 +404,11 @@ class ServerExportHarToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["log"]["entries"][0]["request"]["url"], "https://example.com/page")
             self.assertEqual(result["log"]["entries"][0]["response"]["content"]["text"], "<html>ok</html>")
         finally:
+            if "old_data" in locals():
+                if old_data is None:
+                    os.environ.pop("STEALTH_BROWSER_MCP_DATA_DIR", None)
+                else:
+                    os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = old_data
             await server.network_interceptor.clear_instance_data(instance_id)
 
     async def test_export_har_writes_file_when_path_provided(self):
@@ -422,6 +429,8 @@ class ServerExportHarToolTests(unittest.IsolatedAsyncioTestCase):
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
+                old_data = os.environ.get("STEALTH_BROWSER_MCP_DATA_DIR")
+                os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = tmpdir
                 out_path = str(Path(tmpdir) / "output.har")
                 result = await server.export_har.fn(instance_id=instance_id, path=out_path)
                 self.assertEqual(result, out_path)
@@ -432,6 +441,11 @@ class ServerExportHarToolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(data["log"]["entries"][0]["request"]["url"], "https://example.com/api?q=1")
                 self.assertEqual(data["log"]["entries"][0]["request"]["queryString"], [{"name": "q", "value": "1"}])
         finally:
+            if "old_data" in locals():
+                if old_data is None:
+                    os.environ.pop("STEALTH_BROWSER_MCP_DATA_DIR", None)
+                else:
+                    os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = old_data
             await server.network_interceptor.clear_instance_data(instance_id)
 
 

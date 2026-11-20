@@ -35,6 +35,7 @@ from .errors import instance_not_found_error, no_active_tab_error, tab_not_found
 from .file_based_element_cloner import file_based_element_cloner
 from starlette.middleware import Middleware as ASGIMiddleware
 from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
+from .path_policy import reject_blocked_url, resolve_managed_path, write_private_bytes
 from .hook_policy import code_hooks_enabled, code_hooks_disabled_result, refuse_code_hooks_off_loopback
 from .http_auth import (
     BearerAuthMiddleware,
@@ -624,6 +625,7 @@ async def navigate(
     """
     if isinstance(timeout, str):
         timeout = int(timeout)
+    url = reject_blocked_url(url)
     return await browser_manager.navigate(
         instance_id=instance_id,
         url=url,
@@ -1512,15 +1514,21 @@ async def take_screenshot(
         target_clip = validated_clip
 
     if file_path:
-        save_path = Path(file_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path = resolve_managed_path(file_path)
         if target_clip:
             raw_bytes = await capture_clip_screenshot(tab, target_clip, format=format, quality=quality)
-            save_path.write_bytes(raw_bytes)
         else:
-            await tab.save_screenshot(save_path, format=format, full_page=full_page)
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                tmp_capture = Path(tmp_file.name)
+            try:
+                await tab.save_screenshot(tmp_capture, format=format, full_page=full_page)
+                raw_bytes = tmp_capture.read_bytes()
+            finally:
+                if tmp_capture.exists():
+                    os.unlink(tmp_capture)
+        write_private_bytes(save_path, raw_bytes)
         image_bytes, metadata = fit_screenshot(save_path, format, quality, max_width)
-        metadata["path"] = str(save_path.absolute())
+        metadata["path"] = str(save_path)
         if dpr is not None:
             metadata["device_pixel_ratio"] = dpr
         if target_clip is not None:
@@ -2256,6 +2264,7 @@ async def export_debug_logs(
         str: Path to the exported file.
     """
     try:
+        filename = str(resolve_managed_path(filename))
         filepath = await asyncio.wait_for(
             asyncio.to_thread(
                 debug_logger.export_to_file_paginated,
@@ -2267,6 +2276,10 @@ async def export_debug_logs(
             ),
             timeout=30.0
         )
+        try:
+            os.chmod(filepath, 0o600)
+        except OSError:
+            pass
         return filepath
     except asyncio.TimeoutError:
         return "Export timeout - file too large. Try with smaller limits or 'gzip-pickle' format."
@@ -2424,6 +2437,7 @@ async def new_tab(
             mcp_session_manager = None
     if mcp_session_manager is not None:
         mcp_session_manager.check_access(instance_id)
+    url = reject_blocked_url(url)
     try:
         new_tab_obj = await browser_manager.open_tab(instance_id, url)
         return {

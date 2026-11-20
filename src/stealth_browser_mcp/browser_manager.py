@@ -23,6 +23,7 @@ from .persistent_storage import persistent_storage
 from .dynamic_hook_system import dynamic_hook_system
 from .platform_utils import get_platform_info, check_browser_executable, merge_browser_args
 from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
+from .path_policy import reject_blocked_url
 from .process_cleanup import process_cleanup
 from .proxy_forwarder import AuthenticatedProxyForwarder
 from .proxy_utils import (
@@ -1435,6 +1436,7 @@ class BrowserManager:
         Returns:
             Dict[str, Any]: Navigation result payload.
         """
+        url = reject_blocked_url(url)
         timeout_seconds = max(timeout, 1) / 1000
         last_error: Optional[Exception] = None
 
@@ -1918,6 +1920,7 @@ class BrowserManager:
         Returns:
             Tab: The new tab.
         """
+        url = reject_blocked_url(url)
         data = await self.get_instance(instance_id)
         if not data:
             raise instance_not_found_error(instance_id)

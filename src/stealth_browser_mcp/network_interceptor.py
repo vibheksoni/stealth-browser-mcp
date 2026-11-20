@@ -13,6 +13,7 @@ from nodriver import Tab
 
 from . import cdp_raw
 from .debug_logger import debug_logger
+from .path_policy import read_managed_text, write_private_text
 from .models import NetworkRequest, NetworkResponse
 
 MAX_REQUESTS_PER_INSTANCE = 1000
@@ -516,7 +517,7 @@ class NetworkInterceptor:
                         "timestamp": resp.timestamp.isoformat(),
                     })
 
-            Path(filepath).write_text(json.dumps(data, indent=2))
+            write_private_text(filepath, json.dumps(data, indent=2))
             return True
 
     async def import_from_json(self, instance_id: str, filepath: str) -> bool:
@@ -527,7 +528,7 @@ class NetworkInterceptor:
         filepath: str - Path to JSON file.
         Returns: bool - True if successful.
         """
-        data = json.loads(Path(filepath).read_text())
+        data = json.loads(read_managed_text(filepath))
 
         async with self._lock:
             if instance_id not in self._instance_requests:

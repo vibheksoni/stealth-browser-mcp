@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from . import cdp_raw
 from .debug_logger import debug_logger
+from .path_policy import read_managed_text, resolve_managed_path, write_private_text
 from .paths import data_dir
 
 
@@ -39,26 +40,8 @@ def write_session_file(file_path: Union[str, Path], state: Dict[str, Any]) -> Pa
     Returns:
         Path: Absolute resolved path of the written file.
     """
-    path = Path(file_path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-
     content = json.dumps(state, indent=2, ensure_ascii=True)
-
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_BINARY"):
-        flags |= os.O_BINARY
-
-    fd = os.open(str(path), flags, 0o600)
-    try:
-        with open(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-    finally:
-        try:
-            os.chmod(str(path), 0o600)
-        except OSError:
-            pass
-
-    return path
+    return write_private_text(file_path, content)
 
 
 def read_session_file(file_path: Union[str, Path]) -> Dict[str, Any]:
@@ -75,11 +58,10 @@ def read_session_file(file_path: Union[str, Path]) -> Dict[str, Any]:
         FileNotFoundError: If the file does not exist.
         ValueError: If file content is not a JSON object.
     """
-    path = Path(file_path).expanduser().resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f"Session file not found: {path}")
-
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_managed_text(file_path)
+    except Exception as exc:
+        raise FileNotFoundError(f"Session file not found: {file_path}") from exc
     data = json.loads(text)
     if not isinstance(data, dict):
         raise ValueError(f"Session state must be a JSON object, got {type(data).__name__}")
@@ -487,7 +469,7 @@ async def save_session(
     browser = await browser_manager.get_browser(instance_id)
     state = await save_session_state(tab, browser=browser, origins=origins)
 
-    target_path = Path(file_path).expanduser().resolve() if file_path else default_session_path(instance_id)
+    target_path = file_path if file_path else default_session_path(instance_id)
     written_path = write_session_file(target_path, state)
 
     return {

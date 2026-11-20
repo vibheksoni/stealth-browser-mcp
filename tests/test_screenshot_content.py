@@ -39,6 +39,8 @@ class ScreenshotContentTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
+        os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = self.directory.name
+        self.addCleanup(lambda: os.environ.pop("STEALTH_BROWSER_MCP_DATA_DIR", None))
         self.captures = []
         buffer = io.BytesIO()
         Image.new("RGBA", (96, 64), (30, 60, 90, 128)).save(buffer, format="PNG")
@@ -80,6 +82,8 @@ class ScreenshotContentTests(unittest.TestCase):
             capture_clip_screenshot=capture_clip_screenshot,
             compute_clip_from_rect=compute_clip_from_rect,
             screenshot_clip=screenshot_clip,
+            resolve_managed_path=__import__("stealth_browser_mcp.path_policy", fromlist=["resolve_managed_path"]).resolve_managed_path,
+            write_private_bytes=__import__("stealth_browser_mcp.path_policy", fromlist=["write_private_bytes"]).write_private_bytes,
         )
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(ROOT / "src/stealth_browser_mcp/server.py"), "exec"), namespace)
         return mcp

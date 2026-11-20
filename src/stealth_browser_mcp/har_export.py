@@ -9,6 +9,8 @@ converts that into a HAR 1.2 structure suitable for export.
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+
+from .path_policy import write_private_text
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlsplit
 
@@ -409,9 +411,7 @@ def export_to_json(har: Dict[str, Any], filepath: str) -> bool:
         bool: True when the file was written successfully.
     """
     try:
-        p = Path(filepath)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(har, indent=2), encoding="utf-8")
+        write_private_text(filepath, json.dumps(har, indent=2))
         return True
     except OSError:
         return False

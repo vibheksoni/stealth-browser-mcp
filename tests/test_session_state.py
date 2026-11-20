@@ -211,8 +211,14 @@ class TestSessionStateUnit(unittest.TestCase):
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp(prefix="test_session_unit_")
+        self._old_data_dir = os.environ.get("STEALTH_BROWSER_MCP_DATA_DIR")
+        os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = self.temp_dir
 
     def tearDown(self) -> None:
+        if self._old_data_dir is None:
+            os.environ.pop("STEALTH_BROWSER_MCP_DATA_DIR", None)
+        else:
+            os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = self._old_data_dir
         _safe_cleanup_dir(self.temp_dir)
 
     def test_default_session_path_creation(self) -> None:

@@ -259,16 +259,17 @@ class TestScreenshotClipFakeTab(unittest.IsolatedAsyncioTestCase):
         fake_tab = FakeTab()
         with tempfile.TemporaryDirectory() as td:
             save_file = Path(td) / "custom_capture.png"
-            with patch.object(server.browser_manager, "get_tab", return_value=fake_tab):
-                res = await server.take_screenshot.fn(
-                    "inst1",
-                    selector="#save",
-                    file_path=str(save_file),
-                )
+            with patch.dict(os.environ, {"STEALTH_BROWSER_MCP_DATA_DIR": td}):
+                with patch.object(server.browser_manager, "get_tab", return_value=fake_tab):
+                    res = await server.take_screenshot.fn(
+                        "inst1",
+                        selector="#save",
+                        file_path=str(save_file),
+                    )
             self.assertTrue(save_file.exists())
             self.assertGreater(save_file.stat().st_size, 0)
             meta = res.structured_content
-            self.assertEqual(meta.get("path"), str(save_file.absolute()))
+            self.assertEqual(meta.get("path"), str(save_file.resolve()))
             self.assertEqual(meta.get("selector"), "#save")
             self.assertIn("region", meta)
 
