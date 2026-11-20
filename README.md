@@ -57,6 +57,7 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - [Modular Architecture](#modular-architecture)
   - [Tool Surface](#tool-surface)
 - [Server Configuration](#server-configuration)
+- [Security](#security)
 - [Toolbox](#toolbox)
 - [Stealth vs Playwright MCP](#stealth-vs-playwright-mcp)
 - [Troubleshooting](#troubleshooting)
@@ -255,7 +256,7 @@ Stealth Browser MCP provides built-in agent instructions at connect, an input pl
 
 This server exposes powerful local browser-control primitives: CDP execution, page JavaScript execution, cookie/storage access, network interception, dynamic hooks, header mutation, navigation, and file uploads from allowlisted local paths.
 
-Treat the MCP client or agent as the security principal. The recommended deployment is local `stdio` transport with a trusted desktop MCP client. If you use HTTP transport, set `STEALTH_BROWSER_MCP_AUTH_TOKEN` and do not expose unauthenticated HTTP outside trusted local or private networks.
+Treat the MCP client or agent as the security principal. The recommended deployment is local `stdio` transport with a trusted desktop MCP client. HTTP transport always requires a bearer token, binds to loopback by default, and rejects unexpected Host and Origin values. Do not bind HTTP off loopback. See [docs/SECURITY.md](docs/SECURITY.md).
 
 ---
 
@@ -399,6 +400,12 @@ client = Client(
 - `spawn_browser(idle_timeout_seconds=1800)` keeps that instance for 30 minutes of inactivity.
 - `spawn_browser(idle_timeout_seconds=0)` disables idle reaping for that one instance.
 - `spawn_browser(window="offscreen")` configures window mode (`offscreen`, `minimized`, `headless`, `normal`); see [docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md).
+
+---
+
+## Security
+
+This server is for a single-user host. Spawned Chrome exposes a loopback DevTools port with no DevTools authentication, so other local users can attach to it. Do not run it on a shared login or a shared netns. See [docs/SECURITY.md](docs/SECURITY.md).
 
 ---
 

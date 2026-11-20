@@ -207,29 +207,43 @@ class MCPSessionManager:
         return instance.instance_id
 
     async def close_session(self, mcp_session_id: str) -> bool:
-        """Close browser instance belonging to an MCP client session on disconnect."""
+        """Close every browser instance belonging to an MCP client session."""
         try:
             from . import tool_surface
             tool_surface.clean_session(mcp_session_id)
         except Exception:
             pass
         async with self._lock:
-            instance_id = self._session_to_instance.pop(mcp_session_id, None)
-            if not instance_id:
+            instance_ids = [
+                instance_id
+                for instance_id, owner in list(self._instance_to_session.items())
+                if owner == mcp_session_id
+            ]
+            self._session_to_instance.pop(mcp_session_id, None)
+            if not instance_ids:
                 return False
-            self._instance_to_session.pop(instance_id, None)
-            if self._browser_manager:
-                try:
-                    await self._browser_manager.close_instance(instance_id)
-                except Exception:
-                    pass
+            for instance_id in instance_ids:
+                self._instance_to_session.pop(instance_id, None)
+                if self._browser_manager:
+                    try:
+                        await self._browser_manager.close_instance(instance_id)
+                    except Exception:
+                        pass
             return True
 
     async def on_instance_closed(self, instance_id: str) -> None:
         """Callback invoked when a browser instance closes."""
         sid = self._instance_to_session.pop(instance_id, None)
-        if sid:
-            self._session_to_instance.pop(sid, None)
+        if not sid:
+            return
+        if self._session_to_instance.get(sid) == instance_id:
+            remaining = [
+                iid for iid, owner in self._instance_to_session.items() if owner == sid
+            ]
+            if remaining:
+                self._session_to_instance[sid] = remaining[-1]
+            else:
+                self._session_to_instance.pop(sid, None)
 
 
 mcp_session_manager = MCPSessionManager()
@@ -270,6 +284,8 @@ class SessionLifecycleMiddleware:
             try:
                 await self.app(scope, custom_receive, send)
             finally:
-                if session_id:
-                    if is_delete or (disconnected and scope.get("method") == "GET"):
-                        await self.session_manager.close_session(session_id)
+                if session_id and is_delete:
+                    # Close browsers only on DELETE (client drop of the MCP
+                    # session). A GET SSE stream disconnect must not close
+                    # the session's browsers; expiry and DELETE handle that.
+                    await self.session_manager.close_session(session_id)

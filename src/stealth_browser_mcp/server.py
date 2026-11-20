@@ -9,8 +9,9 @@ import json
 import logging
 import os
 import sys
+import time
 import tempfile
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -132,6 +133,7 @@ DEBUG_LOGGING_ENABLED = (
 )
 HTTP_AUTH_TOKEN = get_http_auth_token()
 _HTTP_MODE = False
+_HTTP_BIND_HOST = None
 
 def is_loopback_host(host: str) -> bool:
     """
@@ -447,6 +449,37 @@ async def spawn_browser(
             message = f"Failed to spawn browser: {message}"
         raise Exception(message) from e
 
+_ATTACH_FAILS: Dict[str, deque] = {}
+_ATTACH_FAIL_LIMIT = 10
+_ATTACH_FAIL_WINDOW = 60.0
+
+
+def _attach_rate_key() -> str:
+    return get_current_mcp_session_id() or "anonymous"
+
+
+def _prune_attach_failures(bucket: deque, now: float) -> None:
+    while bucket and now - bucket[0] > _ATTACH_FAIL_WINDOW:
+        bucket.popleft()
+
+
+def _check_attach_rate_limit() -> None:
+    now = time.monotonic()
+    bucket = _ATTACH_FAILS.setdefault(_attach_rate_key(), deque())
+    _prune_attach_failures(bucket, now)
+    if len(bucket) >= _ATTACH_FAIL_LIMIT:
+        raise ToolError(
+            "attach_browser is rate limited: too many failed probes. Wait and retry."
+        )
+
+
+def _record_attach_failure() -> None:
+    now = time.monotonic()
+    bucket = _ATTACH_FAILS.setdefault(_attach_rate_key(), deque())
+    _prune_attach_failures(bucket, now)
+    bucket.append(now)
+
+
 @section_tool("browser-management")
 async def attach_browser(
     port: int = 9222,
@@ -466,15 +499,23 @@ async def attach_browser(
     if window != "keep":
         raise ToolError("Only window='keep' is valid for attach_browser.")
 
-    allow_remote = parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False)
+    http_off_loopback = bool(_HTTP_MODE and _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST))
+    allow_remote = parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False) and not http_off_loopback
+    if not is_loopback_host(host) and http_off_loopback:
+        raise ToolError(
+            f"Host '{host}' is not a loopback address. STEALTH_ALLOW_REMOTE_ATTACH is ignored "
+            "when the HTTP server is bound off loopback."
+        )
     if not is_loopback_host(host) and not allow_remote:
         raise ToolError(
             f"Host '{host}' is not a loopback address (127.0.0.1, localhost, ::1). "
             "Set STEALTH_ALLOW_REMOTE_ATTACH=1 to allow remote attach."
         )
 
+    _check_attach_rate_limit()
     reachable = await asyncio.to_thread(_probe_version, host, port, 3.0)
     if not reachable:
+        _record_attach_failure()
         raise ToolError(
             f"Could not connect to Chrome at http://{host}:{port}/json/version. "
             f"Chrome must be started with --remote-debugging-port={port} and a non-default --user-data-dir. "
@@ -4177,7 +4218,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     Returns:
         None
     """
-    global _HTTP_MODE
+    global _HTTP_MODE, _HTTP_BIND_HOST
     parser = argparse.ArgumentParser(
         description=f"Stealth Browser MCP Server with {sum(len(tools) for tools in SECTION_TOOLS.values())} tools"
     )
@@ -4337,6 +4378,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.transport == "http":
         _HTTP_MODE = True
+        _HTTP_BIND_HOST = args.host
         try:
             token = ensure_http_token(announce=True)
             validate_bind(args.host, token)
