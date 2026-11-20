@@ -960,6 +960,11 @@ async def save_to_seed(
     Returns:
         Dict[str, Any]: Operation summary with status, seed name, and file counts.
     """
+    owned_instance = await browser_manager.find_instance_id_for_session_or_instance(session_id)
+    if owned_instance:
+        mcp_session_manager.check_access(owned_instance)
+    elif get_current_mcp_session_id() and mcp_session_manager.isolation_armed():
+        raise instance_not_found_error(session_id)
     if not profiles.session_exists(session_id):
         session_info = await browser_manager.get_session_info(session_id)
         if session_info and session_info.get("session_id"):
@@ -1777,7 +1782,7 @@ async def get_request_details(
     Returns:
         Optional[Dict[str, Any]]: Request details including headers, cookies, and body.
     """
-    request = await network_interceptor.get_request(request_id)
+    request = await network_interceptor.get_request_for_caller(request_id)
     if request:
         return request.dict()
     return None
@@ -1796,7 +1801,7 @@ async def get_response_details(
     Returns:
         Optional[Dict[str, Any]]: Response details including status, headers, and metadata.
     """
-    response = await network_interceptor.get_response(request_id)
+    response = await network_interceptor.get_response_for_caller(request_id)
     if response:
         return response.dict()
     return None
@@ -1820,6 +1825,9 @@ async def get_response_content(
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
         raise instance_not_found_error(instance_id)
+    request = await network_interceptor.get_request_for_caller(request_id)
+    if not request or request.instance_id != instance_id:
+        return None
     body = await network_interceptor.get_response_body(tab, request_id)
     if body:
         try:

@@ -1227,6 +1227,17 @@ class BrowserManager:
         """Get session spawn info if spawned from a seed."""
         return self._session_infos.get(instance_id)
 
+    async def find_instance_id_for_session_or_instance(self, session_or_instance_id: str) -> Optional[str]:
+        """Resolve a seed session id or instance id to a live instance id."""
+        if session_or_instance_id in self._instances:
+            return session_or_instance_id
+        for instance_id, data in self._instances.items():
+            if data.get("session_id") == session_or_instance_id:
+                return instance_id
+        if session_or_instance_id in self._session_infos:
+            return session_or_instance_id
+        return None
+
     @staticmethod
     def _get_tab_target_id(tab: Optional[Tab]) -> Optional[str]:
         """Get a stable target id string for a tab when available."""

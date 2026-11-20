@@ -417,6 +417,30 @@ class NetworkInterceptor:
         async with self._lock:
             return self._responses.get(request_id)
 
+    def _caller_can_access_instance(self, instance_id: Optional[str]) -> bool:
+        if not instance_id:
+            return False
+        from .mcp_sessions import mcp_session_manager
+        try:
+            mcp_session_manager.check_access(instance_id)
+            return True
+        except Exception:
+            return False
+
+    async def get_request_for_caller(self, request_id: str) -> Optional[NetworkRequest]:
+        """Return a request only if the current session owns its instance."""
+        request = await self.get_request(request_id)
+        if request is None or not self._caller_can_access_instance(request.instance_id):
+            return None
+        return request
+
+    async def get_response_for_caller(self, request_id: str) -> Optional[NetworkResponse]:
+        """Return a response only if the current session owns the request's instance."""
+        request = await self.get_request_for_caller(request_id)
+        if request is None:
+            return None
+        return await self.get_response(request_id)
+
     async def get_response_body(self, tab: Tab, request_id: str) -> Optional[bytes]:
         """
         Get response body content, from the capture store or the browser.

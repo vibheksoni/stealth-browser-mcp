@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .comprehensive_element_cloner import comprehensive_element_cloner
 from .debug_logger import debug_logger
 from .persistent_storage import persistent_storage
+from .mcp_sessions import get_current_mcp_session_id
 
 MAX_STORED_ELEMENTS = 50
 STYLE_CATEGORIES = {
@@ -80,11 +81,22 @@ class ProgressiveElementCloner:
             or (None, None) when the handle is unknown
         """
         entry = self._get_store().get(element_id)
-        if entry is None:
+        if entry is None or not self._visible_to_caller(entry):
             return None, None
         full_data = entry["full_data"]
         element_data = full_data.get("element")
         return full_data, element_data if isinstance(element_data, dict) else {}
+
+    @staticmethod
+    def _visible_to_caller(entry: Dict[str, Any]) -> bool:
+        """True if the current MCP session may see this stored element."""
+        sid = get_current_mcp_session_id()
+        if not sid:
+            return True
+        owner = entry.get("owner_session_id")
+        if owner is None:
+            return False
+        return owner == sid
 
     @staticmethod
     def _not_found(element_id: str) -> Dict[str, Any]:
@@ -134,6 +146,7 @@ class ProgressiveElementCloner:
                 "selector": selector,
                 "timestamp": time.time(),
                 "include_children": include_children,
+                "owner_session_id": get_current_mcp_session_id(),
             }
             self._save_store(store)
 
@@ -338,6 +351,8 @@ class ProgressiveElementCloner:
         """
         items = []
         for element_id, meta in self._get_store().items():
+            if not self._visible_to_caller(meta):
+                continue
             fd = meta.get("full_data", {})
             element_data = fd.get("element") or {}
             items.append(
@@ -364,7 +379,8 @@ class ProgressiveElementCloner:
             Dict[str, Any]: Success message or not found error
         """
         store = self._get_store()
-        if element_id in store:
+        entry = store.get(element_id)
+        if entry is not None and self._visible_to_caller(entry):
             del store[element_id]
             self._save_store(store)
             return {"success": True, "message": f"Element {element_id} cleared"}
@@ -372,13 +388,24 @@ class ProgressiveElementCloner:
 
     def clear_all_elements(self) -> Dict[str, Any]:
         """
-        Remove every stored element.
+        Remove stored elements owned by the current session.
 
         Returns:
             Dict[str, Any]: Success message
         """
-        self._save_store({})
-        return {"success": True, "message": "All stored elements cleared"}
+        store = self._get_store()
+        sid = get_current_mcp_session_id()
+        if not sid:
+            self._save_store({})
+            return {"success": True, "message": "All stored elements cleared"}
+        kept = {
+            element_id: meta
+            for element_id, meta in store.items()
+            if meta.get("owner_session_id") != sid
+        }
+        removed = len(store) - len(kept)
+        self._save_store(kept)
+        return {"success": True, "message": f"{removed} stored elements cleared"}
 
 
 progressive_element_cloner = ProgressiveElementCloner()

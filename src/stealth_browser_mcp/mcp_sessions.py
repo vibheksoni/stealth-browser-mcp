@@ -109,6 +109,10 @@ class MCPSessionManager:
         """Get the MCP client session ID that owns a browser instance."""
         return self._instance_to_session.get(instance_id)
 
+    def isolation_armed(self) -> bool:
+        """True once any instance has an owner session."""
+        return bool(self._instance_to_session)
+
     def list_instance_ids_for_session(self, mcp_session_id: str) -> List[str]:
         """Return every instance currently owned by an MCP client session."""
         return [
