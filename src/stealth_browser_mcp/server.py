@@ -70,7 +70,12 @@ from .har_export import build_har, export_to_json
 from . import seed_snapshots
 from . import seed_tools
 from . import seed_save
-from .window_mode import normalize_window_mode
+from .window_mode import normalize_window_mode, open_background_tab
+from .profile_policy import (
+    SCRAPE_POLICY_JS,
+    classify_policies,
+    parse_policy_rows,
+)
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -3893,6 +3898,43 @@ async def refresh_seed(
         indexeddb_cap_bytes=indexeddb_cap_bytes,
         source_dir=source_dir,
     )
+
+
+@section_tool("browser-management")
+async def profile_policy_report(instance_id: str) -> Dict[str, Any]:
+    """Inspect chrome://policy to report enterprise policies, blockers, and warnings.
+
+    Returns whether the profile is managed and classifies policies that affect automation.
+    """
+    browser = await browser_manager.get_browser(instance_id)
+    if not browser:
+        raise Exception(f"Instance not found: {instance_id}")
+
+    tab = None
+    try:
+        try:
+            tab = await open_background_tab(browser, url="chrome://policy")
+        except Exception:
+            tab = await browser.get("chrome://policy", new_tab=True)
+
+        await asyncio.sleep(0.3)
+
+        raw_rows = await dom_handler.execute_script(tab, SCRAPE_POLICY_JS)
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+
+        report = classify_policies(raw_rows)
+        report["policy_count"] = len(raw_rows)
+        report["raw_policy_count"] = len(raw_rows)
+        return report
+    except Exception as e:
+        raise Exception(f"Failed to inspect profile policies: {e}") from e
+    finally:
+        if tab is not None:
+            try:
+                await tab.close()
+            except Exception:
+                pass
 
 
 if parse_bool_env("XPOOL_SAFE_MODE", default=False):
