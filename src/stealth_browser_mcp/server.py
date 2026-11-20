@@ -34,6 +34,7 @@ from .content_cap import DEFAULT_PAGE_CONTENT_CHARS, clamp_max_chars
 from .errors import instance_not_found_error, no_active_tab_error, tab_not_found_error
 from .file_based_element_cloner import file_based_element_cloner
 from starlette.middleware import Middleware as ASGIMiddleware
+from .hook_policy import code_hooks_enabled, code_hooks_disabled_result, refuse_code_hooks_off_loopback
 from .http_auth import (
     BearerAuthMiddleware,
     HostOriginMiddleware,
@@ -3839,6 +3840,8 @@ async def create_dynamic_hook(
             return HookAction(action="continue")
         ```
     """
+    if not code_hooks_enabled():
+        return code_hooks_disabled_result()
     return await dynamic_hook_ai.create_dynamic_hook(
         name=name,
         requirements=requirements,
@@ -3978,6 +3981,8 @@ def validate_hook_function(function_code: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Validation results with issues and warnings
     """
+    if not code_hooks_enabled():
+        return code_hooks_disabled_result()
     return dynamic_hook_ai.validate_hook_function(function_code=function_code)
 
 
@@ -4315,6 +4320,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         try:
             token = ensure_http_token(announce=True)
             validate_bind(args.host, token)
+            refuse_code_hooks_off_loopback(args.host)
         except (ValueError, TokenConfigError) as e:
             sys.stderr.write(f"Error: {e}\n")
             sys.exit(1)

@@ -347,6 +347,7 @@ These are environment variables for the MCP server process. Set them in your she
 | `DEBUG` | `0` | Legacy alias for `STEALTH_BROWSER_DEBUG`. |
 | `XPOOL_SAFE_MODE` | `0` | Disable the `cdp-functions` section at startup. |
 | `PORT` | `8000` | Default HTTP port when `--port` is not provided. |
+| `STEALTH_ALLOW_CODE_HOOKS` | unset | Allow `create_dynamic_hook` / `validate_hook_function` to compile caller Python on the server. Off by default. The server refuses to start if this is set and HTTP is bound off loopback. Use `create_simple_dynamic_hook` instead. |
 
 **PowerShell example:**
 

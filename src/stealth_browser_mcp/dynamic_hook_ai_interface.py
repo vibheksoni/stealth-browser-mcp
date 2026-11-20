@@ -7,6 +7,7 @@ about dynamic hook functions.
 
 from typing import Dict, List, Any, Optional
 from .dynamic_hook_system import dynamic_hook_system
+from .hook_policy import code_hooks_enabled, code_hooks_disabled_result
 from .hook_learning_system import hook_learning_system
 from .debug_logger import debug_logger
 
@@ -34,6 +35,8 @@ class DynamicHookAIInterface:
         Returns:
             Dict with hook_id and status
         """
+        if not code_hooks_enabled():
+            return code_hooks_disabled_result()
         try:
             validation = self.learning_system.validate_hook_function(function_code)
             if not validation["valid"]:
@@ -323,12 +326,17 @@ def process_request(request):
 
             requirements = {"url_pattern": url_pattern}
 
-            return await self.create_dynamic_hook(
+            hook_id = await self.hook_system.create_hook(
                 name=name,
                 requirements=requirements,
                 function_code=function_code,
-                instance_ids=instance_ids
+                instance_ids=instance_ids,
             )
+            return {
+                "success": True,
+                "hook_id": hook_id,
+                "message": "Created dynamic hook '{}' with ID {}".format(name, hook_id),
+            }
 
         except Exception as e:
             debug_logger.log_error("dynamic_hook_ai", "create_simple_hook", f"Failed to create simple hook: {e}")
