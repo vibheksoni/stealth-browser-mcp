@@ -95,7 +95,7 @@ class TestDownloadsUnitUngated(unittest.TestCase):
         session_base.mkdir(parents=True, exist_ok=True)
         dl_dir = get_session_download_dir("inst_1", base_dir=session_base)
         self.assertTrue(dl_dir.is_dir())
-        self.assertEqual(dl_dir, session_base / "downloads")
+        self.assertEqual(dl_dir.resolve(), (session_base / "downloads").resolve())
 
     def test_path_escape_rejected_patterns(self):
         invalid_patterns = [
@@ -135,7 +135,7 @@ class TestDownloadsUnitUngated(unittest.TestCase):
                 self.assertIn("Path escape rejected", str(ctx.exception))
 
         valid = validate_download_target("downloaded_report.csv", session_dir)
-        self.assertEqual(valid, session_dir / "downloaded_report.csv")
+        self.assertEqual(valid.resolve(), (session_dir / "downloaded_report.csv").resolve())
 
     def test_wait_for_download_finds_file_in_session_dir(self):
         session_dir = Path(self.test_dir) / "session_downloads"
@@ -445,13 +445,13 @@ class TestDownloadsGated(unittest.TestCase):
                             if getattr(browser, "connection", None) is not None:
                                 await asyncio.wait_for(
                                     browser.connection.send(uc.cdp.browser.close()),
-                                    timeout=3.0,
+                                    timeout=10.0,
                                 )
                         except Exception:
                             pass
                         if getattr(browser, "_process", None) is not None:
                             try:
-                                await _stop_process(browser._process)
+                                await _stop_process(browser._process, browser=browser)
                             except Exception:
                                 pass
                         connections = [

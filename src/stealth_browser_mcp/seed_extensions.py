@@ -98,15 +98,20 @@ def _find_relative_subpath(raw_path: str, candidates: List[Path]) -> Optional[st
     if not raw_path or not isinstance(raw_path, str):
         return None
     try:
-        norm_ext = os.path.normpath(os.path.abspath(raw_path))
+        real_ext = os.path.realpath(os.path.abspath(raw_path))
     except Exception:
         return None
 
     for base in candidates:
         try:
-            norm_base = os.path.normpath(os.path.abspath(str(base)))
-            rel = os.path.relpath(norm_ext, norm_base)
+            real_base = os.path.realpath(os.path.abspath(str(base)))
+            rel = os.path.relpath(real_ext, real_base)
             if not rel.startswith("..") and not os.path.isabs(rel) and rel != ".":
+                return rel
+            norm_ext = os.path.normcase(real_ext)
+            norm_base = os.path.normcase(real_base)
+            norm_rel = os.path.relpath(norm_ext, norm_base)
+            if not norm_rel.startswith("..") and not os.path.isabs(norm_rel) and norm_rel != ".":
                 return rel
         except (ValueError, OSError):
             continue

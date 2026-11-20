@@ -12,6 +12,11 @@ from typing import Any, Optional
 
 from tests.browser_harness.server import PAGES_DIR, FixtureServer
 
+try:
+    import window_matrix
+except ImportError:
+    from tests import window_matrix
+
 RUN_BROWSER_TESTS = os.getenv("STEALTH_BROWSER_TESTS", "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -208,7 +213,20 @@ class TestBrowserHarnessGated(unittest.TestCase):
                     )
                     browser = await launch_browser(config, timeout=30.0)
                     tab = await browser.get(server.url_for("inputs.html"))
-                    title = await tab.evaluate("document.title")
+
+                    async def _doc_ready_and_titled():
+                        ready = await tab.evaluate("document.readyState")
+                        title_val = await tab.evaluate("document.title")
+                        if ready == "complete" and title_val:
+                            return title_val
+                        return False
+
+                    title = await window_matrix.wait_until_async(
+                        _doc_ready_and_titled,
+                        timeout=10.0,
+                        interval=0.1,
+                        message="Page did not reach readyState complete with non-empty title",
+                    )
                     self.assertEqual(title, "Inputs Fixture")
 
                     placeholder = await tab.evaluate(

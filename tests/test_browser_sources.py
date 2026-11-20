@@ -1,5 +1,6 @@
 import json
 import os
+import posixpath
 import sys
 import tempfile
 import unittest
@@ -30,15 +31,15 @@ class RootBuilderTests(unittest.TestCase):
         env = {"HOME": "/tmp/h"}
         self.assertEqual(
             browser_sources.user_data_root("chrome", "linux", env),
-            os.path.join("/tmp/h", ".config", "google-chrome"),
+            posixpath.join("/tmp/h", ".config", "google-chrome"),
         )
         self.assertEqual(
             browser_sources.user_data_root("edge", "linux", env),
-            os.path.join("/tmp/h", ".config", "microsoft-edge"),
+            posixpath.join("/tmp/h", ".config", "microsoft-edge"),
         )
         self.assertEqual(
             browser_sources.user_data_root("brave", "linux", env),
-            os.path.join("/tmp/h", ".config", "BraveSoftware", "Brave-Browser"),
+            posixpath.join("/tmp/h", ".config", "BraveSoftware", "Brave-Browser"),
         )
 
     def test_windows_roots_per_family(self):
@@ -60,17 +61,17 @@ class RootBuilderTests(unittest.TestCase):
         env = {"HOME": "/Users/me"}
         self.assertEqual(
             browser_sources.user_data_root("chrome", "darwin", env),
-            os.path.join("/Users/me", "Library", "Application Support", "Google", "Chrome"),
+            posixpath.join("/Users/me", "Library", "Application Support", "Google", "Chrome"),
         )
         self.assertEqual(
             browser_sources.user_data_root("brave", "darwin", env),
-            os.path.join("/Users/me", "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
+            posixpath.join("/Users/me", "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
         )
 
     def test_env_overrides_home_and_localappdata(self):
         self.assertEqual(
             browser_sources.user_data_root("chrome", "linux", {"HOME": "/alt"}),
-            os.path.join("/alt", ".config", "google-chrome"),
+            posixpath.join("/alt", ".config", "google-chrome"),
         )
         # Windows uses LOCALAPPDATA, not HOME.
         self.assertEqual(
@@ -87,7 +88,26 @@ class RootBuilderTests(unittest.TestCase):
         # And when we do pass HOME, we get exactly what we asked for.
         self.assertEqual(
             browser_sources.user_data_root("chrome", "linux", {"HOME": "/fake/home"}),
-            os.path.join("/fake/home", ".config", "google-chrome"),
+            posixpath.join("/fake/home", ".config", "google-chrome"),
+        )
+
+    def test_deterministic_platform_separators(self):
+        # Linux/darwin paths always use forward slashes; Windows paths always use backslashes.
+        self.assertEqual(
+            browser_sources.user_data_root("chrome", "linux", {"HOME": "/base"}),
+            "/base/.config/google-chrome",
+        )
+        self.assertEqual(
+            browser_sources.user_data_root("chrome", "windows", {"LOCALAPPDATA": "C:\\base"}),
+            "C:\\base\\Google\\Chrome\\User Data",
+        )
+        self.assertEqual(
+            browser_sources.source_path("chrome", "Profile 1", "linux", {"HOME": "/base"}),
+            "/base/.config/google-chrome/Profile 1",
+        )
+        self.assertEqual(
+            browser_sources.source_path("chrome", "Profile 1", "windows", {"LOCALAPPDATA": "C:\\base"}),
+            "C:\\base\\Google\\Chrome\\User Data\\Profile 1",
         )
 
     def test_unknown_family_and_platform_raise(self):
@@ -114,7 +134,7 @@ class SourcePathTests(unittest.TestCase):
         env = {"HOME": "/tmp/h"}
         self.assertEqual(
             browser_sources.source_path("chrome", "Profile 1", "linux", env),
-            os.path.join("/tmp/h", ".config", "google-chrome", "Profile 1"),
+            posixpath.join("/tmp/h", ".config", "google-chrome", "Profile 1"),
         )
 
     def test_profile_subdir_with_backslash_is_normalised(self):
@@ -217,12 +237,12 @@ class FakeTreeTests(unittest.TestCase):
             env = {"HOME": str(self.base)}
         else:
             env = {"HOME": str(self.base)}
-        root = Path(browser_sources.user_data_root(family, platform, env))
+        root = Path(browser_sources.user_data_root(family, platform, env).replace("\\", os.sep))
         # Local State at the root.
         write_json(root / browser_sources.LOCAL_STATE_FILE, self._make_profile_state(names))
         # One profile directory per name.
         for name in names:
-            src = Path(browser_sources.source_path(family, name, platform, env))
+            src = Path(browser_sources.source_path(family, name, platform, env).replace("\\", os.sep))
             src.mkdir(parents=True, exist_ok=True)
         return env, root
 
@@ -235,7 +255,7 @@ class FakeTreeTests(unittest.TestCase):
         self.assertTrue((root / browser_sources.LOCAL_STATE_FILE).is_file())
         text = (root / browser_sources.LOCAL_STATE_FILE).read_text(encoding="ascii")
         self.assertEqual(browser_sources.parse_profiles_from_local_state(text), ["Default", "Profile 1"])
-        self.assertTrue(Path(browser_sources.source_path("chrome", "Profile 1", "windows", env)).exists())
+        self.assertTrue(Path(browser_sources.source_path("chrome", "Profile 1", "windows", env).replace("\\", os.sep)).exists())
 
     def test_linux_edge_tree(self):
         env, root = self._build_tree("linux", "edge", ["Default"])

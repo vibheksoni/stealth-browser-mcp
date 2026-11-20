@@ -991,7 +991,7 @@ class BrowserManager:
     async def _shutdown_browser(
         self,
         browser: Browser,
-        process_exit_timeout: float = PROCESS_EXIT_TIMEOUT,
+        process_exit_timeout: float = 10.0,
     ) -> None:
         """
         Stop a browser process and its CDP connections without hanging.
@@ -1004,29 +1004,31 @@ class BrowserManager:
             None
         """
         connection = getattr(browser, "connection", None)
+        process = getattr(browser, "_process", None)
         if connection is not None:
             handlers = getattr(connection, "handlers", {})
             for event_type in TARGET_UPDATE_EVENTS:
                 handlers.pop(event_type, None)
             try:
                 await asyncio.wait_for(connection.send(uc.cdp.browser.close()), CLOSE_STEP_TIMEOUT)
+                if process is not None and getattr(process, "returncode", None) is None:
+                    try:
+                        await asyncio.wait_for(process.wait(), process_exit_timeout)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
-        process = getattr(browser, "_process", None)
-        if process is not None and process.returncode is None:
-            try:
-                await asyncio.wait_for(process.wait(), process_exit_timeout)
-            except Exception:
-                for signal_process in (process.terminate, process.kill):
-                    try:
-                        signal_process()
-                        await asyncio.wait_for(process.wait(), PROCESS_EXIT_TIMEOUT)
-                        break
-                    except ProcessLookupError:
-                        break
-                    except Exception:
-                        continue
+        if process is not None and getattr(process, "returncode", None) is None:
+            for signal_process in (process.terminate, process.kill):
+                try:
+                    signal_process()
+                    await asyncio.wait_for(process.wait(), PROCESS_EXIT_TIMEOUT)
+                    break
+                except ProcessLookupError:
+                    break
+                except Exception:
+                    continue
 
         connections = [getattr(tab, "disconnect", None) for tab in list(getattr(browser, "targets", []) or [])]
         if connection is not None:

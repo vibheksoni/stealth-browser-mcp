@@ -1,4 +1,10 @@
-"""Element and region screenshot clipping helpers for CDP Page.captureScreenshot."""
+"""Element and region screenshot clipping helpers for CDP Page.captureScreenshot.
+
+Note:
+The captured PNG image is rendered in physical device pixels (device-pixel
+dimensions = round(css_dimension * window.devicePixelRatio)). Callers and tests
+evaluating dimensions should account for the display devicePixelRatio.
+"""
 
 import base64
 import json
@@ -226,14 +232,17 @@ async def capture_clip_screenshot(
 ) -> bytes:
     """Capture a screenshot of a specific clipped region using CDP Page.captureScreenshot.
 
+    The returned PNG/JPEG bytes represent the image rendered in physical device pixels
+    (CSS dimensions scaled by window.devicePixelRatio).
+
     Args:
         tab (Any): nodriver tab.
-        clip (Dict[str, float]): Region with 'x', 'y', 'width', 'height'.
+        clip (Dict[str, float]): Region with 'x', 'y', 'width', 'height' in CSS pixels.
         format (str): 'png' or 'jpeg'.
         quality (Optional[int]): Compression quality for jpeg format.
 
     Returns:
-        bytes: Raw decoded screenshot bytes.
+        bytes: Raw decoded screenshot bytes in device pixels.
     """
     viewport = uc.cdp.page.Viewport(
         x=float(clip["x"]),

@@ -119,13 +119,14 @@ class TestExtensionPathFixup(_TempDataDir):
         clone_ext.mkdir(parents=True, exist_ok=True)
 
         # Create Secure Preferences with arbitrary bytes and HMAC dummy signature
+        escaped_source_ext = json.dumps(str(source_ext)).strip('"')
         sec_content = (
             b'{\n'
             b'  "extensions": {\n'
             b'    "settings": {\n'
             b'      "extsecid12345": {\n'
             b'        "location": 4,\n'
-            b'        "path": "' + str(source_ext).encode("ascii") + b'"\n'
+            b'        "path": "' + escaped_source_ext.encode("ascii") + b'"\n'
             b'      }\n'
             b'    }\n'
             b'  },\n'

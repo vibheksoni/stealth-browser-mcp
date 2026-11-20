@@ -11,7 +11,9 @@ roots are listed but optional; the path builder works for them too.
 """
 
 import json
+import ntpath
 import os
+import posixpath
 from typing import Dict, List, Mapping, Optional, Tuple
 
 # Browser families this slice knows how to locate and launch. The order is the
@@ -83,13 +85,16 @@ def user_data_root(browser_family: str, platform: str, env: Optional[Mapping[str
         raise ValueError("browser family not supported on {}: {}".format(platform, browser_family))
 
     base = env["LOCALAPPDATA"] if platform == "windows" else env["HOME"]
-    relative = roots[browser_family].replace("\\", os.sep)
-    return os.path.join(base, relative)
+    path_mod = ntpath if platform == "windows" else posixpath
+    relative = roots[browser_family].replace("/", "\\") if platform == "windows" else roots[browser_family].replace("\\", "/")
+    return path_mod.join(base, relative)
 
 
 def local_state_path(browser_family: str, platform: str, env: Optional[Mapping[str, str]]) -> str:
     """Return the path of the ``Local State`` file under the user-data root."""
-    return os.path.join(user_data_root(browser_family, platform, env), LOCAL_STATE_FILE)
+    platform = normalize_platform(platform)
+    path_mod = ntpath if platform == "windows" else posixpath
+    return path_mod.join(user_data_root(browser_family, platform, env), LOCAL_STATE_FILE)
 
 
 def source_path(browser_family: str, profile_subdir: str, platform: str,
@@ -110,9 +115,14 @@ def source_path(browser_family: str, profile_subdir: str, platform: str,
     Returns:
         The absolute-ish path of the profile directory.
     """
+    platform = normalize_platform(platform)
+    path_mod = ntpath if platform == "windows" else posixpath
     root = user_data_root(browser_family, platform, env)
-    normalized = profile_subdir.replace("\\", "/")
-    return os.path.join(root, normalized)
+    if platform == "windows":
+        normalized = profile_subdir.replace("/", "\\")
+    else:
+        normalized = profile_subdir.replace("\\", "/")
+    return path_mod.join(root, normalized)
 
 
 def normalize_platform(platform: str) -> str:

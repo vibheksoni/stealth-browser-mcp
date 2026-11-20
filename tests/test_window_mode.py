@@ -13,7 +13,7 @@ import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import unittest
 from unittest import mock
 

@@ -353,10 +353,11 @@ class TestScreenshotClipGated(unittest.IsolatedAsyncioTestCase):
         png_bytes = base64.b64decode(image_content.data)
         self.assertEqual(png_bytes[:8], b"\x89PNG\r\n\x1a\n")
 
-        # Read PNG width and height from IHDR chunk with struct
+        # Read PNG width and height from IHDR chunk with struct (rendered in device pixels)
         img_w, img_h = struct.unpack(">II", png_bytes[16:24])
-        self.assertAlmostEqual(img_w, region["width"], delta=2)
-        self.assertAlmostEqual(img_h, region["height"], delta=2)
+        dpr = float(await self.tab.evaluate("window.devicePixelRatio || 1"))
+        self.assertAlmostEqual(img_w, round(region["width"] * dpr), delta=2)
+        self.assertAlmostEqual(img_h, round(region["height"] * dpr), delta=2)
 
     async def test_real_browser_screenshot_by_clip(self) -> None:
         """Capture screenshot of a page region by clip and verify dimensions."""
@@ -372,8 +373,9 @@ class TestScreenshotClipGated(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(png_bytes[:8], b"\x89PNG\r\n\x1a\n")
 
         img_w, img_h = struct.unpack(">II", png_bytes[16:24])
-        self.assertAlmostEqual(img_w, 160, delta=2)
-        self.assertAlmostEqual(img_h, 80, delta=2)
+        dpr = float(await self.tab.evaluate("window.devicePixelRatio || 1"))
+        self.assertAlmostEqual(img_w, round(160 * dpr), delta=2)
+        self.assertAlmostEqual(img_h, round(80 * dpr), delta=2)
 
     async def test_real_browser_selector_not_found(self) -> None:
         """Verify clear error message when selector is missing on the live page."""

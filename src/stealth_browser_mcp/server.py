@@ -1464,8 +1464,10 @@ async def take_screenshot(
 
     Returns:
         ToolResult: MCP image content block with format, width, height, original size,
-            scale, quality, byte count, and SHA-256 metadata. When file_path is given,
-            it also includes the server file location text and metadata path.
+            scale, quality, byte count, SHA-256 metadata, and device_pixel_ratio.
+            Image dimensions are rendered in physical device pixels.
+            When file_path is given, it also includes the server file location text
+            and metadata path.
     """
     try:
         from .mcp_sessions import mcp_session_manager
@@ -1484,6 +1486,14 @@ async def take_screenshot(
     if not tab:
         raise instance_not_found_error(instance_id)
 
+    dpr: Optional[float] = None
+    try:
+        dpr_val = await tab.evaluate("window.devicePixelRatio")
+        if isinstance(dpr_val, (int, float)) and dpr_val > 0:
+            dpr = float(dpr_val)
+    except Exception:
+        dpr = None
+
     target_clip: Optional[Dict[str, float]] = None
     if selector:
         target_clip = await resolve_element_clip(tab, selector)
@@ -1500,6 +1510,8 @@ async def take_screenshot(
             await tab.save_screenshot(save_path, format=format, full_page=full_page)
         image_bytes, metadata = fit_screenshot(save_path, format, quality, max_width)
         metadata["path"] = str(save_path.absolute())
+        if dpr is not None:
+            metadata["device_pixel_ratio"] = dpr
         if target_clip is not None:
             metadata["region"] = target_clip
         if selector is not None:
@@ -1529,6 +1541,8 @@ async def take_screenshot(
         else:
             await tab.save_screenshot(tmp_path, format="png", full_page=full_page)
         image_bytes, metadata = fit_screenshot(tmp_path, format, quality, max_width)
+        if dpr is not None:
+            metadata["device_pixel_ratio"] = dpr
         if target_clip is not None:
             metadata["region"] = target_clip
         if selector is not None:

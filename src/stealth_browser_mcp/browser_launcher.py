@@ -5,7 +5,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import nodriver as uc
 import psutil
@@ -60,19 +60,44 @@ def _read_active_port(profile_dir: Path) -> Optional[int]:
         return None
 
 
-async def _stop_process(process: asyncio.subprocess.Process) -> None:
+async def _stop_process(process: Any, browser: Optional[Any] = None) -> None:
     """
     Terminate a process, killing it if it does not exit in time.
 
     Args:
-        process (asyncio.subprocess.Process): Process to stop.
+        process: Process to stop.
+        browser: Optional browser instance to exit gracefully via CDP Browser.close.
     """
-    if process.returncode is not None:
+    if getattr(process, "returncode", None) is not None:
         return
-    for signal_process in (process.terminate, process.kill):
+    if hasattr(process, "poll") and process.poll() is not None:
+        return
+
+    if browser is not None and getattr(browser, "connection", None) is not None:
+        try:
+            await asyncio.wait_for(browser.connection.send(uc.cdp.browser.close()), 5.0)
+            if hasattr(process, "wait"):
+                wait_res = process.wait()
+                if asyncio.iscoroutine(wait_res):
+                    await asyncio.wait_for(wait_res, 10.0)
+                else:
+                    await asyncio.to_thread(process.wait, 10.0)
+                return
+        except Exception:
+            pass
+
+    for signal_name in ("terminate", "kill"):
+        signal_process = getattr(process, signal_name, None)
+        if signal_process is None:
+            continue
         try:
             signal_process()
-            await asyncio.wait_for(process.wait(), PROCESS_EXIT_TIMEOUT)
+            if hasattr(process, "wait"):
+                wait_res = process.wait()
+                if asyncio.iscoroutine(wait_res):
+                    await asyncio.wait_for(wait_res, PROCESS_EXIT_TIMEOUT)
+                else:
+                    await asyncio.to_thread(process.wait, PROCESS_EXIT_TIMEOUT)
             return
         except ProcessLookupError:
             return

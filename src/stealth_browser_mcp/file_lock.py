@@ -38,6 +38,7 @@ else:
     _HAS_FLOCK = True
 
 HOLDER_SUFFIX = ".lock.holder"
+_WIN_LOCK_OFFSET = 0x7FFFFFF0
 
 
 class _WouldBlock(OSError):
@@ -60,17 +61,35 @@ def is_pid_alive(pid):
     """
     if pid is None or pid <= 0:
         return False
-    # ``psutil.pid_exists`` is used instead of ``os.kill(pid, 0)``: on Windows
-    # the latter calls ``TerminateProcess`` for every signal other than
-    # ``CTRL_C_EVENT``/``CTRL_BREAK_EVENT``, which would kill the target instead
-    # of merely probing it.
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        SYNCHRONIZE = 0x00100000
+        WAIT_TIMEOUT = 0x00000102
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, wintypes.DWORD(pid))
+        if not handle:
+            return kernel32.GetLastError() == 5
+        try:
+            res = kernel32.WaitForSingleObject(handle, 0)
+            if res == WAIT_TIMEOUT:
+                return True
+            exit_code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == 259
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
+
     if not psutil.pid_exists(pid):
         return False
     try:
         return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
-    return False
+    except psutil.AccessDenied:
+        return True
 
 
 class FileLock:
@@ -180,6 +199,7 @@ class FileLock:
             if _HAS_FLOCK:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             else:
+                os.lseek(fd, _WIN_LOCK_OFFSET, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         except OSError as exc:
             if not _HAS_FLOCK:
@@ -211,21 +231,30 @@ class FileLock:
         Release the lock and clear holder info. Safe to call multiple times.
         """
         if self._fd is not None:
+            fd = self._fd
+            self._fd = None
             try:
                 if _HAS_FLOCK:
-                    fcntl.flock(self._fd, fcntl.LOCK_UN)
+                    fcntl.flock(fd, fcntl.LOCK_UN)
                 else:
-                    msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
+                    os.lseek(fd, _WIN_LOCK_OFFSET, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             except (IOError, OSError, ValueError):
                 pass
-            try:
-                os.close(self._fd)
-            except (IOError, OSError):
-                pass
-            self._fd = None
+            finally:
+                try:
+                    os.close(fd)
+                except (IOError, OSError):
+                    pass
         try:
             os.remove(self.info_path)
         except (OSError, IOError):
+            pass
+
+    def __del__(self):
+        try:
+            self.release()
+        except Exception:
             pass
 
     def __enter__(self):

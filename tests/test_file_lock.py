@@ -88,6 +88,11 @@ class UnitTests(unittest.TestCase):
         self.assertIsNotNone(info)
         self.assertEqual(info["pid"], os.getpid())
         self.assertTrue(lock.holder_alive())
+        # Another instance can read holder info while lock is held
+        other = file_lock.FileLock(self.path, timeout=0.1)
+        other_info = other.holder()
+        self.assertIsNotNone(other_info)
+        self.assertEqual(other_info["pid"], os.getpid())
         lock.release()
         self.assertIsNone(lock.holder())
 
@@ -195,8 +200,12 @@ class TwoSubprocessTests(unittest.TestCase):
     def test_dead_holder_is_acquirable_and_stale(self):
         self._holder()
         holder_pid = self._wait_for_pid()
-        os.kill(holder_pid, 15)
-        os.waitpid(holder_pid, 0)
+        self.holder_proc.terminate()
+        try:
+            self.holder_proc.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            self.holder_proc.kill()
+            self.holder_proc.wait()
 
         lock = file_lock.FileLock(self.path, timeout=2.0)
         self.assertFalse(lock.holder_alive())
