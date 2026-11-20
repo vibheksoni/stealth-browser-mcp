@@ -95,6 +95,8 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - **Browser support** - Chrome, Chromium, and Microsoft Edge with automatic executable discovery.
 - **Clean MCP integration** - Works through standard MCP clients without custom brokers.
 
+Want the story behind it? Read [How I built stealth-browser-mcp](https://opendoors.wtf/blog/stealth-browser-mcp/) on my blog.
+
 ---
 
 ## Quickstart
