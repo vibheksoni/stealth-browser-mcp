@@ -22,6 +22,7 @@ from .network_idle import NetworkIdleTracker, wait_for_network_idle
 from .persistent_storage import persistent_storage
 from .dynamic_hook_system import dynamic_hook_system
 from .platform_utils import get_platform_info, check_browser_executable, merge_browser_args
+from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
 from .process_cleanup import process_cleanup
 from .proxy_forwarder import AuthenticatedProxyForwarder
 from .proxy_utils import (
@@ -426,6 +427,12 @@ class BrowserManager:
             options = BrowserOptions(**kwargs)
         elif kwargs:
             options = options.model_copy(update=kwargs)
+
+        options = options.model_copy(update={
+            "browser_args": validate_browser_args(options.browser_args or []),
+            "user_data_dir": validate_user_data_dir(options.user_data_dir),
+            "sandbox": validate_sandbox(bool(options.sandbox), http_mode=True),
+        })
 
         mode = resolve_window_mode(options.window, options.headless)
         mode, window_note = effective_window_mode(mode)

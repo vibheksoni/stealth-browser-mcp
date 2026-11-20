@@ -34,6 +34,7 @@ from .content_cap import DEFAULT_PAGE_CONTENT_CHARS, clamp_max_chars
 from .errors import instance_not_found_error, no_active_tab_error, tab_not_found_error
 from .file_based_element_cloner import file_based_element_cloner
 from starlette.middleware import Middleware as ASGIMiddleware
+from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
 from .hook_policy import code_hooks_enabled, code_hooks_disabled_result, refuse_code_hooks_off_loopback
 from .http_auth import (
     BearerAuthMiddleware,
@@ -393,7 +394,11 @@ async def spawn_browser(
             sandbox = bool(sandbox)
         elif not isinstance(sandbox, bool):
             sandbox = bool(sandbox)
-        
+
+        browser_args = validate_browser_args(browser_args or [])
+        user_data_dir = validate_user_data_dir(user_data_dir)
+        sandbox = validate_sandbox(sandbox, http_mode=_HTTP_MODE)
+
         options = BrowserOptions(
             headless=headless,
             window=window,
@@ -401,7 +406,7 @@ async def spawn_browser(
             viewport_width=viewport_width,
             viewport_height=viewport_height,
             proxy=proxy,
-            browser_args=browser_args or [],
+            browser_args=browser_args,
             timezone_id=timezone_id,
             idle_timeout_seconds=idle_timeout_seconds,
             block_resources=block_resources or [],

@@ -348,6 +348,7 @@ These are environment variables for the MCP server process. Set them in your she
 | `XPOOL_SAFE_MODE` | `0` | Disable the `cdp-functions` section at startup. |
 | `PORT` | `8000` | Default HTTP port when `--port` is not provided. |
 | `STEALTH_ALLOW_CODE_HOOKS` | unset | Allow `create_dynamic_hook` / `validate_hook_function` to compile caller Python on the server. Off by default. The server refuses to start if this is set and HTTP is bound off loopback. Use `create_simple_dynamic_hook` instead. |
+| `STEALTH_MANAGED_PROFILES_ROOT` | `data_dir()` | Directory that `spawn_browser(user_data_dir=...)` must stay under. Paths outside this root, including symlink escapes, are rejected. Also used as the default when a relative `user_data_dir` is given. |
 
 **PowerShell example:**
 
