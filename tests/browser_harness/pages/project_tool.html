@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Project Task Tool Fixture</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+      color: #333;
+    }
+    .form-group {
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+    input[type="text"], input[type="number"], textarea, select {
+      width: 320px;
+      padding: 6px 8px;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-size: 14px;
+    }
+    textarea {
+      height: 70px;
+      resize: vertical;
+    }
+    #desc-rich {
+      width: 320px;
+      min-height: 90px;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      padding: 8px;
+      box-sizing: border-box;
+      outline: none;
+      background: #fff;
+      font-size: 14px;
+    }
+    #desc-rich:focus {
+      border-color: #0066cc;
+    }
+    #desc-rich p {
+      margin: 0 0 6px 0;
+      min-height: 1.2em;
+    }
+    .toolbar {
+      margin-bottom: 4px;
+    }
+    .toolbar button {
+      padding: 3px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .dropdown-container {
+      position: relative;
+      width: 320px;
+    }
+    #status-dd {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      background: #eee;
+      text-align: left;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #status-list {
+      list-style: none;
+      padding: 0;
+      margin: 2px 0 0 0;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      background: #fff;
+      position: absolute;
+      width: 100%;
+      z-index: 10;
+      box-sizing: border-box;
+    }
+    #status-list li {
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #status-list li:hover {
+      background: #f0f0f0;
+    }
+    .chips-wrapper {
+      width: 320px;
+    }
+    #chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      background: #e2e8f0;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    .chip-x {
+      margin-left: 4px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-weight: bold;
+      color: #666;
+    }
+    .combobox-box {
+      position: relative;
+    }
+    #label-list {
+      list-style: none;
+      padding: 0;
+      margin: 2px 0 0 0;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      background: #fff;
+      position: absolute;
+      width: 100%;
+      max-height: 140px;
+      overflow-y: auto;
+      z-index: 10;
+      box-sizing: border-box;
+    }
+    #label-list li {
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #label-list li.highlighted, #label-list li:hover {
+      background: #0066cc;
+      color: #fff;
+    }
+    #save {
+      padding: 8px 18px;
+      background: #0066cc;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #save:hover {
+      background: #0052a3;
+    }
+    #status-msg {
+      margin-top: 10px;
+      color: green;
+      font-weight: bold;
+    }
+    #task-list {
+      list-style: none;
+      padding: 0;
+      width: 320px;
+    }
+    li.task {
+      padding: 8px 10px;
+      border-bottom: 1px solid #ddd;
+    }
+    .priority-wrapper {
+      position: relative;
+      width: 320px;
+    }
+    #priority-list {
+      list-style: none;
+      padding: 0;
+      margin: 2px 0 0 0;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      background: #fff;
+      position: absolute;
+      width: 100%;
+      z-index: 10;
+      box-sizing: border-box;
+    }
+    #priority-list li {
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #priority-list li:hover {
+      background: #f0f0f0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Project Task Tool</h1>
+
+  <!-- Form View -->
+  <div id="form-view">
+    <div class="form-group">
+      <label for="title">Title:</label>
+      <input type="text" id="title" placeholder="Enter task title">
+    </div>
+
+    <div class="form-group">
+      <label for="desc-plain">Plain Description:</label>
+      <textarea id="desc-plain" placeholder="Enter description"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>Rich Description:</label>
+      <div class="toolbar">
+        <button type="button" id="rich-bold">Bold</button>
+      </div>
+      <div id="desc-rich" contenteditable="true" role="textbox" aria-multiline="true">
+        <p><br></p>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="hours">Hours:</label>
+      <input type="number" id="hours" step="0.25" min="0" placeholder="0.00">
+    </div>
+
+    <div class="form-group">
+      <label for="priority">Priority:</label>
+      <div class="priority-wrapper" id="priority-wrapper">
+        <select id="priority" aria-controls="priority-list">
+          <option value="low" role="option">low</option>
+          <option value="medium" role="option">medium</option>
+          <option value="high" role="option">high</option>
+        </select>
+        <ul id="priority-list" role="listbox" style="display: none;">
+          <li role="option" data-value="low">low</li>
+          <li role="option" data-value="medium">medium</li>
+          <li role="option" data-value="high">high</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Status:</label>
+      <div class="dropdown-container" id="status-wrapper">
+        <button type="button" id="status-dd" aria-haspopup="listbox" aria-expanded="false" aria-controls="status-list">Status: none</button>
+        <ul role="listbox" id="status-list" style="display: none;">
+          <li role="option" data-value="todo">todo</li>
+          <li role="option" data-value="doing">doing</li>
+          <li role="option" data-value="done">done</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Labels:</label>
+      <div class="chips-wrapper">
+        <div id="chips"></div>
+        <div class="combobox-box">
+          <input id="label-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="label-list" placeholder="Type label...">
+          <ul role="listbox" id="label-list" style="display: none;"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <button type="button" id="save">Save task</button>
+    </div>
+    <div id="status-msg" style="display: none;"></div>
+  </div>
+
+  <!-- List View -->
+  <div id="list-view" style="display: none;">
+    <h2>Saved Tasks</h2>
+    <p><a href="#/new" id="new-task-link">Create another task</a></p>
+    <ul id="task-list"></ul>
+  </div>
+
+  <script>
+    (function() {
+      // 1. Model and state
+      const state = {
+        title: "",
+        descPlain: "",
+        rich: [""],
+        richBold: false,
+        hours: "",
+        priority: "low",
+        status: "none",
+        labels: []
+      };
+      window.__saved = [];
+
+      window.__state = function() {
+        return JSON.stringify({
+          state: state,
+          saved: window.__saved,
+          route: location.hash || "#/new"
+        });
+      };
+
+      // 2. Hash routing
+      const formView = document.getElementById("form-view");
+      const listView = document.getElementById("list-view");
+      const taskList = document.getElementById("task-list");
+
+      function updateRoute() {
+        const hash = location.hash || "#/new";
+        if (hash === "#/list") {
+          formView.style.display = "none";
+          listView.style.display = "block";
+          taskList.innerHTML = "";
+          window.__saved.forEach(function(task, i) {
+            const li = document.createElement("li");
+            li.className = "task";
+            li.setAttribute("data-index", String(i));
+            li.textContent = task.title;
+            taskList.appendChild(li);
+          });
+        } else {
+          formView.style.display = "block";
+          listView.style.display = "none";
+        }
+      }
+      window.addEventListener("hashchange", updateRoute);
+
+      // 3. Title (controlled text input)
+      const titleInput = document.getElementById("title");
+      titleInput.addEventListener("input", function() {
+        state.title = titleInput.value;
+      });
+
+      // 4. Plain description (textarea)
+      const descPlainInput = document.getElementById("desc-plain");
+      descPlainInput.addEventListener("input", function() {
+        state.descPlain = descPlainInput.value;
+      });
+
+      // 5. Rich text editor (#desc-rich)
+      const editor = document.getElementById("desc-rich");
+      const richBoldBtn = document.getElementById("rich-bold");
+      let lastPasteTimestamp = 0;
+
+      richBoldBtn.addEventListener("click", function(e) {
+        e.preventDefault();
+        state.richBold = !state.richBold;
+      });
+
+      function renderRichDOM() {
+        editor.innerHTML = "";
+        if (!state.rich || state.rich.length === 0) {
+          state.rich = [""];
+        }
+        state.rich.forEach(function(paraText) {
+          const p = document.createElement("p");
+          if (paraText) {
+            p.textContent = paraText;
+          } else {
+            p.appendChild(document.createElement("br"));
+          }
+          editor.appendChild(p);
+        });
+      }
+
+      function getCursorPos() {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) {
+          return { pIndex: Math.max(0, state.rich.length - 1), offset: (state.rich[Math.max(0, state.rich.length - 1)] || "").length, isAll: false, collapsed: true };
+        }
+        const range = sel.getRangeAt(0);
+
+        let isAll = false;
+        if (!range.collapsed) {
+          const fullRange = document.createRange();
+          fullRange.selectNodeContents(editor);
+          if (range.compareBoundaryPoints(Range.START_TO_START, fullRange) <= 0 &&
+              range.compareBoundaryPoints(Range.END_TO_END, fullRange) >= 0) {
+            isAll = true;
+          }
+        }
+
+        const paragraphs = Array.from(editor.querySelectorAll("p"));
+        if (paragraphs.length === 0) {
+          return { pIndex: 0, offset: 0, isAll: isAll, collapsed: range.collapsed };
+        }
+
+        let node = range.startContainer;
+        if (node === editor) {
+          const idx = Math.min(range.startOffset, paragraphs.length - 1);
+          return { pIndex: idx, offset: (state.rich[idx] || "").length, isAll: isAll, collapsed: range.collapsed };
+        }
+
+        while (node && node.parentNode !== editor) {
+          node = node.parentNode;
+        }
+        let pIndex = paragraphs.indexOf(node);
+        if (pIndex === -1) {
+          pIndex = paragraphs.length - 1;
+        }
+
+        let offset = 0;
+        if (paragraphs[pIndex]) {
+          try {
+            const preRange = document.createRange();
+            preRange.selectNodeContents(paragraphs[pIndex]);
+            preRange.setEnd(range.startContainer, range.startOffset);
+            offset = preRange.toString().length;
+          } catch (e) {
+            offset = (paragraphs[pIndex].textContent || "").length;
+          }
+        }
+
+        return { pIndex: pIndex, offset: offset, isAll: isAll, collapsed: range.collapsed };
+      }
+
+      function setCursorPos(pIndex, offset) {
+        const paragraphs = editor.querySelectorAll("p");
+        if (paragraphs.length === 0) return;
+        if (pIndex < 0) pIndex = 0;
+        if (pIndex >= paragraphs.length) pIndex = paragraphs.length - 1;
+        const p = paragraphs[pIndex];
+
+        let targetNode = p;
+        let targetOffset = 0;
+
+        if (p.childNodes.length === 0) {
+          targetNode = p;
+          targetOffset = 0;
+        } else {
+          let currentOffset = 0;
+          let found = false;
+          for (let i = 0; i < p.childNodes.length; i++) {
+            const child = p.childNodes[i];
+            if (child.nodeType === Node.TEXT_NODE) {
+              const len = child.textContent.length;
+              if (currentOffset + len >= offset) {
+                targetNode = child;
+                targetOffset = offset - currentOffset;
+                found = true;
+                break;
+              }
+              currentOffset += len;
+            }
+          }
+          if (!found) {
+            const last = p.lastChild;
+            if (last && last.nodeType === Node.TEXT_NODE) {
+              targetNode = last;
+              targetOffset = last.textContent.length;
+            } else {
+              targetNode = p;
+              targetOffset = p.childNodes.length;
+            }
+          }
+        }
+
+        const sel = window.getSelection();
+        const range = document.createRange();
+        try {
+          const maxOffset = targetNode.nodeType === Node.TEXT_NODE ? targetNode.textContent.length : targetNode.childNodes.length;
+          range.setStart(targetNode, Math.min(targetOffset, maxOffset));
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      function applyInsertText(text) {
+        if (text === null || text === undefined) return;
+        const pos = getCursorPos();
+        if (pos.isAll) {
+          state.rich = [""];
+          pos.pIndex = 0;
+          pos.offset = 0;
+        }
+        if (pos.pIndex >= state.rich.length) {
+          state.rich.push("");
+        }
+        const currentText = state.rich[pos.pIndex] || "";
+        const left = currentText.slice(0, pos.offset);
+        const right = currentText.slice(pos.offset);
+        const lines = text.split(/\r?\n/);
+        if (lines.length === 1) {
+          state.rich[pos.pIndex] = left + lines[0] + right;
+          renderRichDOM();
+          setCursorPos(pos.pIndex, pos.offset + lines[0].length);
+        } else {
+          const newParas = [];
+          newParas.push(left + lines[0]);
+          for (let i = 1; i < lines.length - 1; i++) {
+            newParas.push(lines[i]);
+          }
+          newParas.push(lines[lines.length - 1] + right);
+          state.rich.splice(pos.pIndex, 1, ...newParas);
+          renderRichDOM();
+          setCursorPos(pos.pIndex + lines.length - 1, lines[lines.length - 1].length);
+        }
+      }
+
+      function applyInsertParagraph() {
+        const pos = getCursorPos();
+        if (pos.isAll) {
+          state.rich = ["", ""];
+          renderRichDOM();
+          setCursorPos(1, 0);
+          return;
+        }
+        const currentText = state.rich[pos.pIndex] || "";
+        const left = currentText.slice(0, pos.offset);
+        const right = currentText.slice(pos.offset);
+        state.rich[pos.pIndex] = left;
+        state.rich.splice(pos.pIndex + 1, 0, right);
+        renderRichDOM();
+        setCursorPos(pos.pIndex + 1, 0);
+      }
+
+      function applyDeleteBackward() {
+        const pos = getCursorPos();
+        if (pos.isAll) {
+          state.rich = [""];
+          renderRichDOM();
+          setCursorPos(0, 0);
+          return;
+        }
+        if (pos.offset > 0) {
+          const currentText = state.rich[pos.pIndex] || "";
+          state.rich[pos.pIndex] = currentText.slice(0, pos.offset - 1) + currentText.slice(pos.offset);
+          renderRichDOM();
+          setCursorPos(pos.pIndex, pos.offset - 1);
+        } else if (pos.offset === 0 && pos.pIndex > 0) {
+          const prevText = state.rich[pos.pIndex - 1] || "";
+          const currentText = state.rich[pos.pIndex] || "";
+          const newOffset = prevText.length;
+          state.rich[pos.pIndex - 1] = prevText + currentText;
+          state.rich.splice(pos.pIndex, 1);
+          renderRichDOM();
+          setCursorPos(pos.pIndex - 1, newOffset);
+        }
+      }
+
+      function applyPasteText(text) {
+        if (!text) return;
+        const lines = text.split(/\r?\n/);
+        const pos = getCursorPos();
+        if (pos.isAll || state.rich.length === 0 || (state.rich.length === 1 && state.rich[0] === "")) {
+          state.rich = lines.slice();
+          renderRichDOM();
+          setCursorPos(lines.length - 1, lines[lines.length - 1].length);
+          return;
+        }
+        const currentText = state.rich[pos.pIndex] || "";
+        const left = currentText.slice(0, pos.offset);
+        const right = currentText.slice(pos.offset);
+        if (lines.length === 1) {
+          state.rich[pos.pIndex] = left + lines[0] + right;
+          renderRichDOM();
+          setCursorPos(pos.pIndex, pos.offset + lines[0].length);
+        } else {
+          const newParas = [];
+          newParas.push(left + lines[0]);
+          for (let i = 1; i < lines.length - 1; i++) {
+            newParas.push(lines[i]);
+          }
+          newParas.push(lines[lines.length - 1] + right);
+          state.rich.splice(pos.pIndex, 1, ...newParas);
+          renderRichDOM();
+          setCursorPos(pos.pIndex + lines.length - 1, lines[lines.length - 1].length);
+        }
+      }
+
+      editor.addEventListener("beforeinput", function(e) {
+        const inputType = e.inputType;
+        if (inputType === "insertText") {
+          e.preventDefault();
+          applyInsertText(e.data);
+        } else if (inputType === "insertParagraph" || inputType === "insertLineBreak") {
+          e.preventDefault();
+          applyInsertParagraph();
+        } else if (inputType === "deleteContentBackward") {
+          e.preventDefault();
+          applyDeleteBackward();
+        } else if (inputType === "insertFromPaste") {
+          e.preventDefault();
+          if (Date.now() - lastPasteTimestamp > 80) {
+            lastPasteTimestamp = Date.now();
+            const text = e.dataTransfer ? e.dataTransfer.getData("text/plain") : (e.data || "");
+            if (text) applyPasteText(text);
+          }
+        }
+      });
+
+      editor.addEventListener("paste", function(e) {
+        e.preventDefault();
+        lastPasteTimestamp = Date.now();
+        const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
+        if (text) {
+          applyPasteText(text);
+        }
+      });
+
+      // 6. Hours (React-controlled style number input)
+      const hoursInput = document.getElementById("hours");
+      const protoDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+
+      hoursInput.addEventListener("input", function() {
+        state.hours = hoursInput.value;
+        protoDesc.set.call(hoursInput, state.hours);
+      });
+
+      Object.defineProperty(hoursInput, "value", {
+        get: function() {
+          return protoDesc.get.call(this);
+        },
+        set: function(val) {
+          protoDesc.set.call(this, state.hours);
+        },
+        configurable: true
+      });
+
+      // 7. Priority (native select)
+      const prioritySelect = document.getElementById("priority");
+      const priorityList = document.getElementById("priority-list");
+      const priorityWrapper = document.getElementById("priority-wrapper");
+
+      prioritySelect.addEventListener("input", function() {
+        state.priority = prioritySelect.value;
+      });
+      prioritySelect.addEventListener("change", function() {
+        state.priority = prioritySelect.value;
+      });
+
+      prioritySelect.addEventListener("click", function() {
+        priorityList.style.display = priorityList.style.display === "none" ? "block" : "none";
+      });
+
+      priorityList.querySelectorAll('li[role="option"]').forEach(function(opt) {
+        opt.addEventListener("click", function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          const val = opt.getAttribute("data-value") || opt.textContent.trim();
+          prioritySelect.value = val;
+          state.priority = val;
+          prioritySelect.dispatchEvent(new Event("input", { bubbles: true }));
+          prioritySelect.dispatchEvent(new Event("change", { bubbles: true }));
+          priorityList.style.display = "none";
+        });
+      });
+
+      document.addEventListener("click", function(e) {
+        if (priorityWrapper && !priorityWrapper.contains(e.target)) {
+          priorityList.style.display = "none";
+        }
+      });
+
+      // 8. Custom dropdown (#status-dd)
+      const statusDd = document.getElementById("status-dd");
+      const statusList = document.getElementById("status-list");
+      const statusWrapper = document.getElementById("status-wrapper");
+
+      statusDd.addEventListener("click", function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const isOpen = statusDd.getAttribute("aria-expanded") === "true";
+        if (isOpen) {
+          statusList.style.display = "none";
+          statusDd.setAttribute("aria-expanded", "false");
+        } else {
+          statusList.style.display = "block";
+          statusDd.setAttribute("aria-expanded", "true");
+        }
+      });
+
+      statusList.querySelectorAll('li[role="option"]').forEach(function(opt) {
+        opt.addEventListener("click", function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          const val = opt.getAttribute("data-value") || opt.textContent.trim();
+          state.status = val;
+          statusDd.textContent = "Status: " + val;
+          statusList.style.display = "none";
+          statusDd.setAttribute("aria-expanded", "false");
+        });
+      });
+
+      document.addEventListener("click", function(e) {
+        if (statusWrapper && !statusWrapper.contains(e.target)) {
+          statusList.style.display = "none";
+          statusDd.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      // 9. Label chips
+      const FIXED_LABELS = ["backend", "frontend", "design", "urgent", "research", "qa", "docs", "infra"];
+      const labelInput = document.getElementById("label-input");
+      const labelList = document.getElementById("label-list");
+      const chipsContainer = document.getElementById("chips");
+      let labelDebounceTimer = null;
+
+      function renderChips() {
+        chipsContainer.innerHTML = "";
+        state.labels.forEach(function(name) {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.setAttribute("data-label", name);
+          chip.textContent = name + " ";
+          const btn = document.createElement("button");
+          btn.className = "chip-x";
+          btn.setAttribute("aria-label", "Remove " + name);
+          btn.textContent = "x";
+          btn.addEventListener("click", function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            state.labels = state.labels.filter(function(l) { return l !== name; });
+            renderChips();
+          });
+          chip.appendChild(btn);
+          chipsContainer.appendChild(chip);
+        });
+      }
+
+      function pickLabel(name) {
+        if (!name) return;
+        if (!state.labels.includes(name)) {
+          state.labels.push(name);
+          renderChips();
+        }
+        labelInput.value = "";
+        labelList.style.display = "none";
+        labelInput.setAttribute("aria-expanded", "false");
+        labelList.innerHTML = "";
+      }
+
+      labelInput.addEventListener("input", function() {
+        if (labelDebounceTimer) clearTimeout(labelDebounceTimer);
+        labelDebounceTimer = setTimeout(function() {
+          const q = labelInput.value.trim().toLowerCase();
+          if (!q) {
+            labelList.style.display = "none";
+            labelInput.setAttribute("aria-expanded", "false");
+            labelList.innerHTML = "";
+            return;
+          }
+          const matches = FIXED_LABELS.filter(function(lbl) {
+            return lbl.toLowerCase().includes(q);
+          });
+          labelList.innerHTML = "";
+          if (matches.length > 0) {
+            matches.forEach(function(lbl, idx) {
+              const li = document.createElement("li");
+              li.setAttribute("role", "option");
+              li.setAttribute("data-value", lbl);
+              li.textContent = lbl;
+              if (idx === 0) {
+                li.classList.add("highlighted");
+                li.setAttribute("aria-selected", "true");
+              } else {
+                li.setAttribute("aria-selected", "false");
+              }
+              li.addEventListener("click", function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                pickLabel(lbl);
+              });
+              labelList.appendChild(li);
+            });
+            labelList.style.display = "block";
+            labelInput.setAttribute("aria-expanded", "true");
+          } else {
+            labelList.style.display = "none";
+            labelInput.setAttribute("aria-expanded", "false");
+          }
+        }, 150);
+      });
+
+      labelInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (labelDebounceTimer) {
+            clearTimeout(labelDebounceTimer);
+          }
+          const firstOpt = labelList.querySelector('li[role="option"]');
+          if (firstOpt && labelList.style.display !== "none") {
+            pickLabel(firstOpt.getAttribute("data-value") || firstOpt.textContent.trim());
+          } else {
+            const q = labelInput.value.trim().toLowerCase();
+            const match = FIXED_LABELS.find(function(lbl) { return lbl.toLowerCase() === q; });
+            if (match) {
+              pickLabel(match);
+            }
+          }
+        }
+      });
+
+      // 10. Save button & Form reset
+      const saveBtn = document.getElementById("save");
+      const statusMsg = document.getElementById("status-msg");
+
+      function resetForm() {
+        state.title = "";
+        state.descPlain = "";
+        state.rich = [""];
+        state.richBold = false;
+        state.hours = "";
+        state.priority = "low";
+        state.status = "none";
+        state.labels = [];
+
+        titleInput.value = "";
+        descPlainInput.value = "";
+        renderRichDOM();
+        protoDesc.set.call(hoursInput, "");
+        prioritySelect.value = "low";
+        statusDd.textContent = "Status: none";
+        statusDd.setAttribute("aria-expanded", "false");
+        statusList.style.display = "none";
+        labelInput.value = "";
+        labelList.style.display = "none";
+        labelList.innerHTML = "";
+        renderChips();
+      }
+
+      saveBtn.addEventListener("click", function(e) {
+        e.preventDefault();
+        const task = {
+          title: state.title,
+          descPlain: state.descPlain,
+          rich: state.rich.slice(),
+          hours: state.hours,
+          priority: state.priority,
+          status: state.status,
+          labels: state.labels.slice()
+        };
+        window.__saved.push(task);
+        const count = window.__saved.length;
+        statusMsg.textContent = "Saved " + count;
+        statusMsg.style.display = "block";
+        resetForm();
+        location.hash = "#/list";
+        updateRoute();
+      });
+
+      // Initialize route
+      updateRoute();
+    })();
+  </script>
+</body>
+</html>
