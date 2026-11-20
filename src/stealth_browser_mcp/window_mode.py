@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import nodriver as uc
@@ -133,6 +134,128 @@ def effective_window_mode(
     if mode != "headless" and not display_available(system=system, env=env):
         return ("headless", "No display available (DISPLAY/WAYLAND_DISPLAY unset); using headless.")
     return (mode, None)
+
+
+DRM_RENDER_NODE_DIR = Path("/dev/dri")
+X11_OZONE_ARG = "--ozone-platform=x11"
+HEADED_WAYLAND_NO_DISPLAY_ERROR = (
+    "Chrome cannot open a headed window: Wayland has no DRM render node "
+    "and DISPLAY is unset, so the DevTools port would never start. "
+    "Set DISPLAY to use X11/XWayland, or use window=headless."
+)
+X11_OZONE_NOTE = "Wayland has no DRM render node; using X11 (--ozone-platform=x11)."
+
+
+def drm_render_node_available(dri_dir: Optional[Path] = None) -> bool:
+    """
+    Return whether a DRM render node exists (for example /dev/dri/renderD128).
+
+    A card device alone is not enough: Chrome's Wayland ozone path calls
+    drmGetDevices2() and hangs without opening DevTools when no render
+    node is present.
+
+    Args:
+        dri_dir: Directory to inspect. Defaults to /dev/dri.
+
+    Returns:
+        bool: True when a renderD* node is present.
+    """
+    path = dri_dir if dri_dir is not None else DRM_RENDER_NODE_DIR
+    try:
+        return any(entry.name.startswith("renderD") for entry in path.iterdir())
+    except OSError:
+        return False
+
+
+def _linux_display_state(
+    system: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+    render_node_available: Optional[bool] = None,
+) -> Tuple[str, str, str, bool]:
+    """Return (system, display, wayland, has_render_node) for headed-display checks."""
+    sys_name = system if system is not None else platform.system()
+    env_map = os.environ if env is None else env
+    display = (env_map.get("DISPLAY") or "").strip()
+    wayland = (env_map.get("WAYLAND_DISPLAY") or "").strip()
+    has_node = (
+        drm_render_node_available()
+        if render_node_available is None
+        else bool(render_node_available)
+    )
+    return sys_name, display, wayland, has_node
+
+
+def headed_display_error(
+    mode: str,
+    system: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+    render_node_available: Optional[bool] = None,
+) -> Optional[str]:
+    """
+    Return a fail-fast error when a headed window cannot open DevTools.
+
+    Linux with only WAYLAND_DISPLAY, and no DRM render node, is not a
+    usable display: Chrome starts and sits until the 30s DevTools timeout.
+    A DISPLAY value can be used with X11/XWayland instead.
+
+    Args:
+        mode: Requested or effective window mode.
+        system: Optional OS name.
+        env: Optional environment mapping.
+        render_node_available: Optional override for tests.
+
+    Returns:
+        Optional[str]: Error message, or None when spawn may proceed.
+    """
+    if mode == "headless":
+        return None
+    sys_name, display, wayland, has_node = _linux_display_state(
+        system=system, env=env, render_node_available=render_node_available
+    )
+    if sys_name.lower() != "linux":
+        return None
+    if wayland and not display and not has_node:
+        return HEADED_WAYLAND_NO_DISPLAY_ERROR
+    return None
+
+
+def headed_display_args(
+    mode: str,
+    system: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+    render_node_available: Optional[bool] = None,
+) -> List[str]:
+    """
+    Return extra launch args so headed Chrome can open DevTools on Linux.
+
+    When DISPLAY is set and Wayland has no DRM render node, force
+    --ozone-platform=x11 so Chrome uses X11/XWayland instead of hanging.
+    Headless mode is unchanged. Working Wayland (a render node is present)
+    is left to Chrome's default.
+
+    Args:
+        mode: Window mode.
+        system: Optional OS name.
+        env: Optional environment mapping.
+        render_node_available: Optional override for tests.
+
+    Returns:
+        List[str]: Launch arguments, possibly empty.
+    """
+    if mode == "headless":
+        return []
+    sys_name, display, wayland, has_node = _linux_display_state(
+        system=system, env=env, render_node_available=render_node_available
+    )
+    if sys_name.lower() != "linux":
+        return []
+    if not display:
+        return []
+    if wayland and has_node:
+        return []
+    if wayland and not has_node:
+        return [X11_OZONE_ARG]
+    return []
 
 
 def window_launch_args(mode: str, width: int = 1280, height: int = 800) -> List[str]:

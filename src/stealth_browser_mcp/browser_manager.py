@@ -34,9 +34,12 @@ from .proxy_utils import (
     redact_launch_arg,
 )
 from .window_mode import (
+    X11_OZONE_NOTE,
     apply_window_mode,
     effective_window_mode,
     format_window_bounds,
+    headed_display_args,
+    headed_display_error,
     open_background_tab,
     resolve_window_mode,
     window_launch_args,
@@ -486,6 +489,12 @@ class BrowserManager:
 
         mode = resolve_window_mode(options.window, options.headless)
         mode, window_note = effective_window_mode(mode)
+        display_error = headed_display_error(mode)
+        if display_error:
+            raise Exception(display_error)
+        ozone_args = headed_display_args(mode)
+        if ozone_args:
+            window_note = f"{window_note} {X11_OZONE_NOTE}".strip() if window_note else X11_OZONE_NOTE
         options = options.model_copy(update={"headless": mode == "headless", "window": mode})
 
         instance_id = str(uuid.uuid4())
@@ -576,9 +585,10 @@ class BrowserManager:
                 launch_proxy_server,
             )
             existing_flags = {arg.split("=", 1)[0].strip() for arg in (options.browser_args or [])}
-            for w_arg in window_launch_args(mode, options.viewport_width, options.viewport_height):
+            for w_arg in list(window_launch_args(mode, options.viewport_width, options.viewport_height)) + ozone_args:
                 if w_arg.split("=", 1)[0].strip() not in existing_flags:
                     caller_args.append(w_arg)
+                    existing_flags.add(w_arg.split("=", 1)[0].strip())
             launch_args = merge_browser_args(caller_args)
             if options.headless and not self._has_user_agent_arg(launch_args):
                 headful_user_agent = await self._resolve_headless_user_agent(

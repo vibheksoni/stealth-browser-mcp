@@ -161,7 +161,11 @@ async def launch_browser(
             if process.returncode is not None:
                 raise Exception(f"Browser exited during startup with code {process.returncode}")
             if time.monotonic() >= deadline:
-                raise Exception(f"Browser DevTools endpoint did not start within {timeout:.0f}s")
+                raise Exception(
+                    f"Browser DevTools endpoint did not start within {timeout:.0f}s. "
+                    "On Linux, headed Chrome on Wayland without a DRM render node "
+                    "never opens the port; set DISPLAY or use window=headless."
+                )
             await asyncio.sleep(DEVTOOLS_POLL_INTERVAL)
 
         browser = Browser(config)
