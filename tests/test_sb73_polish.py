@@ -139,15 +139,22 @@ class TestHttpRedirect(unittest.TestCase):
             app = server.mcp.http_app(middleware=middleware)
 
             with TestClient(app, follow_redirects=False) as client:
-                # 1. Without token: both /mcp and /mcp/ return 401 Unauthorized
-                res_no_auth_no_slash = client.post("/mcp")
+                # TestClient defaults Host to "testserver"; loopback Host is required (SB-79).
+                loopback = {"Host": "127.0.0.1"}
+
+                # Hostile Host is 403 even before auth (DNS rebinding defense).
+                res_hostile = client.post("/mcp/")
+                self.assertEqual(res_hostile.status_code, 403)
+
+                # 1. Without token, with loopback Host: both /mcp and /mcp/ return 401
+                res_no_auth_no_slash = client.post("/mcp", headers=loopback)
                 self.assertEqual(res_no_auth_no_slash.status_code, 401)
 
-                res_no_auth_slash = client.post("/mcp/")
+                res_no_auth_slash = client.post("/mcp/", headers=loopback)
                 self.assertEqual(res_no_auth_slash.status_code, 401)
 
                 # 2. With token: neither path answers 307 redirect
-                headers = {"Authorization": f"Bearer {token}"}
+                headers = {"Authorization": f"Bearer {token}", "Host": "127.0.0.1"}
 
                 res_auth_no_slash = client.post("/mcp", headers=headers)
                 self.assertNotEqual(res_auth_no_slash.status_code, 307)

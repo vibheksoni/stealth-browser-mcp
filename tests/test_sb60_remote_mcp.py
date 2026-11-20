@@ -179,10 +179,13 @@ class BindValidationTests(unittest.TestCase):
         self.assertFalse(http_auth.is_loopback_host("10.0.0.1"))
         self.assertFalse(http_auth.is_loopback_host("remote.domain.com"))
 
-    def test_validate_bind_loopback_allowed_without_token(self):
-        # Local loopback default binds without token
-        http_auth.validate_bind("127.0.0.1", token=None)
-        http_auth.validate_bind("localhost", token=None)
+    def test_validate_bind_requires_token_even_on_loopback(self):
+        # SB-79: HTTP always requires a token (no token-less loopback default).
+        with self.assertRaises(ValueError):
+            http_auth.validate_bind("127.0.0.1", token=None)
+        with self.assertRaises(ValueError):
+            http_auth.validate_bind("localhost", token="")
+        http_auth.validate_bind("127.0.0.1", token="valid-secret-token")
 
     def test_validate_bind_non_loopback_refused_without_token(self):
         with self.assertRaises(ValueError):

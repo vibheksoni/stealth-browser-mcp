@@ -36,9 +36,13 @@ from .file_based_element_cloner import file_based_element_cloner
 from starlette.middleware import Middleware as ASGIMiddleware
 from .http_auth import (
     BearerAuthMiddleware,
+    HostOriginMiddleware,
     McpPathRewriteMiddleware,
+    TokenConfigError,
     create_http_auth_provider,
+    ensure_http_token,
     get_mcp_token as get_http_auth_token,
+    parse_csv_list,
     validate_bind,
 )
 from .page_summary import (
@@ -4116,9 +4120,22 @@ if parse_bool_env("XPOOL_SAFE_MODE", default=False):
     apply_disabled_sections()
 
 
-def create_http_middleware(token: Optional[str] = None) -> List[ASGIMiddleware]:
-    """Create ASGI middleware stack for HTTP transport with auth and path normalization."""
+def create_http_middleware(
+    token: Optional[str] = None,
+    allowed_hosts: Optional[List[str]] = None,
+    allowed_origins: Optional[List[str]] = None,
+) -> List[ASGIMiddleware]:
+    """Create ASGI middleware stack for HTTP transport with Host/Origin, auth, and path normalization.
+
+    HostOriginMiddleware is outermost so DNS-rebinding Host/Origin values are
+    rejected on every route before the bearer token is considered.
+    """
     return [
+        ASGIMiddleware(
+            HostOriginMiddleware,
+            allowed_hosts=allowed_hosts or [],
+            allowed_origins=allowed_origins or [],
+        ),
         ASGIMiddleware(BearerAuthMiddleware, expected_token=token),
         ASGIMiddleware(McpPathRewriteMiddleware),
         ASGIMiddleware(SessionLifecycleMiddleware, session_manager=mcp_session_manager),
@@ -4145,6 +4162,20 @@ def main(argv: Optional[List[str]] = None) -> None:
                       help="Port for HTTP transport")
     parser.add_argument("--host", default="127.0.0.1",
                       help="Host for HTTP transport (use 0.0.0.0 only with an auth token on trusted networks)")
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        dest="allowed_host",
+        help="Extra Host header values to accept (repeatable). Also STEALTH_MCP_ALLOWED_HOSTS (comma-separated). Default: loopback only.",
+    )
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        dest="allowed_origin",
+        help="Origin values to accept (repeatable). Default: none (any Origin is rejected). Also STEALTH_MCP_ALLOWED_ORIGINS.",
+    )
     
     parser.add_argument("--disable-browser-management", action="store_true",
                       help="Disable browser management tools (spawn, navigate, close, etc.)")
@@ -4281,17 +4312,24 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.transport == "http":
         _HTTP_MODE = True
-        token = get_http_auth_token()
         try:
+            token = ensure_http_token(announce=True)
             validate_bind(args.host, token)
-        except ValueError as e:
+        except (ValueError, TokenConfigError) as e:
             sys.stderr.write(f"Error: {e}\n")
             sys.exit(1)
+
+        allowed_hosts = parse_csv_list(args.allowed_host, [os.getenv("STEALTH_MCP_ALLOWED_HOSTS", "")])
+        allowed_origins = parse_csv_list(args.allowed_origin, [os.getenv("STEALTH_MCP_ALLOWED_ORIGINS", "")])
 
         if token and mcp.auth is None:
             mcp.auth = create_http_auth_provider(token)
 
-        http_middleware = create_http_middleware(token)
+        http_middleware = create_http_middleware(
+            token,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
+        )
         logging.getLogger("mcp.server.streamable_http").addFilter(_ClosedResourceNoiseFilter())
         try:
             mcp.run(
@@ -4299,6 +4337,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                 host=args.host,
                 port=args.port,
                 middleware=http_middleware,
+                uvicorn_config={"access_log": False},
             )
         finally:
             run_shutdown_sync()

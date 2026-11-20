@@ -330,8 +330,12 @@ These are environment variables for the MCP server process. Set them in your she
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `STEALTH_BROWSER_MCP_AUTH_TOKEN` | unset | Optional bearer token for HTTP transport. When set, HTTP clients must send `Authorization: Bearer <token>`. |
-| `MCP_AUTH_TOKEN` | unset | Backward-compatible alias for `STEALTH_BROWSER_MCP_AUTH_TOKEN`. |
+| `STEALTH_MCP_TOKEN` | unset | Bearer token for HTTP transport. HTTP always requires a token; clients must send `Authorization: Bearer <token>`. If no token is configured, the server writes one to a 0600 file and prints only the path (never the value) to stderr. |
+| `STEALTH_MCP_TOKEN_FILE` | unset | Path to a 0600 token file. If this variable is set and the file is missing, empty, unreadable, group/world-readable, or a symlink not owned by the current user, the server exits. |
+| `STEALTH_MCP_ALLOWED_HOSTS` | loopback only | Extra `Host` values accepted by HTTP (comma-separated). Also `--allowed-host`. |
+| `STEALTH_MCP_ALLOWED_ORIGINS` | empty | `Origin` values accepted by HTTP (comma-separated). Default: any `Origin` is rejected. Also `--allowed-origin`. |
+| `STEALTH_BROWSER_MCP_AUTH_TOKEN` | unset | Legacy alias for `STEALTH_MCP_TOKEN`. |
+| `MCP_AUTH_TOKEN` | unset | Legacy alias for `STEALTH_MCP_TOKEN`. |
 | `BROWSER_IDLE_TIMEOUT` | `600` | Global idle timeout in seconds before an unused browser instance is auto-closed. Set `0` to disable idle reaping globally. |
 | `BROWSER_IDLE_REAPER_INTERVAL` | `60` | Background reaper check interval in seconds. |
 | `BROWSER_TAB_RECYCLE_NAVIGATIONS` | `0` | Replace the main tab with a fresh one after this many navigations. `0` keeps the same tab, which preserves history and session storage. |
@@ -347,7 +351,7 @@ These are environment variables for the MCP server process. Set them in your she
 **PowerShell example:**
 
 ```powershell
-$env:STEALTH_BROWSER_MCP_AUTH_TOKEN='replace-with-a-long-random-token'
+$env:STEALTH_MCP_TOKEN='replace-with-a-long-random-token'
 $env:BROWSER_IDLE_TIMEOUT='900'
 $env:BROWSER_IDLE_REAPER_INTERVAL='30'
 $env:BROWSER_ORPHAN_PROFILE_MAX_AGE='43200'
@@ -364,7 +368,7 @@ python src/server.py
       "command": "C:\\path\\to\\stealth-browser-mcp\\venv\\Scripts\\python.exe",
       "args": ["C:\\path\\to\\stealth-browser-mcp\\src\\server.py"],
       "env": {
-        "STEALTH_BROWSER_MCP_AUTH_TOKEN": "replace-with-a-long-random-token",
+        "STEALTH_MCP_TOKEN": "replace-with-a-long-random-token",
         "BROWSER_IDLE_TIMEOUT": "900",
         "BROWSER_FILE_UPLOAD_ALLOWED_DIRS": "C:\\Users\\me\\uploads;C:\\Users\\me\\Documents"
       }
@@ -372,6 +376,8 @@ python src/server.py
   }
 }
 ```
+
+HTTP binds to `127.0.0.1` by default. Requests whose `Host` is not loopback are rejected unless listed in `--allowed-host`. Requests that include an `Origin` header are rejected unless listed in `--allowed-origin` (agent clients typically send no `Origin`). `GET /healthz` is unauthenticated after the Host check.
 
 **HTTP client example:**
 
