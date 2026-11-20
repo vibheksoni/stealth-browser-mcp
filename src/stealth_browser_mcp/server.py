@@ -90,6 +90,7 @@ from .profile_policy import (
 from . import instance_default as _instance_default
 from . import tool_compact
 from . import tool_surface
+from . import agent_guide
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -276,21 +277,7 @@ async def app_lifespan(server):
 
 mcp = FastMCP(
     name="Browser Automation MCP",
-    instructions="""
-    This MCP server provides undetectable browser automation using nodriver (CDP-based).
-    
-    Key features:
-    - Spawn and manage multiple browser instances
-    - Navigate and interact with web pages
-    - Query and manipulate DOM elements
-    - Intercept and analyze network traffic
-    - Execute JavaScript in page context
-    - Manage cookies and storage
-    
-    Instances are built to avoid common bot detection, with trusted input
-    events and a clean headless fingerprint. Measured results against public
-    detection pages are published in STEALTH_TESTS.md.
-    """,
+    instructions=agent_guide.build_connect_instructions(),
     auth=create_http_auth_provider(HTTP_AUTH_TOKEN),
     lifespan=app_lifespan,
 )
@@ -4089,6 +4076,18 @@ async def list_tool_categories() -> Dict[str, Any]:
 async def tools_reference() -> str:
     """Tool reference by category with one-line descriptions."""
     return await tool_surface.tools_reference_impl(mcp)
+
+
+@mcp.resource("stealth://guide/input", mime_type="text/markdown")
+async def input_guide_resource() -> str:
+    """Input playbook with recipes and verification guidance for agents."""
+    return agent_guide.build_input_playbook()
+
+
+@mcp.prompt("how_to_input")
+def how_to_input(field_type: Optional[str] = None) -> str:
+    """Input recipe recommendations for a field type (text, textarea, rich_text, number, select, dropdown, chips, file)."""
+    return agent_guide.how_to_input_prompt(field_type=field_type)
 
 
 def _init_tool_surface() -> None:

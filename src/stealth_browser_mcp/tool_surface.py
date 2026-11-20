@@ -82,7 +82,6 @@ def set_server_instructions(mcp_or_text: Any, text: Optional[str] = None) -> Non
     if mcp_server is not None:
         try:
             mcp_server.instructions = target_text
-            return
         except Exception:
             pass
     try:
@@ -126,6 +125,10 @@ def init_tool_surface(mcp: Any = None) -> None:
         base = current.split(TOOL_SURFACE_INSTRUCTIONS_MARKER)[0].strip()
     else:
         base = current.strip()
+    if not base:
+        from . import agent_guide
+
+        base = agent_guide.build_connect_instructions().strip()
     new_instructions = (
         (base + "\n\n" + surface_instructions) if base else surface_instructions
     )

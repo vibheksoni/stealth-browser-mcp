@@ -52,6 +52,7 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - [Features](#features)
 - [Quickstart](#quickstart)
 - [Agent Skill](#agent-skill)
+- [Agent Guide](#agent-guide)
 - [Trust Model](#trust-model)
 - [Modular Architecture](#modular-architecture)
   - [Tool Surface](#tool-surface)
@@ -237,6 +238,16 @@ Restart your MCP client and ask your agent:
 This repo includes an agent skill at `skills/stealth-browser-mcp` for clients that support Codex-style skills. It teaches agents the recommended tool order, state checks, pre-document CDP script usage, network debugging flow, and browser cleanup rules.
 
 Use the skill when an LLM struggles to choose the right MCP tool or forgets to verify browser state after actions. If your client does not load repo-local skills automatically, add or symlink `skills/stealth-browser-mcp` into your client skills directory.
+
+---
+
+## Agent Guide
+
+Stealth Browser MCP provides built-in agent instructions at connect, an input playbook resource, and an interactive prompt to guide AI agents on reliable form input and verification:
+
+- **Instructions at connect**: Delivered during client initialization, summarizing background offscreen execution (`window="offscreen"`), focus guarantees ([docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md)), enterprise managed profiles ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)), input primitives, verification rules, and tool surface categories.
+- **Input playbook resource (`stealth://guide/input`)**: A comprehensive Markdown resource documenting exact recipes for single-line text, multiline textareas, contenteditable rich text, numeric validation, native and custom dropdowns, tag chips, and file uploads.
+- **Interactive recipe prompt (`how_to_input`)**: An MCP prompt that returns recommended tool calls, argument examples, verification methods, and pitfalls for a specific `field_type` (e.g. `text`, `textarea`, `rich_text`, `number`, `select`, `dropdown`, `chips`, `file`), or the full summary when omitted.
 
 ---
 
