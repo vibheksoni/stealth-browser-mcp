@@ -303,4 +303,7 @@ def with_page_summary(func: Callable) -> Callable:
     wrapper.__defaults__ = func.__defaults__
     wrapper.__kwdefaults__ = func.__kwdefaults__
     functools.update_wrapper(wrapper, func)
+    wrapper.__annotations__ = dict(getattr(wrapper, "__annotations__", {}))
+    wrapper.__annotations__["return"] = Dict[str, Any]
+    wrapper.__signature__ = inspect.signature(func).replace(return_annotation=Dict[str, Any])
     return wrapper
