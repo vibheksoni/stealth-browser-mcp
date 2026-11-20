@@ -272,10 +272,11 @@ class BrowserManager:
             port_num = int(port)
         except (TypeError, ValueError):
             return None
-        from .http_auth import is_loopback_host
-        label = "loopback" if host and is_loopback_host(str(host)) else (str(host).strip().lower() if host else "loopback")
-        if not host:
-            label = "loopback"
+        from .http_auth import MixedLoopbackHostError, canonical_connect_host
+        try:
+            label = canonical_connect_host(host)
+        except MixedLoopbackHostError:
+            label = (str(host).strip().lower() if host else "mixed")
         return (label, port_num)
 
     def _register_debug_endpoint(self, instance_id: str, host: Optional[str], port: Optional[int]) -> None:

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
+import socket
 import os
 import secrets
 import stat
@@ -239,6 +240,108 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(clean_host).is_loopback
     except ValueError:
         return False
+
+
+def _parse_ip_literal(host: str):
+    """Parse a literal IP, including IPv4 decimal forms like 2130706433."""
+    text = (host or "").strip().lower()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        pass
+    if text.isdigit():
+        try:
+            return ipaddress.IPv4Address(int(text))
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
+def resolve_connect_addresses(host: str) -> list:
+    """Resolve a connect host to IP addresses (empty if it cannot be resolved)."""
+    parsed = _parse_ip_literal(host)
+    if parsed is not None:
+        return [parsed]
+    name = (host or "").strip()
+    if name.endswith("."):
+        name = name[:-1]
+    if not name:
+        return []
+    try:
+        infos = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, OSError, UnicodeError):
+        if name.lower() == "localhost":
+            return [ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")]
+        return []
+    addresses = []
+    seen = set()
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            addr = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if addr not in seen:
+            seen.add(addr)
+            addresses.append(addr)
+    return addresses
+
+
+class MixedLoopbackHostError(ValueError):
+    """Raised when a host resolves to both loopback and non-loopback addresses."""
+
+
+def connect_host_kind(host: str) -> str:
+    """Classify a connect host as loopback, public, mixed, or unknown.
+
+    Unspecified addresses (0.0.0.0, ::) are treated as loopback for outbound
+    connect, because they reach the local machine. Bind checks must keep using
+    is_loopback_host, which does not treat 0.0.0.0 as loopback.
+    """
+    addresses = resolve_connect_addresses(host)
+    if not addresses:
+        return "unknown"
+    kinds = set()
+    for addr in addresses:
+        if addr.is_loopback or addr.is_unspecified:
+            kinds.add("loopback")
+        else:
+            kinds.add("public")
+    if "loopback" in kinds and "public" in kinds:
+        return "mixed"
+    if "loopback" in kinds:
+        return "loopback"
+    return "public"
+
+
+def is_loopback_connect_host(host: str) -> bool:
+    """True when a connect target stays on this machine (loopback or unspecified)."""
+    return connect_host_kind(host) == "loopback"
+
+
+def canonical_connect_host(host: Optional[str]) -> str:
+    """Return the attach-map host key. Loopback aliases share 'loopback'.
+
+    Raises:
+        MixedLoopbackHostError: If resolution mixes loopback and non-loopback.
+    """
+    if not host or not str(host).strip():
+        return "loopback"
+    kind = connect_host_kind(str(host))
+    if kind == "mixed":
+        raise MixedLoopbackHostError(
+            "Host {!r} resolves to both loopback and non-loopback addresses".format(host)
+        )
+    if kind == "loopback":
+        return "loopback"
+    if kind == "public":
+        addresses = resolve_connect_addresses(str(host))
+        return str(addresses[0]) if addresses else str(host).strip().lower()
+    return str(host).strip().lower()
 
 
 def validate_bind(host: str, token: Optional[str] = None) -> None:

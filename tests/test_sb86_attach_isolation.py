@@ -94,7 +94,8 @@ class AttachIsolationTests(unittest.IsolatedAsyncioTestCase):
                 with mock.patch.object(server, "_probe_version") as probe:
                     with self.assertRaises(ToolError) as ctx:
                         await server.attach_browser.fn(port=59519, host="127.0.0.1")
-                    self.assertIn("belongs to another session", str(ctx.exception))
+                    self.assertIn("not available for attach", str(ctx.exception))
+                    self.assertNotIn("inst-A", str(ctx.exception))
                     probe.assert_not_called()
         self.assertEqual(self.fake_bm.attach_calls, [])
 
@@ -108,7 +109,8 @@ class AttachIsolationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 with self.assertRaises(ToolError) as ctx:
                     await server.attach_browser.fn(port=36179, host="localhost")
-                self.assertIn("belongs to another session", str(ctx.exception))
+                self.assertIn("not available for attach", str(ctx.exception))
+                self.assertNotIn("inst-A", str(ctx.exception))
 
     async def test_owner_reattach_returns_existing_instance(self) -> None:
         self.fake_bm.register("inst-A", "127.0.0.1", 59519)

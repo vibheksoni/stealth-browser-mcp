@@ -557,14 +557,25 @@ async def attach_browser(
             "as off loopback."
         )
 
+    from .http_auth import connect_host_kind, is_loopback_connect_host
+
     http_off_loopback = bool(_HTTP_MODE and _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST))
     allow_remote = parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False) and not http_off_loopback
-    if not is_loopback_host(host) and http_off_loopback:
+    try:
+        host_kind = connect_host_kind(host)
+    except Exception:
+        host_kind = "unknown"
+    if host_kind == "mixed":
+        raise ToolError(
+            f"Host '{host}' resolves to both loopback and non-loopback addresses."
+        )
+    host_is_local = host_kind == "loopback" or is_loopback_connect_host(host)
+    if not host_is_local and http_off_loopback:
         raise ToolError(
             f"Host '{host}' is not a loopback address. STEALTH_ALLOW_REMOTE_ATTACH is ignored "
             "when the HTTP server is bound off loopback."
         )
-    if not is_loopback_host(host) and not allow_remote:
+    if not host_is_local and not allow_remote:
         raise ToolError(
             f"Host '{host}' is not a loopback address (127.0.0.1, localhost, ::1). "
             "Set STEALTH_ALLOW_REMOTE_ATTACH=1 to allow remote attach."
@@ -574,16 +585,26 @@ async def attach_browser(
     if owned:
         sid = get_current_mcp_session_id()
         if _HTTP_MODE and not sid:
-            raise instance_not_found_error(owned)
+            raise ToolError(
+                "That debugging port is not available for attach from this session."
+            )
         try:
             mcp_session_manager.check_access(owned, sid)
         except Exception as exc:
-            raise ToolError(str(exc)) from exc
+            raise ToolError(
+                "That debugging port is not available for attach from this session."
+            ) from exc
         existing = await browser_manager.get_instance(owned)
         if existing:
+            inst = existing.get("instance") if isinstance(existing, dict) else existing
+            state = getattr(inst, "state", None)
+            if state is not None and hasattr(state, "value"):
+                state = state.value
+            elif inst is None and isinstance(existing, dict):
+                state = existing.get("state")
             return {
-                "instance_id": existing.instance_id,
-                "state": existing.state,
+                "instance_id": owned,
+                "state": state,
                 "attached": True,
                 "already_owned": True,
                 "host": host,
