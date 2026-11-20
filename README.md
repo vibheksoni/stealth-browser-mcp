@@ -354,6 +354,9 @@ These are environment variables for the MCP server process. Set them in your she
 | `STEALTH_ALLOW_RAW_CDP` | unset | Allow `execute_cdp_command` to call methods outside the allowlist. Off by default. Navigation URLs still go through the file:/chrome: block. `setDownloadBehavior` still requires a `download_path` under the data directory. The server refuses to start if this is set and HTTP is bound off loopback. |
 | `STEALTH_ALLOW_ATTACH` | unset | Allow `attach_browser` in HTTP mode. Off by default. When on, attach is limited to a Chrome this server spawned for the calling session, or to an external browser this server does not already own. stdio mode does not need this flag. |
 | `STEALTH_ALLOW_REMOTE_ATTACH` | unset | Allow `attach_browser` to a non-loopback host. Off by default. Ignored when HTTP is bound off loopback. In HTTP mode, `STEALTH_ALLOW_ATTACH=1` is also required. |
+| `STEALTH_EXPORT_DIRS` | unset | Extra directories `write` paths may use (screenshots, exports). `BROWSER_FILE_UPLOAD_ALLOWED_DIRS` is read-only and does not widen writes. |
+| `STEALTH_MCP_SESSION_TTL` | `600` | Seconds of HTTP inactivity before a session's browsers are closed. `0` disables this expiry. |
+| `STEALTH_ALLOW_SEED_PASSWORDS` | unset | Allow `refresh_seed(include_passwords=true)` or `include_cards=true`. Off by default. In HTTP mode the calling session must own a browser instance. Refused off loopback and behind a proxy. |
 
 **PowerShell example:**
 

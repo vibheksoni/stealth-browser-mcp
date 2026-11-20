@@ -33,6 +33,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from contextvars import ContextVar
 
 from fastmcp.server.auth import TokenVerifier
 from fastmcp.server.auth.auth import AccessToken
@@ -44,6 +45,9 @@ LEGACY_HTTP_AUTH_TOKEN_ENV = "STEALTH_BROWSER_MCP_AUTH_TOKEN"
 LEGACY_MCP_AUTH_TOKEN_ENV = "MCP_AUTH_TOKEN"
 HTTP_CONTROL_SCOPE = "browser:control"
 
+
+_REQUEST_FORWARDED: ContextVar[bool] = ContextVar("_REQUEST_FORWARDED", default=False)
+_GENERATED_TOKEN_FILES: List[Path] = []
 
 class TokenConfigError(ValueError):
     """Raised when a configured token file cannot be used safely."""
@@ -154,6 +158,7 @@ def write_generated_token_file(directory: Optional[Path] = None) -> Tuple[str, P
         except OSError:
             pass
         raise
+    _GENERATED_TOKEN_FILES.append(path)
     return token, path
 
 
@@ -165,6 +170,21 @@ def announce_token_path(path: Path) -> None:
         "The token value is not printed.\n".format(path)
     )
     sys.stderr.flush()
+
+
+def cleanup_generated_token_files() -> None:
+    """Unlink token files this process generated (not operator-supplied files)."""
+    while _GENERATED_TOKEN_FILES:
+        path = _GENERATED_TOKEN_FILES.pop()
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def request_appears_proxied() -> bool:
+    """True when the current HTTP request carries X-Forwarded-For or Forwarded."""
+    return bool(_REQUEST_FORWARDED.get())
 
 
 def ensure_http_token(announce: bool = True) -> str:
@@ -308,7 +328,7 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
         if scope["type"] != "http":
-            await _send_status(send, 403, b'{"error":"Forbidden","message":"Unsupported protocol"}')
+            await _reject_unsupported_protocol(scope, send)
             return
 
         expected = (
@@ -457,6 +477,14 @@ def parse_csv_list(*groups: Iterable[str]) -> List[str]:
     return items
 
 
+async def _reject_unsupported_protocol(scope: Scope, send: Send) -> None:
+    """Reject a non-HTTP scope without using http.response (avoids a 500 on websocket)."""
+    if scope.get("type") == "websocket":
+        await send({"type": "websocket.close", "code": 1008, "reason": "Unsupported protocol"})
+        return
+    await _reject_unsupported_protocol(scope, send)
+
+
 async def _send_status(send: Send, status: int, body: bytes) -> None:
     if status == 401:
         www = b'Bearer error="invalid_token"'
@@ -499,14 +527,21 @@ class HostOriginMiddleware:
             await self.app(scope, receive, send)
             return
         if scope["type"] != "http":
-            await _send_status(send, 403, b'{"error":"Forbidden","message":"Unsupported protocol"}')
+            await _reject_unsupported_protocol(scope, send)
             return
 
         header_map = {}
         for key, value in scope.get("headers", []):
             if key.lower() not in header_map:
                 header_map[key.lower()] = value
+        forwarded = b"x-forwarded-for" in header_map or b"forwarded" in header_map
+        token = _REQUEST_FORWARDED.set(bool(forwarded))
+        try:
+            await self._enforce_http(scope, receive, send, header_map)
+        finally:
+            _REQUEST_FORWARDED.reset(token)
 
+    async def _enforce_http(self, scope: Scope, receive: Receive, send: Send, header_map) -> None:
         host_raw = header_map.get(b"host", b"")
         try:
             host = host_raw.decode("ascii", "replace") if host_raw else ""

@@ -89,14 +89,14 @@ class CloseAllSessionBrowsersTests(unittest.TestCase):
 
 class AttachRateLimitAndBindTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        server._ATTACH_FAILS.clear()
+        server.reset_attach_rate_limiter()
         self._http_mode = server._HTTP_MODE
         self._bind = server._HTTP_BIND_HOST
         server._HTTP_MODE = False
         server._HTTP_BIND_HOST = None
 
     def tearDown(self) -> None:
-        server._ATTACH_FAILS.clear()
+        server.reset_attach_rate_limiter()
         server._HTTP_MODE = self._http_mode
         server._HTTP_BIND_HOST = self._bind
 

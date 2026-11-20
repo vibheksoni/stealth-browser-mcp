@@ -79,13 +79,29 @@ def raw_cdp_enabled() -> bool:
     return value in {"1", "true", "yes", "on", "enabled"}
 
 
-def refuse_raw_cdp_off_loopback(bind_host: str) -> None:
-    """Raise ValueError if raw CDP is enabled on a non-loopback HTTP bind."""
-    if raw_cdp_enabled() and not is_loopback_host(bind_host):
+def refuse_raw_cdp_off_loopback(
+    bind_host: str,
+    allowed_hosts=(),
+    allowed_origins=(),
+) -> None:
+    """Raise ValueError if raw CDP is enabled on an exposed HTTP bind."""
+    if not raw_cdp_enabled():
+        return
+    exposed = (not is_loopback_host(bind_host)) or bool(allowed_hosts) or bool(allowed_origins)
+    if exposed:
         raise ValueError(
-            "STEALTH_ALLOW_RAW_CDP=1 is not allowed when HTTP is bound to a "
-            "non-loopback host ({}).".format(bind_host)
+            "STEALTH_ALLOW_RAW_CDP=1 is not allowed when HTTP is bound off loopback "
+            "or when --allowed-host / --allowed-origin is set (a reverse proxy in front "
+            "of a loopback bind counts as off loopback)."
         )
+
+
+def raw_cdp_available() -> bool:
+    """Like raw_cdp_enabled, but false for a proxied request."""
+    if not raw_cdp_enabled():
+        return False
+    from .http_auth import request_appears_proxied
+    return not request_appears_proxied()
 
 
 def _to_snake(name: str) -> str:
@@ -162,7 +178,7 @@ def prepare_cdp_command(command: str, params: Optional[Dict[str, Any]] = None) -
     prepared = dict(params or {})
     key = canonicalize_cdp_command(command)
     allowed = key in ALLOWED_CDP_METHODS
-    if not allowed and not raw_cdp_enabled():
+    if not allowed and not raw_cdp_available():
         raise CdpPolicyError(
             "CDP method '{}' is not on the allowlist. Set STEALTH_ALLOW_RAW_CDP=1 "
             "to use methods outside the allowlist (allowed only when HTTP is bound "
@@ -177,7 +193,7 @@ def prepare_cdp_command(command: str, params: Optional[Dict[str, Any]] = None) -
         except PathPolicyError as exc:
             raise CdpPolicyError(str(exc)) from exc
     if key in DOWNLOAD_METHODS:
-        if not raw_cdp_enabled():
+        if not raw_cdp_available():
             raise CdpPolicyError(
                 "Page.setDownloadBehavior is blocked because it can write downloads "
                 "outside the data directory. Set STEALTH_ALLOW_RAW_CDP=1 and pass a "

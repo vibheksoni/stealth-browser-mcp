@@ -19,3 +19,23 @@ navigation URLs go through the same file:/chrome: block as `navigate`.
 `Page.setDownloadBehavior` is off the allowlist. Methods outside the
 allowlist require `STEALTH_ALLOW_RAW_CDP=1` on loopback HTTP, and even
 then a download path must stay under the data directory.
+
+
+A loopback bind behind a reverse proxy counts as off loopback. Do not set
+`--allowed-host` or `--allowed-origin`, and do not set
+`STEALTH_ALLOW_CODE_HOOKS`, `STEALTH_ALLOW_RAW_CDP`,
+`STEALTH_ALLOW_ATTACH`, `STEALTH_ALLOW_REMOTE_ATTACH`, or
+`STEALTH_ALLOW_SEED_PASSWORDS`, if a proxy will forward to this server.
+Those flags are also ignored on a request that carries `X-Forwarded-For`
+or `Forwarded`.
+
+HTTP always requires a token. Binding `--host 0.0.0.0` (or any non-loopback
+address) without `STEALTH_MCP_TOKEN` or `STEALTH_MCP_TOKEN_FILE` set is
+refused; the server will not auto-generate a token for a non-loopback bind.
+Generated token files are deleted when the server shuts down.
+
+Idle MCP sessions are closed after `STEALTH_MCP_SESSION_TTL` seconds of no
+requests (default 600). Set it to 0 to disable that expiry. `refresh_seed`
+with `include_passwords` or `include_cards` requires
+`STEALTH_ALLOW_SEED_PASSWORDS=1` and, in HTTP mode, a session that already
+owns a browser instance.

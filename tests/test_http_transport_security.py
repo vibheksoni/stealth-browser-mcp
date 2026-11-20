@@ -261,7 +261,9 @@ class BearerScopeTests(unittest.TestCase):
             sent.append(msg)
 
         asyncio.run(mw({"type": "websocket", "headers": []}, receive, send))
-        self.assertTrue(any(m.get("status") == 403 for m in sent))
+        self.assertTrue(
+            any(m.get("status") == 403 or m.get("type") == "websocket.close" for m in sent)
+        )
         self.assertFalse(inner.called)
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .paths import clone_output_dir
+from .path_policy import write_mode_0600
 
 UNSAFE_FILENAME_CHARS = re.compile(r"[^\w.-]+")
 MAX_PREFIX_LENGTH = 80
@@ -91,9 +92,10 @@ class ResponseHandler:
             "data": data
         }
         
-        # Save to file
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(file_content, f, indent=2, ensure_ascii=False, default=str)
+        write_mode_0600(
+            file_path,
+            json.dumps(file_content, indent=2, ensure_ascii=False, default=str),
+        )
         
         # Return file info instead of data
         file_size_kb = file_path.stat().st_size / 1024

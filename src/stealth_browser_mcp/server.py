@@ -38,7 +38,7 @@ from starlette.middleware import Middleware as ASGIMiddleware
 from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
 from .path_policy import reject_blocked_url, resolve_managed_path, write_private_bytes
 from .cdp_policy import refuse_raw_cdp_off_loopback
-from .hook_policy import code_hooks_enabled, code_hooks_disabled_result, refuse_code_hooks_off_loopback
+from .hook_policy import code_hooks_available, code_hooks_disabled_result, refuse_code_hooks_off_loopback
 from .http_auth import (
     BearerAuthMiddleware,
     HostOriginMiddleware,
@@ -132,7 +132,12 @@ DEBUG_LOGGING_ENABLED = (
     parse_bool_env("STEALTH_BROWSER_DEBUG", default=False)
     or parse_bool_env("DEBUG", default=False)
 )
-HTTP_AUTH_TOKEN = get_http_auth_token()
+try:
+    HTTP_AUTH_TOKEN = get_http_auth_token()
+    _TOKEN_CONFIG_ERROR = None
+except TokenConfigError as exc:
+    HTTP_AUTH_TOKEN = None
+    _TOKEN_CONFIG_ERROR = exc
 _HTTP_MODE = False
 _HTTP_BIND_HOST = None
 
@@ -214,6 +219,10 @@ async def shutdown_all() -> None:
     """Shut down all browser instances, reaper tasks, and background processes."""
     debug_logger.log_info("server", "shutdown", "Shutting down Browser Automation MCP Server...")
     try:
+        await mcp_session_manager.stop_session_reaper()
+    except Exception:
+        pass
+    try:
         await browser_manager.stop_idle_reaper()
     except Exception as e:
         debug_logger.log_error("server", "cleanup", e)
@@ -253,6 +262,11 @@ def run_shutdown_sync() -> None:
         process_cleanup._cleanup_all_tracked()
     except Exception:
         pass
+    try:
+        from .http_auth import cleanup_generated_token_files
+        cleanup_generated_token_files()
+    except Exception:
+        pass
 
 
 
@@ -281,6 +295,7 @@ async def app_lifespan(server):
     debug_logger.log_info("server", "startup", "Starting Browser Automation MCP Server...")
     try:
         await browser_manager.start_idle_reaper()
+        await mcp_session_manager.start_session_reaper()
         yield
     finally:
         if not _HTTP_MODE:
@@ -294,8 +309,6 @@ mcp = FastMCP(
 )
 
 browser_manager = BrowserManager()
-mcp_session_manager.set_browser_manager(browser_manager)
-browser_manager.add_close_listener(mcp_session_manager.on_instance_closed)
 network_interceptor = NetworkInterceptor()
 dom_handler = DOMHandler()
 cdp_function_executor = CDPFunctionExecutor()
@@ -327,12 +340,14 @@ async def _forget_instance(instance_id: str) -> None:
 
 def _register_manager_listeners() -> None:
     """Connect tab preparation and close cleanup to the current browser manager."""
+    mcp_session_manager.set_browser_manager(browser_manager)
     browser_manager.add_tab_listener(_prepare_tab)
     browser_manager.add_tab_listener(page_bindings.prepare_tab)
     browser_manager.add_tab_listener(download_manager.prepare_tab)
     browser_manager.add_close_listener(_forget_instance)
     browser_manager.add_close_listener(page_bindings.forget_instance)
     browser_manager.add_close_listener(download_manager.forget_instance)
+    browser_manager.add_close_listener(mcp_session_manager.on_instance_closed)
 
 
 _register_manager_listeners()
@@ -451,8 +466,10 @@ async def spawn_browser(
         raise Exception(message) from e
 
 _ATTACH_FAILS: Dict[str, deque] = {}
+_ATTACH_FAILS_GLOBAL: deque = deque()
 _ATTACH_FAIL_LIMIT = 10
 _ATTACH_FAIL_WINDOW = 60.0
+_ATTACH_FAILS_MAX_KEYS = 256
 
 
 def _attach_rate_key() -> str:
@@ -464,8 +481,25 @@ def _prune_attach_failures(bucket: deque, now: float) -> None:
         bucket.popleft()
 
 
+def _prune_attach_fail_dict(now: float) -> None:
+    for key, bucket in list(_ATTACH_FAILS.items()):
+        _prune_attach_failures(bucket, now)
+        if not bucket:
+            _ATTACH_FAILS.pop(key, None)
+    while len(_ATTACH_FAILS) > _ATTACH_FAILS_MAX_KEYS:
+        # drop the key whose newest failure is oldest
+        oldest_key = min(_ATTACH_FAILS, key=lambda k: _ATTACH_FAILS[k][-1] if _ATTACH_FAILS[k] else 0.0)
+        _ATTACH_FAILS.pop(oldest_key, None)
+
+
 def _check_attach_rate_limit() -> None:
     now = time.monotonic()
+    _prune_attach_failures(_ATTACH_FAILS_GLOBAL, now)
+    _prune_attach_fail_dict(now)
+    if len(_ATTACH_FAILS_GLOBAL) >= _ATTACH_FAIL_LIMIT:
+        raise ToolError(
+            "attach_browser is rate limited: too many failed probes. Wait and retry."
+        )
     bucket = _ATTACH_FAILS.setdefault(_attach_rate_key(), deque())
     _prune_attach_failures(bucket, now)
     if len(bucket) >= _ATTACH_FAIL_LIMIT:
@@ -476,9 +510,18 @@ def _check_attach_rate_limit() -> None:
 
 def _record_attach_failure() -> None:
     now = time.monotonic()
+    _prune_attach_failures(_ATTACH_FAILS_GLOBAL, now)
+    _ATTACH_FAILS_GLOBAL.append(now)
     bucket = _ATTACH_FAILS.setdefault(_attach_rate_key(), deque())
     _prune_attach_failures(bucket, now)
     bucket.append(now)
+    _prune_attach_fail_dict(now)
+
+
+def reset_attach_rate_limiter() -> None:
+    """Clear attach probe failure buckets (for tests)."""
+    _ATTACH_FAILS.clear()
+    _ATTACH_FAILS_GLOBAL.clear()
 
 
 @section_tool("browser-management")
@@ -505,6 +548,13 @@ async def attach_browser(
             "attach_browser is disabled in HTTP mode. Set STEALTH_ALLOW_ATTACH=1 to "
             "allow attaching to a Chrome this server spawned for this session, or to "
             "an external browser that this server does not already own."
+        )
+    from .http_auth import request_appears_proxied
+    if _HTTP_MODE and request_appears_proxied():
+        raise ToolError(
+            "attach_browser is disabled for proxied HTTP requests (X-Forwarded-For "
+            "or Forwarded is set). A reverse proxy in front of a loopback bind counts "
+            "as off loopback."
         )
 
     http_off_loopback = bool(_HTTP_MODE and _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST))
@@ -3938,7 +3988,7 @@ async def create_dynamic_hook(
             return HookAction(action="continue")
         ```
     """
-    if not code_hooks_enabled():
+    if not code_hooks_available():
         return code_hooks_disabled_result()
     return await dynamic_hook_ai.create_dynamic_hook(
         name=name,
@@ -4079,7 +4129,7 @@ def validate_hook_function(function_code: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Validation results with issues and warnings
     """
-    if not code_hooks_enabled():
+    if not code_hooks_available():
         return code_hooks_disabled_result()
     return dynamic_hook_ai.validate_hook_function(function_code=function_code)
 
@@ -4133,6 +4183,33 @@ async def refresh_seed(
     Returns:
         Dict[str, Any]: Summary of the refresh operation (status, counts, bytes).
     """
+    if include_passwords or include_cards:
+        if not parse_bool_env("STEALTH_ALLOW_SEED_PASSWORDS", default=False):
+            return {
+                "status": "error",
+                "error": (
+                    "include_passwords and include_cards are off by default. "
+                    "Set STEALTH_ALLOW_SEED_PASSWORDS=1 to enable them."
+                ),
+            }
+        sid = get_current_mcp_session_id()
+        if _HTTP_MODE:
+            from .http_auth import request_appears_proxied
+            if request_appears_proxied() or (
+                _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST)
+            ):
+                return {
+                    "status": "error",
+                    "error": "include_passwords is not allowed on an exposed or proxied HTTP bind.",
+                }
+            if not sid or not mcp_session_manager.list_instance_ids_for_session(sid):
+                return {
+                    "status": "error",
+                    "error": (
+                        "include_passwords is owner-only: the calling session must own "
+                        "a browser instance."
+                    ),
+                }
     return seed_tools.refresh_seed(
         name=name,
         source_browser=source_browser,
@@ -4416,17 +4493,37 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.transport == "http":
         _HTTP_MODE = True
         _HTTP_BIND_HOST = args.host
+        if _TOKEN_CONFIG_ERROR is not None:
+            sys.stderr.write(f"Error: {_TOKEN_CONFIG_ERROR}\n")
+            sys.exit(1)
         try:
+            configured = get_http_auth_token()
             token = ensure_http_token(announce=True)
+            generated = configured is None
+            if generated and not is_loopback_host(args.host):
+                raise ValueError(
+                    "Refusing to bind HTTP on non-loopback host {!r} with an auto-generated "
+                    "token. Set STEALTH_MCP_TOKEN or STEALTH_MCP_TOKEN_FILE first.".format(args.host)
+                )
             validate_bind(args.host, token)
-            refuse_code_hooks_off_loopback(args.host)
-            refuse_raw_cdp_off_loopback(args.host)
+            allowed_hosts = parse_csv_list(args.allowed_host, [os.getenv("STEALTH_MCP_ALLOWED_HOSTS", "")])
+            allowed_origins = parse_csv_list(args.allowed_origin, [os.getenv("STEALTH_MCP_ALLOWED_ORIGINS", "")])
+            refuse_code_hooks_off_loopback(args.host, allowed_hosts, allowed_origins)
+            refuse_raw_cdp_off_loopback(args.host, allowed_hosts, allowed_origins)
+            if (
+                parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False)
+                or parse_bool_env("STEALTH_ALLOW_ATTACH", default=False)
+                or parse_bool_env("STEALTH_ALLOW_SEED_PASSWORDS", default=False)
+            ) and ((not is_loopback_host(args.host)) or allowed_hosts or allowed_origins):
+                raise ValueError(
+                    "STEALTH_ALLOW_ATTACH, STEALTH_ALLOW_REMOTE_ATTACH, and "
+                    "STEALTH_ALLOW_SEED_PASSWORDS are not allowed when HTTP is bound off "
+                    "loopback or when --allowed-host / --allowed-origin is set (a reverse "
+                    "proxy in front of a loopback bind counts as off loopback)."
+                )
         except (ValueError, TokenConfigError) as e:
             sys.stderr.write(f"Error: {e}\n")
             sys.exit(1)
-
-        allowed_hosts = parse_csv_list(args.allowed_host, [os.getenv("STEALTH_MCP_ALLOWED_HOSTS", "")])
-        allowed_origins = parse_csv_list(args.allowed_origin, [os.getenv("STEALTH_MCP_ALLOWED_ORIGINS", "")])
 
         if token and mcp.auth is None:
             mcp.auth = create_http_auth_provider(token)

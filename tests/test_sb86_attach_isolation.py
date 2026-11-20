@@ -52,7 +52,7 @@ class FakeBrowserManager:
 
 class AttachIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        server._ATTACH_FAILS.clear()
+        server.reset_attach_rate_limiter()
         self._http_mode = server._HTTP_MODE
         self._bind = server._HTTP_BIND_HOST
         self._real_bm = server.browser_manager
@@ -66,7 +66,7 @@ class AttachIsolationTests(unittest.IsolatedAsyncioTestCase):
         server._HTTP_BIND_HOST = "127.0.0.1"
 
     def tearDown(self) -> None:
-        server._ATTACH_FAILS.clear()
+        server.reset_attach_rate_limiter()
         server._HTTP_MODE = self._http_mode
         server._HTTP_BIND_HOST = self._bind
         server.browser_manager = self._real_bm

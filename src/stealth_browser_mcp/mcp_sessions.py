@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Dict, Generator, List, Optional
@@ -90,7 +91,9 @@ class MCPSessionManager:
         self._browser_manager = browser_manager
         self._session_to_instance: Dict[str, str] = {}
         self._instance_to_session: Dict[str, str] = {}
+        self._last_seen: Dict[str, float] = {}
         self._lock = asyncio.Lock()
+        self._reaper_task: Optional[asyncio.Task] = None
 
     def set_browser_manager(self, bm: Any) -> None:
         """Attach or update the underlying BrowserManager."""
@@ -100,6 +103,7 @@ class MCPSessionManager:
         """Explicitly register an instance for an MCP client session."""
         self._session_to_instance[mcp_session_id] = instance_id
         self._instance_to_session[instance_id] = mcp_session_id
+        self.touch_session(mcp_session_id)
 
     def get_instance_for_session(self, mcp_session_id: str) -> Optional[str]:
         """Get the browser instance ID associated with an MCP client session."""
@@ -112,6 +116,62 @@ class MCPSessionManager:
     def isolation_armed(self) -> bool:
         """True once any instance has an owner session."""
         return bool(self._instance_to_session)
+
+    def session_ttl_seconds(self) -> float:
+        raw = os.getenv("STEALTH_MCP_SESSION_TTL", "600").strip()
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return 600.0
+
+    def touch_session(self, mcp_session_id: Optional[str]) -> None:
+        """Record activity so the session expiry reaper leaves this session alone."""
+        if mcp_session_id:
+            self._last_seen[mcp_session_id] = time.monotonic()
+
+    async def expire_stale_sessions(self, now: Optional[float] = None) -> List[str]:
+        """Close sessions that have been idle longer than STEALTH_MCP_SESSION_TTL.
+
+        TTL 0 disables expiry. Returns the session ids that were closed.
+        """
+        ttl = self.session_ttl_seconds()
+        if ttl <= 0:
+            return []
+        current = time.monotonic() if now is None else now
+        expired = [
+            sid for sid, seen in list(self._last_seen.items())
+            if current - seen >= ttl
+        ]
+        closed: List[str] = []
+        for sid in expired:
+            await self.close_session(sid)
+            self._last_seen.pop(sid, None)
+            closed.append(sid)
+        return closed
+
+    async def start_session_reaper(self, interval: float = 30.0) -> None:
+        if self._reaper_task is not None:
+            return
+
+        async def _loop() -> None:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await self.expire_stale_sessions()
+                except Exception:
+                    pass
+
+        self._reaper_task = asyncio.create_task(_loop())
+
+    async def stop_session_reaper(self) -> None:
+        task = self._reaper_task
+        self._reaper_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     def list_instance_ids_for_session(self, mcp_session_id: str) -> List[str]:
         """Return every instance currently owned by an MCP client session."""
@@ -285,6 +345,8 @@ class SessionLifecycleMiddleware:
             return msg
 
         with set_current_mcp_session_id(session_id):
+            if session_id:
+                self.session_manager.touch_session(session_id)
             try:
                 await self.app(scope, custom_receive, send)
             finally:

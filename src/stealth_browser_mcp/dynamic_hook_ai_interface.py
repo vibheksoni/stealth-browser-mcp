@@ -7,7 +7,7 @@ about dynamic hook functions.
 
 from typing import Dict, List, Any, Optional
 from .dynamic_hook_system import dynamic_hook_system
-from .hook_policy import code_hooks_enabled, code_hooks_disabled_result
+from .hook_policy import code_hooks_available, code_hooks_disabled_result
 from .hook_learning_system import hook_learning_system
 from .debug_logger import debug_logger
 
@@ -35,7 +35,7 @@ class DynamicHookAIInterface:
         Returns:
             Dict with hook_id and status
         """
-        if not code_hooks_enabled():
+        if not code_hooks_available():
             return code_hooks_disabled_result()
         try:
             validation = self.learning_system.validate_hook_function(function_code)

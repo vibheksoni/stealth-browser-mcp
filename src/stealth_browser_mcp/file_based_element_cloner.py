@@ -9,6 +9,7 @@ from .comprehensive_element_cloner import comprehensive_element_cloner
 from .debug_logger import debug_logger
 from .element_cloner import element_cloner
 from .paths import clone_output_dir
+from .path_policy import write_mode_0600
 
 
 class FileBasedElementCloner:
@@ -66,8 +67,7 @@ class FileBasedElementCloner:
             str: Absolute path to the saved file.
         """
         file_path = self.output_dir / filename
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        write_mode_0600(file_path, json.dumps(data, indent=2, ensure_ascii=False, default=str))
         return str(file_path.absolute())
 
     def _save_extraction(

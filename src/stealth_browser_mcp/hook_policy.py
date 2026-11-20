@@ -33,10 +33,26 @@ def code_hooks_disabled_result() -> Dict[str, Any]:
     }
 
 
-def refuse_code_hooks_off_loopback(bind_host: str) -> None:
-    """Raise ValueError if code hooks are enabled on a non-loopback HTTP bind."""
-    if code_hooks_enabled() and not is_loopback_host(bind_host):
+def refuse_code_hooks_off_loopback(
+    bind_host: str,
+    allowed_hosts=(),
+    allowed_origins=(),
+) -> None:
+    """Raise ValueError if code hooks are enabled on an exposed HTTP bind."""
+    if not code_hooks_enabled():
+        return
+    exposed = (not is_loopback_host(bind_host)) or bool(allowed_hosts) or bool(allowed_origins)
+    if exposed:
         raise ValueError(
-            "STEALTH_ALLOW_CODE_HOOKS=1 is not allowed when HTTP is bound to a "
-            "non-loopback host ({}).".format(bind_host)
+            "STEALTH_ALLOW_CODE_HOOKS=1 is not allowed when HTTP is bound off loopback "
+            "or when --allowed-host / --allowed-origin is set (a reverse proxy in front "
+            "of a loopback bind counts as off loopback)."
         )
+
+
+def code_hooks_available() -> bool:
+    """Like code_hooks_enabled, but false for a proxied request (X-Forwarded-For)."""
+    if not code_hooks_enabled():
+        return False
+    from .http_auth import request_appears_proxied
+    return not request_appears_proxied()
