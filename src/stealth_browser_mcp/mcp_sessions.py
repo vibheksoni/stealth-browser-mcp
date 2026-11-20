@@ -197,6 +197,11 @@ class MCPSessionManager:
 
     async def close_session(self, mcp_session_id: str) -> bool:
         """Close browser instance belonging to an MCP client session on disconnect."""
+        try:
+            from . import tool_surface
+            tool_surface.clean_session(mcp_session_id)
+        except Exception:
+            pass
         async with self._lock:
             instance_id = self._session_to_instance.pop(mcp_session_id, None)
             if not instance_id:

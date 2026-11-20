@@ -309,16 +309,14 @@ class TestDownloadsUnitUngated(unittest.TestCase):
 
     def test_mcp_tool_registration(self):
         async def run():
-            async with Client(server.mcp) as client:
-                tools = {tool.name: tool for tool in await client.list_tools()}
-                return tools
+            return await server.mcp.get_tools()
 
         tools = asyncio.run(run())
         self.assertIn("wait_for_download", tools)
         self.assertIn("drop_files", tools)
-        self.assertIn("instance_id", tools["wait_for_download"].inputSchema["properties"])
-        self.assertIn("selector", tools["drop_files"].inputSchema["properties"])
-        self.assertIn("paths", tools["drop_files"].inputSchema["properties"])
+        self.assertIn("instance_id", tools["wait_for_download"].parameters["properties"])
+        self.assertIn("selector", tools["drop_files"].parameters["properties"])
+        self.assertIn("paths", tools["drop_files"].parameters["properties"])
 
 
 @unittest.skipUnless(

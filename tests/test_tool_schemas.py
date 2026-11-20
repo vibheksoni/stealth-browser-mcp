@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -43,6 +44,16 @@ def _accepts_null(schema):
 
 
 class NullDefaultSchemaTests(unittest.TestCase):
+    def setUp(self):
+        self._prev_tools_mode = os.environ.get("STEALTH_MCP_TOOLS")
+        os.environ["STEALTH_MCP_TOOLS"] = "full"
+
+    def tearDown(self):
+        if self._prev_tools_mode is None:
+            os.environ.pop("STEALTH_MCP_TOOLS", None)
+        else:
+            os.environ["STEALTH_MCP_TOOLS"] = self._prev_tools_mode
+
     def test_none_default_params_advertise_nullable_type(self):
         async def run():
             async with Client(server.mcp) as client:

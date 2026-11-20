@@ -12,7 +12,9 @@ ASCII only.
 """
 
 import asyncio
+import copy
 import unittest
+from typing import Optional
 
 from fastmcp import FastMCP
 
@@ -122,6 +124,37 @@ class CompactToolsUnitTests(unittest.TestCase):
                 after[n].parameters["properties"].get("instance_id", {}).get("type"),
                 before_types[n],
             )
+
+    def test_nullable_anyof_preserved_idempotent(self):
+        m = FastMCP("compact-nullable-test")
+
+        @m.tool
+        async def nullable_tool(
+            opt_str: Optional[str] = None,
+            opt_int: Optional[int] = None,
+            regular_str: str = "default",
+        ) -> dict:
+            return {}
+
+        tool = asyncio.run(m.get_tool("nullable_tool"))
+        props = tool.parameters["properties"]
+        self.assertIn("anyOf", props["opt_str"])
+
+        tool_compact.compact_tools(m)
+
+        props_after = tool.parameters["properties"]
+        self.assertNotIn("default", props_after["opt_str"])
+        self.assertIn("anyOf", props_after["opt_str"])
+        self.assertTrue(any(branch == {"type": "null"} for branch in props_after["opt_str"]["anyOf"]))
+        self.assertIn("anyOf", props_after["opt_int"])
+        self.assertTrue(any(branch == {"type": "null"} for branch in props_after["opt_int"]["anyOf"]))
+        self.assertEqual(props_after["regular_str"].get("default"), "default")
+
+        # Idempotent.
+        snapshot1 = copy.deepcopy(tool.parameters)
+        tool_compact.compact_tools(m)
+        snapshot2 = copy.deepcopy(tool.parameters)
+        self.assertEqual(snapshot1, snapshot2)
 
     def test_idempotent(self):
         m = _dummy_mcp()

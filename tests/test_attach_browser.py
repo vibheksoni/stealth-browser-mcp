@@ -304,6 +304,12 @@ class TestAttachBrowserToolRegistration(unittest.IsolatedAsyncioTestCase):
 
     async def test_tool_registered_with_short_description(self) -> None:
         """attach_browser must be registered with a description <= 300 characters."""
+        registry_tools = await server.mcp.get_tools()
+        self.assertIn("attach_browser", registry_tools)
+        reg_tool = registry_tools["attach_browser"]
+        self.assertTrue(reg_tool.description)
+        self.assertLessEqual(len(reg_tool.description), 300)
+
         async with Client(server.mcp) as client:
             tools = {t.name: t for t in await client.list_tools()}
         self.assertIn("attach_browser", tools)

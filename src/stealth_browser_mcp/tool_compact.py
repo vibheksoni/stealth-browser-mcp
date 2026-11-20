@@ -42,6 +42,7 @@ _TOOL_GROUP_RULES: List[Tuple[str, Callable[[str], bool]]] = [
         "browser",
         lambda n: n in {
             "spawn_browser",
+            "attach_browser",
             "list_instances",
             "close_instance",
             "get_instance_state",
@@ -129,16 +130,19 @@ _TOOL_GROUP_RULES: List[Tuple[str, Callable[[str], bool]]] = [
     (
         "extraction and cloning",
         lambda n: (
-            n.startswith(
-                (
-                    "extract_",
-                    "clone_",
-                    "expand_",
-                    "list_stored",
-                    "clear_stored",
-                    "list_clone",
-                    "cleanup_clone",
+            (
+                n.startswith(
+                    (
+                        "extract_",
+                        "clone_",
+                        "expand_",
+                        "list_stored",
+                        "clear_stored",
+                        "list_clone",
+                        "cleanup_clone",
+                    )
                 )
+                and n != "expand_tools"
             )
             or n == "clear_all_elements"
             or n.endswith("_to_file")
@@ -249,6 +253,19 @@ def _strip_note(desc: str) -> str:
     return desc
 
 
+def _clean_property_schema(pdef: Dict[str, Any]) -> None:
+    """Remove default: null and redundant title keys while preserving nullable anyOf."""
+    pdef.pop("title", None)
+    if "default" in pdef and pdef["default"] is None:
+        pdef.pop("default")
+
+    any_of = pdef.get("anyOf")
+    if isinstance(any_of, list):
+        for branch in any_of:
+            if isinstance(branch, dict):
+                branch.pop("title", None)
+
+
 def _compact_tool(tool: Any) -> None:
     """Compact a single ``Tool`` object in place."""
     desc = (
@@ -284,7 +301,7 @@ def _compact_tool(tool: Any) -> None:
     for pname, pdef in properties.items():
         if not isinstance(pdef, dict):
             continue
-        pdef.pop("title", None)
+        _clean_property_schema(pdef)
         if not pdef.get("description") and pname in args_text:
             pdef["description"] = _cap_word(_collapse_ws(args_text[pname]), PROPERTY_CAP)
         elif pdef.get("description"):

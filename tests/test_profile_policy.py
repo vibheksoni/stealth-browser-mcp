@@ -264,8 +264,7 @@ class TestProfilePolicyTool(unittest.TestCase):
 
     def test_tool_description_length_and_sentences(self) -> None:
         async def run():
-            async with Client(server.mcp) as client:
-                return {tool.name: tool for tool in await client.list_tools()}
+            return await server.mcp.get_tools()
 
         tools = asyncio.run(run())
         self.assertIn("profile_policy_report", tools)

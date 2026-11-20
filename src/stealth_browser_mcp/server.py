@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Union
 import nodriver as uc
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from mcp.types import ImageContent, TextContent
 from pydantic_core import to_json
@@ -88,6 +89,7 @@ from .profile_policy import (
 
 from . import instance_default as _instance_default
 from . import tool_compact
+from . import tool_surface
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -105,33 +107,7 @@ SECTION_DESCRIPTIONS = {
     "dynamic-hooks": "AI-powered network hook system",
 }
 
-AGENT_PRESET_TOOLS = (
-    "spawn_browser",
-    "list_instances",
-    "close_instance",
-    "get_instance_state",
-    "navigate",
-    "wait_for",
-    "go_back",
-    "reload_page",
-    "query_elements",
-    "click_element",
-    "type_text",
-    "fill",
-    "press_key",
-    "select_option",
-    "scroll_page",
-    "get_page_content",
-    "take_screenshot",
-    "get_accessibility_snapshot",
-    "execute_script",
-    "get_cookies",
-    "set_cookie",
-    "list_tabs",
-    "new_tab",
-    "switch_tab",
-    "close_tab",
-)
+AGENT_PRESET_TOOLS: tuple[str, ...] = tool_surface.CORE_TOOLS
 
 
 def parse_bool_env(name: str, default: bool = False) -> bool:
@@ -269,50 +245,18 @@ def run_shutdown_sync() -> None:
 
 
 def _filter_preset(all_names, preset=None) -> List[str]:
-    """Return the subset of ``all_names`` that survive the agent preset."""
+    """Return the subset of ``all_names`` that survive the core tools filter."""
     if preset is None:
         preset = AGENT_PRESET_TOOLS
     return [name for name in all_names if name in preset]
 
 
 def agent_mode_enabled(agent_flag: bool = False) -> bool:
-    """Whether the agent preset should be applied for the current run.
+    """Check if the deprecated agent preset alias is requested.
 
-    Enabled when the ``--agent`` flag is set or when the
-    ``STEALTH_MCP_PROFILE`` environment variable equals "agent"
-    (case-insensitive).
+    Deprecated alias of the default --tools core profile.
     """
-    return agent_flag or os.getenv("STEALTH_MCP_PROFILE", "").lower() == "agent"
-
-
-def apply_agent_preset(target=None) -> int:
-    """Keep only the agent preset tools on the server.
-
-    Removes every registered tool whose name is not in AGENT_PRESET_TOOLS using
-    the same mechanism as :func:`apply_disabled_sections`.
-
-    Args:
-        target: Optional FastMCP instance to apply the preset to. Defaults to the
-            global ``mcp`` server.
-
-    Returns:
-        The number of tools kept.
-    """
-    if target is None:
-        target = mcp
-    tools = getattr(getattr(target, "_tool_manager", None), "_tools", None)
-    if not isinstance(tools, dict):
-        return 0
-    kept = 0
-    for tool_name in list(tools.keys()):
-        if tool_name in AGENT_PRESET_TOOLS:
-            kept += 1
-        else:
-            try:
-                target.remove_tool(tool_name)
-            except Exception:
-                continue
-    return kept
+    return bool(agent_flag or os.getenv("STEALTH_MCP_PROFILE", "").lower() == "agent")
 
 @asynccontextmanager
 async def app_lifespan(server):
@@ -4129,6 +4073,31 @@ async def profile_policy_report(instance_id: str) -> Dict[str, Any]:
                 pass
 
 
+@section_tool("browser-management")
+async def expand_tools(category: str, ctx: Context) -> Dict[str, Any]:
+    """Expand a tool category for the current session to make its tools visible in tools/list."""
+    return await tool_surface.expand_tools_impl(mcp, category, ctx)
+
+
+@section_tool("browser-management")
+async def list_tool_categories() -> Dict[str, Any]:
+    """List all tool categories and their tool names, counts, and current mode."""
+    return await tool_surface.list_tool_categories_impl(mcp)
+
+
+@mcp.resource("stealth://tools/reference", mime_type="text/markdown")
+async def tools_reference() -> str:
+    """Tool reference by category with one-line descriptions."""
+    return await tool_surface.tools_reference_impl(mcp)
+
+
+def _init_tool_surface() -> None:
+    tool_surface.init_tool_surface(mcp)
+
+
+_init_tool_surface()
+
+
 if parse_bool_env("XPOOL_SAFE_MODE", default=False):
     DISABLED_SECTIONS.add("cdp-functions")
     apply_disabled_sections()
@@ -4207,7 +4176,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--agent",
         action="store_true",
         default=False,
-        help="Reduce to about 25 core agent tools (recommended for MCP connectors); instance_id becomes optional. Also enabled with STEALTH_MCP_PROFILE=agent.",
+        help="deprecated alias of the default --tools core",
+    )
+    parser.add_argument(
+        "--tools",
+        choices=["core", "full"],
+        default=None,
+        help="Tool visibility profile: 'core' (default) or 'full'. Visibility (--tools core|full) vs availability (--minimal, --xpool-safe, --disable-*). Also set via STEALTH_MCP_TOOLS.",
     )
     
     args = parser.parse_args(argv)
@@ -4258,10 +4233,6 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     apply_disabled_sections()
 
-    agent_mode = agent_mode_enabled(args.agent)
-    if agent_mode:
-        apply_agent_preset()
-
     if DISABLED_SECTIONS:
         debug_logger.log_info(
             "server",
@@ -4269,9 +4240,22 @@ def main(argv: Optional[List[str]] = None) -> None:
             f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}",
         )
 
+    # Tool visibility profile: 'core' (default) or 'full'.
+    # Selected by --tools core|full or env STEALTH_MCP_TOOLS (flag wins).
+    # --agent and STEALTH_MCP_PROFILE=agent are deprecated aliases of the default core profile.
+    tools_mode = args.tools
+    if not tools_mode:
+        env_mode = os.getenv("STEALTH_MCP_TOOLS", "").strip().lower()
+        if env_mode in {"core", "full"}:
+            tools_mode = env_mode
+        else:
+            tools_mode = "core"
+
+    tool_surface.register_tool_surface_middleware(mcp, mode=tools_mode)
+
     # Make instance_id optional everywhere and inject the session's only browser
-    # when a call omits it. This runs for both transports, after section/preset
-    # processing, just before the server starts accepting calls.
+    # when a call omits it. This runs for both transports, after section processing,
+    # just before the server starts accepting calls.
     _instance_default.register_default_instance_middleware(mcp)
     _instance_default.make_instance_id_optional(mcp)
 

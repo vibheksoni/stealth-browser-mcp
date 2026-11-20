@@ -54,6 +54,7 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - [Agent Skill](#agent-skill)
 - [Trust Model](#trust-model)
 - [Modular Architecture](#modular-architecture)
+  - [Tool Surface](#tool-surface)
 - [Server Configuration](#server-configuration)
 - [Toolbox](#toolbox)
 - [Stealth vs Playwright MCP](#stealth-vs-playwright-mcp)
@@ -84,8 +85,8 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 ## Features
 
 - **Anti-bot resistance** - Has passed Cloudflare and Queue-It style challenges in testing; results vary by site, region, browser version, and detector version.
-- **119 tools across 11 sections** - From basic navigation to advanced CDP function execution.
-- **Modular loading** - Run the full 119-tool surface or a minimal 35-tool core; disable sections you do not need.
+- **123 tools across 11 sections** - From basic navigation to advanced CDP function execution.
+- **Modular loading** - Run the 33-tool core surface (default) or the full 123-tool suite; disable sections you do not need.
 - **Pixel-accurate element cloning** - Extract complete elements with CSS, DOM structure, events, animations, and assets via CDP.
 - **Network inspection** - Inspect requests, responses, headers, payloads, and captured bodies through your AI agent.
 - **Dynamic hook system** - Restricted Python hooks can intercept, block, redirect, fulfill, or modify request/response flows.
@@ -249,19 +250,38 @@ Treat the MCP client or agent as the security principal. The recommended deploym
 
 ## Modular Architecture
 
-Choose exactly what functionality you need. Run the full 119-tool suite or strip it down to the 35-tool core.
+Choose exactly what functionality you need. Run the 33-tool core surface (default) or the full 123-tool suite.
 
-| Mode | Tools | Use Case |
-|------|-------|----------|
-| **Full** (default) | 119 | Complete browser automation and debugging |
-| **Minimal** (`--minimal`) | 35 | Core browser automation and interaction |
-| **Custom** (`--disable-*`) | Your choice | Disable specific sections |
-| **Xpool safe** (`--xpool-safe`) | 102 | Disable CDP function tools that trigger `Runtime.enable` |
-| **Agent** (`--agent`) | About 25 | Optimized lean preset (opt-in) |
+Stealth Browser MCP separates tool visibility (--tools core|full) vs availability (--minimal, --xpool-safe, --disable-*):
+- **Visibility (`--tools core|full`)**: Governs which tools are advertised in `tools/list`. In `core` mode (the default), 33 essential tools are listed while extended tools remain callable by name and expandable on demand. In `full` mode, all registered tools are listed.
+- **Availability (`--minimal`, `--xpool-safe`, `--disable-*`)**: Governs which tools exist at all. Availability flags unregister tools so they are completely removed.
 
-- **Agent preset (`--agent`)**: An opt-in preset that reduces the exposed surface to about 25 core browser automation tools, ideal for MCP connectors and LLM context budgets. By default, the full 119-tool surface is exposed. You can also enable it by setting `STEALTH_MCP_PROFILE=agent`.
-- **Compacted tool descriptions**: Tool descriptions and parameter schemas are compacted in place to minimize connect-time token overhead. Verbose docstring sections and redundant schema titles are stripped while preserving argument types, defaults, and validation.
-- **Optional `instance_id`**: For single-browser sessions, `instance_id` is optional across all tools. When omitted, server middleware automatically resolves and injects the session's active browser.
+| Mode / Flag | Tools | Type | Description |
+|-------------|-------|------|-------------|
+| **Core** (default) | 33 | Visibility | Essential navigation, attach/spawn (`attach_browser`, `spawn_browser`), input, tabs, cookies, and screenshots (extended tools remain callable by name) |
+| **Full** (`--tools full`) | 123 | Visibility | Advertises all 123 tools in `tools/list` |
+| **Minimal** (`--minimal`) | 38 | Availability | Keeps only browser management and element interaction (disables other sections) |
+| **Xpool safe** (`--xpool-safe`) | 105 | Availability | Disables CDP function tools that trigger `Runtime.enable` |
+| **Custom** (`--disable-*`) | Variable | Availability | Disables specific sections entirely |
+
+> Note: `--agent` and `STEALTH_MCP_PROFILE=agent` are deprecated aliases of the default `--tools core` visibility profile. They are accepted without error and remove nothing.
+
+### Tool Surface
+
+By default, Stealth Browser MCP operates in **core mode** to minimize connect handshake overhead. At connect time, MCP clients fetch parameter schemas and descriptions for all visible tools:
+- **Full surface (123 tools, uncompacted)**: ~105K characters (~26K tokens)
+- **Compacted surface**: ~80K characters (~20K tokens)
+- **Core surface (default, 33 tools)**: <40K characters (<10K tokens)
+
+In core mode, 33 essential tools (including `attach_browser` and `spawn_browser`) are listed. Extended tools remain fully functional and callable by name at any time without blocking.
+
+- **Dynamic expansion**: Call `expand_tools(category="input")` to add a specific category's tools to `tools/list` for the current session, or `expand_tools(category="all")` to reveal all tools.
+- **Catalog resource**: Read `stealth://tools/reference` to view a complete Markdown catalog of all tools grouped by category with one-line descriptions.
+- **Category discovery**: Call `list_tool_categories()` to get tool counts, category memberships, and the active mode.
+- **Mode selection**: Run with `--tools full` or set `STEALTH_MCP_TOOLS=full` (CLI flag takes precedence) to disable filtering and list all 123 tools by default.
+- **Deprecated aliases**: `--agent` and `STEALTH_MCP_PROFILE=agent` are deprecated aliases of the default `--tools core` visibility profile; they accept without error and remove nothing.
+- **Compacted tool descriptions**: Tool descriptions and parameter schemas are compacted in place to minimize connect-time token overhead. Verbose docstring sections, redundant schema titles, and default-null entries are stripped while preserving nullable types, argument defaults, and validation.
+- **Optional `instance_id`**: For single-browser sessions, `instance_id` is optional across all tools in both visibility profiles. When omitted, server middleware automatically resolves and injects the session's active browser.
 
 ```bash
 stealth-browser-mcp --minimal
@@ -279,16 +299,16 @@ Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnost
 
 | Section | Tools | Description |
 |---------|-------|-------------|
-| `browser-management` | 8 | Core browser operations |
-| `element-interaction` | 13 | Page interaction and manipulation |
+| `browser-management` | 20 | Core browser operations |
+| `element-interaction` | 19 | Page interaction and manipulation |
 | `element-extraction` | 9 | Element cloning and extraction |
 | `file-extraction` | 9 | File-based extraction tools |
-| `network-debugging` | 10 | Network monitoring and capture |
+| `network-debugging` | 11 | Network monitoring and capture |
 | `cdp-functions` | 17 | Chrome DevTools Protocol execution |
 | `progressive-cloning` | 10 | Advanced element cloning |
-| `cookies-storage` | 3 | Cookie management |
+| `cookies-storage` | 5 | Cookie management |
 | `tabs` | 5 | Tab management |
-| `debugging` | 7 | Debug and system tools |
+| `debugging` | 8 | Debug and system tools |
 | `dynamic-hooks` | 10 | AI-assisted network hooks |
 
 ---
@@ -365,11 +385,12 @@ client = Client(
 ## Toolbox
 
 <details>
-<summary><strong>Browser Management (8)</strong></summary>
+<summary><strong>Browser Management (9)</strong></summary>
 
 | Tool | Description |
 |------|-------------|
 | `spawn_browser()` | Create a stealth browser instance |
+| `attach_browser()` | Attach to an already running Chrome browser via remote debugging port |
 | `list_instances()` | List active browser sessions |
 | `close_instance()` | Clean shutdown of a browser |
 | `get_instance_state()` | Full browser state information |
@@ -570,8 +591,8 @@ Detection results are point-in-time and depend on site policy, region, browser v
 | Network debugging | Full request/response inspection through AI tools | Basic |
 | API reverse engineering | Payload inspection through chat | Manual tools only |
 | Dynamic hook system | Restricted Python hooks for real-time interception | Not available |
-| Modular architecture | 11 sections, 35-119 tools | Fixed tool surface |
-| Total tools | 119 customizable tools | About 20 |
+| Modular architecture | 11 sections, 33-123 tools | Fixed tool surface |
+| Total tools | 123 customizable tools | About 20 |
 
 ---
 
@@ -596,7 +617,7 @@ The server reaps idle browser instances automatically and performs startup clean
 Older versions let Chrome copy its app bundle into `com.google.Chrome.code_sign_clone` at every launch, and the copy stayed behind when an instance crashed or was killed. The server now launches Chrome with `MacAppCodeSignClone` turned off, so no new copies are made. To remove copies left by older versions, quit Chrome and run `rm -rf /private/var/folders/*/*/X/com.google.Chrome.code_sign_clone` (use `com.microsoft.edgemac.code_sign_clone` for Edge).
 
 **Too many tools cluttering the AI chat**
-Use `--minimal` for 35 core tools, `--xpool-safe` for xpool-compatible operation, or selectively disable sections:
+Use core mode (default, 33 tools), `--minimal` for 38 tools, `--xpool-safe` for xpool-compatible operation, or selectively disable sections:
 
 ```bash
 python src/server.py --disable-cdp-functions --disable-dynamic-hooks --disable-progressive-cloning

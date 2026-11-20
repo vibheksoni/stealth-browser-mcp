@@ -549,8 +549,7 @@ class A11ySnapshotToolExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("fill", server.SECTION_TOOLS["element-interaction"])
         self.assertIn("fill_element", server.SECTION_TOOLS["element-interaction"])
 
-        async with Client(server.mcp) as client:
-            tools = {t.name: t for t in await client.list_tools()}
+        tools = await server.mcp.get_tools()
         self.assertIn("get_accessibility_snapshot", tools)
         self.assertIn("take_accessibility_snapshot", tools)
         self.assertIn("fill", tools)

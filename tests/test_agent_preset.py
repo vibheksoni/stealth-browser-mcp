@@ -1,10 +1,10 @@
-"""Tests for the agent preset (SB-64) and default instance_id resolution.
+"""Tests for the agent preset alias (SB-64/SB-72) and default instance_id resolution.
 
 Covers:
-- The 25-tool agent preset surface and the pure preset filter.
-- ``pick_default_instance`` selection and error cases.
-- ``make_instance_id_optional`` schema mutation plus the
-  ``DefaultInstanceMiddleware`` end-to-end through the FastMCP client.
+- server.AGENT_PRESET_TOOLS is an alias of tool_surface.CORE_TOOLS and every tool exists.
+- --agent and STEALTH_MCP_PROFILE=agent are deprecated aliases that remove nothing.
+- pick_default_instance selection and error cases.
+- make_instance_id_optional schema mutation plus DefaultInstanceMiddleware.
 - README tool counts are no longer stale.
 
 ASCII only.
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastmcp import Client, FastMCP
 
-from stealth_browser_mcp import server
+from stealth_browser_mcp import server, tool_surface
 from stealth_browser_mcp.instance_default import (
     INSTANCE_DEFAULT_NOTE,
     make_instance_id_optional,
@@ -34,48 +34,36 @@ def _run(coro):
 
 
 class AgentPresetTests(unittest.TestCase):
-    def test_preset_has_25_known_tools(self):
-        # The preset must name exactly 25 distinct tools.
-        self.assertEqual(len(server.AGENT_PRESET_TOOLS), 25)
-        self.assertEqual(len(set(server.AGENT_PRESET_TOOLS)), 25)
+    def test_core_tools_alias_and_all_exist(self):
+        # server.AGENT_PRESET_TOOLS is an alias of tool_surface.CORE_TOOLS
+        self.assertIs(server.AGENT_PRESET_TOOLS, tool_surface.CORE_TOOLS)
 
-        # Every named tool must exist in the full registered surface. Using the
-        # pure filter avoids mutating the global server's tool list.
+        # Every named tool must exist in the full registered surface.
         full_tools = _run(server.mcp.get_tools())
-        all_names = {name: tool for name, tool in full_tools.items()}
-        kept_names = server._filter_preset(list(all_names.keys()))
+        all_names = set(full_tools.keys())
+        kept_names = server._filter_preset(list(all_names))
         for name in server.AGENT_PRESET_TOOLS:
             with self.subTest(tool=name):
                 self.assertIn(name, all_names)
                 self.assertIn(name, kept_names)
-        # The filter keeps exactly the preset tools present in the full surface.
         self.assertEqual(set(kept_names), set(server.AGENT_PRESET_TOOLS))
-
-    def test_apply_agent_preset_on_dummy_server(self):
-        dummy = FastMCP("dummy")
-
-        @dummy.tool
-        async def navigate(instance_id: str, url: str) -> dict:
-            return {}
-
-        @dummy.tool
-        async def take_screenshot(instance_id: str = "") -> dict:
-            return {}
-
-        @dummy.tool
-        async def some_debug_tool(extra: str = "") -> dict:
-            return {}
-
-        kept = server.apply_agent_preset(target=dummy)
-        self.assertEqual(kept, 2)
-
-        names = set(_run(dummy.get_tools()))
-        self.assertIn("navigate", names)
-        self.assertIn("take_screenshot", names)
-        self.assertNotIn("some_debug_tool", names)
 
     def test_default_server_tool_count(self):
         self.assertGreaterEqual(len(asyncio.run(server.mcp.get_tools())), 110)
+
+    def test_agent_alias_removes_nothing(self):
+        saved = os.environ.get("STEALTH_MCP_PROFILE")
+        try:
+            os.environ["STEALTH_MCP_PROFILE"] = "agent"
+            self.assertTrue(server.agent_mode_enabled(False))
+            self.assertTrue(server.agent_mode_enabled(True))
+            tools = _run(server.mcp.get_tools())
+            self.assertGreaterEqual(len(tools), 110)
+        finally:
+            if saved is None:
+                os.environ.pop("STEALTH_MCP_PROFILE", None)
+            else:
+                os.environ["STEALTH_MCP_PROFILE"] = saved
 
     def test_agent_mode_enabled_helper(self):
         saved = os.environ.get("STEALTH_MCP_PROFILE")
