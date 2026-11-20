@@ -12,8 +12,7 @@ would close that gap, but nodriver does not support it today without a large
 rewrite, so the port remains loopback-only and undocumented to other users.
 
 HTTP transport always requires a bearer token, binds to loopback by default,
-and rejects unexpected Host and Origin values. `STEALTH_ALLOW_REMOTE_ATTACH=1`
-is ignored when HTTP is bound off loopback. Caller file paths stay under the
+and rejects unexpected Host and Origin values. `attach_browser` is off in HTTP mode unless `STEALTH_ALLOW_ATTACH=1`. When it is on, a caller may only attach to a Chrome this server spawned for that session, or to an external browser this server does not already own. `STEALTH_ALLOW_REMOTE_ATTACH=1` is ignored when HTTP is bound off loopback. Caller file paths stay under the
 data directory. Caller Python hooks stay off unless `STEALTH_ALLOW_CODE_HOOKS=1`
 on loopback HTTP. `execute_cdp_command` uses a method allowlist;
 navigation URLs go through the same file:/chrome: block as `navigate`.

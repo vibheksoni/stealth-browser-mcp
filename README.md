@@ -352,6 +352,8 @@ These are environment variables for the MCP server process. Set them in your she
 | `STEALTH_MANAGED_PROFILES_ROOT` | `data_dir()` | Directory that `spawn_browser(user_data_dir=...)` must stay under. Paths outside this root, including symlink escapes, are rejected. Also used as the default when a relative `user_data_dir` is given. |
 | `STEALTH_ALLOW_FILE_URLS` | unset | Allow `navigate` / `new_tab` to open `file:`, `chrome:`, or `devtools:` URLs. Off by default because those schemes can read host files or browser internals. |
 | `STEALTH_ALLOW_RAW_CDP` | unset | Allow `execute_cdp_command` to call methods outside the allowlist. Off by default. Navigation URLs still go through the file:/chrome: block. `setDownloadBehavior` still requires a `download_path` under the data directory. The server refuses to start if this is set and HTTP is bound off loopback. |
+| `STEALTH_ALLOW_ATTACH` | unset | Allow `attach_browser` in HTTP mode. Off by default. When on, attach is limited to a Chrome this server spawned for the calling session, or to an external browser this server does not already own. stdio mode does not need this flag. |
+| `STEALTH_ALLOW_REMOTE_ATTACH` | unset | Allow `attach_browser` to a non-loopback host. Off by default. Ignored when HTTP is bound off loopback. In HTTP mode, `STEALTH_ALLOW_ATTACH=1` is also required. |
 
 **PowerShell example:**
 

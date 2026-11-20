@@ -96,6 +96,7 @@ class BrowserManager:
             BrowserManager._active_managers.append(self)
         self._instances: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
+        self._debug_endpoints: Dict[tuple, str] = {}
         self._spawn_diagnostics: Dict[str, Dict[str, Any]] = {}
         self._session_infos: Dict[str, Dict[str, Any]] = {}
         self._proxy_forwarders: Dict[str, AuthenticatedProxyForwarder] = {}
@@ -258,6 +259,54 @@ class BrowserManager:
             "headless": headless,
             "user_data_dir": user_data_dir,
         }
+
+    @staticmethod
+    def _endpoint_key(host: Optional[str], port: Optional[int]) -> Optional[tuple]:
+        """Canonical (host, port) key. Loopback aliases share one key."""
+        if port is None:
+            return None
+        try:
+            port_num = int(port)
+        except (TypeError, ValueError):
+            return None
+        from .http_auth import is_loopback_host
+        label = "loopback" if host and is_loopback_host(str(host)) else (str(host).strip().lower() if host else "loopback")
+        if not host:
+            label = "loopback"
+        return (label, port_num)
+
+    def _register_debug_endpoint(self, instance_id: str, host: Optional[str], port: Optional[int]) -> None:
+        key = self._endpoint_key(host, port)
+        if key is None:
+            return
+        self._debug_endpoints[key] = instance_id
+
+    def _unregister_debug_endpoints(self, instance_id: str) -> None:
+        stale = [key for key, owner in self._debug_endpoints.items() if owner == instance_id]
+        for key in stale:
+            self._debug_endpoints.pop(key, None)
+
+    def lookup_instance_by_debug_endpoint(self, host: str, port: int) -> Optional[str]:
+        """Return the instance id that owns this DevTools endpoint, if any."""
+        key = self._endpoint_key(host, port)
+        if key is None:
+            return None
+        instance_id = self._debug_endpoints.get(key)
+        if instance_id and instance_id in self._instances:
+            return instance_id
+        for candidate_id, data in self._instances.items():
+            if self._endpoint_key(data.get("debug_host"), data.get("debug_port")) == key:
+                return candidate_id
+        return None
+
+    @staticmethod
+    def _browser_debug_endpoint(browser: Any, fallback_host: Optional[str] = None, fallback_port: Optional[int] = None) -> tuple:
+        config = getattr(browser, "config", None)
+        host = getattr(config, "host", None) or fallback_host or "127.0.0.1"
+        port = getattr(config, "port", None)
+        if port is None:
+            port = fallback_port
+        return host, port
 
     @staticmethod
     async def _apply_timezone_override(
@@ -681,7 +730,13 @@ class BrowserManager:
                     'network_data': [],
                     'session_id': session_id,
                     'session_info': session_info,
+                    'debug_host': None,
+                    'debug_port': None,
                 }
+                debug_host, debug_port = self._browser_debug_endpoint(browser, "127.0.0.1", None)
+                self._instances[instance_id]['debug_host'] = debug_host
+                self._instances[instance_id]['debug_port'] = debug_port
+                self._register_debug_endpoint(instance_id, debug_host, debug_port)
 
             instance.state = BrowserState.READY
             instance.update_activity()
@@ -807,7 +862,10 @@ class BrowserManager:
                     'session_id': None,
                     'session_info': None,
                     'attached': True,
+                    'debug_host': host,
+                    'debug_port': port,
                 }
+                self._register_debug_endpoint(instance_id, host, port)
 
             instance.state = BrowserState.READY
             instance.update_activity()
@@ -919,6 +977,7 @@ class BrowserManager:
         browser: Browser = data["browser"]
         data["instance"].state = BrowserState.CLOSED
         self._spawn_diagnostics.pop(instance_id, None)
+        self._unregister_debug_endpoints(instance_id)
         persistent_storage.remove_instance(instance_id)
 
         try:

@@ -113,7 +113,7 @@ class AttachRateLimitAndBindTests(unittest.IsolatedAsyncioTestCase):
     async def test_remote_attach_ignored_when_http_bound_off_loopback(self) -> None:
         server._HTTP_MODE = True
         server._HTTP_BIND_HOST = "0.0.0.0"
-        with mock.patch.dict(os.environ, {"STEALTH_ALLOW_REMOTE_ATTACH": "1"}):
+        with mock.patch.dict(os.environ, {"STEALTH_ALLOW_REMOTE_ATTACH": "1", "STEALTH_ALLOW_ATTACH": "1"}):
             with mock.patch.object(server, "_probe_version") as probe:
                 with self.assertRaises(ToolError) as ctx:
                     await server.attach_browser.fn(port=9222, host="10.0.0.5")
