@@ -10,7 +10,8 @@ ASCII only. No stdout prints in server paths.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, List, Optional
+import inspect
+from typing import Any, Callable, Dict, List, Optional
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.exceptions import ToolError
@@ -19,6 +20,84 @@ from .mcp_sessions import get_current_mcp_session_id, mcp_session_manager
 
 INSTANCE_DEFAULT_NOTE = " If instance_id is omitted, the session's only browser is used."
 
+
+
+def collect_instance_ids(arguments: Any) -> List[str]:
+    """Return instance_id and instance_ids values from a tool argument dict."""
+    ids: List[str] = []
+    if not isinstance(arguments, dict):
+        return ids
+    instance_id = arguments.get("instance_id")
+    if instance_id:
+        ids.append(str(instance_id))
+    for item in arguments.get("instance_ids") or []:
+        if item:
+            ids.append(str(item))
+    return ids
+
+
+def enforce_instance_arguments(arguments: Any) -> None:
+    """Run check_access on every instance_id / instance_ids entry."""
+    for instance_id in collect_instance_ids(arguments):
+        mcp_session_manager.check_access(instance_id)
+
+
+def enforce_call_instance_access(func: Callable[..., Any], args: tuple, kwargs: dict) -> None:
+    """Bind a tool call and enforce session access on instance arguments."""
+    try:
+        bound = inspect.signature(func).bind_partial(*args, **kwargs)
+        values = bound.arguments
+    except (TypeError, ValueError):
+        values = dict(kwargs)
+    enforce_instance_arguments(values)
+
+
+def with_instance_access(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool so .fn(...) and HTTP calls both enforce session isolation.
+
+    The wrapper is built with the original parameter list so FastMCP keeps
+    the same defaults and schema as the unwrapped tool.
+    """
+    from functools import update_wrapper
+
+    sig = inspect.signature(func)
+    param_parts: List[str] = []
+    forward_parts: List[str] = []
+    for param in sig.parameters.values():
+        param_parts.append(str(param))
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            forward_parts.append("*" + param.name)
+        elif param.kind is inspect.Parameter.VAR_KEYWORD:
+            forward_parts.append("**" + param.name)
+        else:
+            forward_parts.append(param.name + "=" + param.name)
+    params_code = ", ".join(param_parts)
+    forward_code = ", ".join(forward_parts)
+    prefix = "async " if inspect.iscoroutinefunction(func) else ""
+    await_kw = "await " if inspect.iscoroutinefunction(func) else ""
+    src = (
+        prefix
+        + "def gated("
+        + params_code
+        + "):\n"
+        + "    enforce_call_instance_access(_orig, (), dict("
+        + forward_code
+        + "))\n"
+        + "    return "
+        + await_kw
+        + "_orig("
+        + forward_code
+        + ")\n"
+    )
+    scope: Dict[str, Any] = {
+        "_orig": func,
+        "enforce_call_instance_access": enforce_call_instance_access,
+    }
+    exec(src, scope)
+    gated = scope["gated"]
+    update_wrapper(gated, func)
+    gated.__signature__ = sig  # type: ignore[attr-defined]
+    return gated
 
 def pick_default_instance(
     session_instance: Optional[str],
@@ -110,6 +189,7 @@ class DefaultInstanceMiddleware(Middleware):
         if not isinstance(args, dict):
             return await call_next(context)
         if args.get("instance_id"):
+            enforce_instance_arguments(args)
             return await call_next(context)
 
         try:
@@ -131,6 +211,7 @@ class DefaultInstanceMiddleware(Middleware):
             open_instances = []
         chosen = pick_default_instance(session_instance, _extract_instance_ids(open_instances))
         args["instance_id"] = chosen
+        enforce_instance_arguments(args)
         return await call_next(context)
 
 
@@ -177,6 +258,7 @@ def register_default_instance_middleware(mcp, session_instance_fn=None, open_ins
     """Register :class:`DefaultInstanceMiddleware` once on ``mcp``.
 
     Idempotent: if an existing instance is already present, nothing changes.
+    Access checks run inside this middleware after a default instance_id is filled.
     """
     for mw in getattr(mcp, "_middleware", []) or []:
         if isinstance(mw, DefaultInstanceMiddleware):

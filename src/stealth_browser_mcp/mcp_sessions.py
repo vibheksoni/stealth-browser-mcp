@@ -109,6 +109,14 @@ class MCPSessionManager:
         """Get the MCP client session ID that owns a browser instance."""
         return self._instance_to_session.get(instance_id)
 
+    def list_instance_ids_for_session(self, mcp_session_id: str) -> List[str]:
+        """Return every instance currently owned by an MCP client session."""
+        return [
+            instance_id
+            for instance_id, owner in self._instance_to_session.items()
+            if owner == mcp_session_id
+        ]
+
     def is_instance_accessible(
         self,
         mcp_session_id: Optional[str],
@@ -119,13 +127,16 @@ class MCPSessionManager:
         An instance owned by another MCP session cannot be accessed.
         """
         owner = self._instance_to_session.get(instance_id)
-        if owner is None:
-            # Unowned or globally created instance
-            return True
         if mcp_session_id is None:
-            # Local/direct caller without session context
+            # Local/direct caller without session context (stdio)
             return True
-        return owner == mcp_session_id
+        if owner is not None:
+            return owner == mcp_session_id
+        # Unowned instances are not shared with session-bound callers once
+        # session isolation has been armed (any instance has an owner).
+        if self._instance_to_session:
+            return False
+        return True
 
     def check_access(self, instance_id: str, mcp_session_id: Optional[str] = None) -> None:
         """Enforce session isolation.

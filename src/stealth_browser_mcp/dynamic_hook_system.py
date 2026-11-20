@@ -78,6 +78,8 @@ class DynamicHook:
         self.last_triggered: Optional[datetime] = None
         self.status = "active"
         self.request_stage = requirements.get('stage', 'request')  # 'request' or 'response'
+        self.instance_ids: List[str] = []
+        self.owner_session_id: Optional[str] = None
 
         self._compiled_function = self._compile_function()
 
@@ -195,6 +197,49 @@ class DynamicHookSystem:
         self._instance_tabs: Dict[str, Any] = {}
         self._fetch_enabled: set[str] = set()
 
+
+    @staticmethod
+    def _current_owner_session_id() -> Optional[str]:
+        try:
+            from .mcp_sessions import get_current_mcp_session_id
+        except Exception:
+            from stealth_browser_mcp.mcp_sessions import get_current_mcp_session_id
+        return get_current_mcp_session_id()
+
+    def hook_visible_to_caller(self, hook: DynamicHook) -> bool:
+        """Session-bound callers only see hooks they created."""
+        sid = self._current_owner_session_id()
+        if not sid:
+            return True
+        return getattr(hook, "owner_session_id", None) == sid
+
+    def hook_applies_to_instance(self, hook: DynamicHook, instance_id: str) -> bool:
+        """True if this hook should run on the given browser instance."""
+        if getattr(hook, "instance_ids", None):
+            return instance_id in hook.instance_ids
+        owner = getattr(hook, "owner_session_id", None)
+        if not owner:
+            return True
+        try:
+            from .mcp_sessions import mcp_session_manager
+        except Exception:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        return mcp_session_manager.get_session_for_instance(instance_id) == owner
+
+    def _attach_targets(self, hook: DynamicHook) -> List[str]:
+        """Instances that should be attached to a hook at creation time."""
+        if hook.instance_ids:
+            return list(hook.instance_ids)
+        owner = hook.owner_session_id
+        if owner:
+            try:
+                from .mcp_sessions import mcp_session_manager
+            except Exception:
+                from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+            owned = mcp_session_manager.list_instance_ids_for_session(owner)
+            return [iid for iid in owned if iid in self.instance_hooks] or list(owned)
+        return list(self.instance_hooks)
+
     def _hooks_for_instance(self, instance_id: str) -> List[DynamicHook]:
         """
         Active hooks that apply to an instance.
@@ -214,7 +259,9 @@ class DynamicHookSystem:
         hooks.extend(
             hook
             for hook_id, hook in self.hooks.items()
-            if hook.status == "active" and hook_id not in instance_hook_ids and not hook.instance_ids
+            if hook.status == "active"
+            and hook_id not in instance_hook_ids
+            and self.hook_applies_to_instance(hook, instance_id)
         )
         return hooks
 
@@ -376,7 +423,7 @@ class DynamicHookSystem:
             candidate_ids.extend(
                 hook_id
                 for hook_id, hook in self.hooks.items()
-                if not getattr(hook, 'instance_ids', None) and hook_id not in candidate_ids
+                if hook_id not in candidate_ids and self.hook_applies_to_instance(hook, request.instance_id)
             )
 
             matching_hooks = []
@@ -470,20 +517,19 @@ class DynamicHookSystem:
             hook_id = str(uuid.uuid4())
             hook = DynamicHook(hook_id, name, requirements, function_code, priority)
             hook.instance_ids = list(instance_ids or [])
+            hook.owner_session_id = self._current_owner_session_id()
 
             async with self._lock:
                 self.hooks[hook_id] = hook
 
-                if instance_ids:
-                    for instance_id in instance_ids:
-                        if instance_id not in self.instance_hooks:
-                            self.instance_hooks[instance_id] = []
-                        self.instance_hooks[instance_id].append(hook_id)
-                else:
-                    for instance_id in self.instance_hooks:
+                targets = self._attach_targets(hook)
+                for instance_id in targets:
+                    if instance_id not in self.instance_hooks:
+                        self.instance_hooks[instance_id] = []
+                    if hook_id not in self.instance_hooks[instance_id]:
                         self.instance_hooks[instance_id].append(hook_id)
 
-            await self._refresh_instances(hook.instance_ids or None)
+            await self._refresh_instances(targets or None)
             debug_logger.log_info("dynamic_hook_system", "create_hook", f"Created hook {name} with ID {hook_id}")
             return hook_id
 
@@ -492,7 +538,7 @@ class DynamicHookSystem:
             raise
 
     def list_hooks(self) -> List[Dict[str, Any]]:
-        """List all hooks."""
+        """List hooks visible to the current MCP session."""
         return [
             {
                 "hook_id": hook.hook_id,
@@ -505,12 +551,13 @@ class DynamicHookSystem:
                 "created_at": hook.created_at.isoformat()
             }
             for hook in self.hooks.values()
+            if self.hook_visible_to_caller(hook)
         ]
 
     def get_hook_details(self, hook_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed hook information."""
         hook = self.hooks.get(hook_id)
-        if not hook:
+        if not hook or not self.hook_visible_to_caller(hook):
             return None
 
         return {
@@ -528,6 +575,9 @@ class DynamicHookSystem:
     async def remove_hook(self, hook_id: str) -> bool:
         """Remove a hook."""
         try:
+            hook = self.hooks.get(hook_id)
+            if hook is not None and not self.hook_visible_to_caller(hook):
+                return False
             async with self._lock:
                 if hook_id in self.hooks:
                     del self.hooks[hook_id]

@@ -47,6 +47,7 @@ from .http_auth import (
     parse_csv_list,
     validate_bind,
 )
+from .instance_default import with_instance_access
 from .page_summary import (
     ACTION_TOOL_NAMES,
     decide_history_move,
@@ -168,9 +169,9 @@ def section_tool(section: str):
     """Decorator that registers tools and tracks section membership."""
     def decorator(func):
         SECTION_TOOLS[section].append(func.__name__)
-        target_func = func
+        target_func = with_instance_access(func)
         if func.__name__ in ACTION_TOOL_NAMES:
-            target_func = with_page_summary(func)
+            target_func = with_page_summary(target_func)
         return mcp.tool(target_func)
     return decorator
 
