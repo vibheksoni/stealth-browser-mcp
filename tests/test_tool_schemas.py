@@ -32,6 +32,7 @@ NULL_DEFAULT_PARAMS = {
     "export_har": ["path"],
     "snapshot_seed": ["label"],
     "refresh_seed": ["profile", "source_dir"],
+    "save_to_seed": ["seed"],
 }
 
 
@@ -79,6 +80,25 @@ class NullDefaultSchemaTests(unittest.TestCase):
         self.assertIn("include_sensitive", props)
         required = tool.inputSchema.get("required", [])
         self.assertIn("instance_id", required)
+
+    def test_save_to_seed_schema(self):
+        async def run():
+            async with Client(server.mcp) as client:
+                return {tool.name: tool for tool in await client.list_tools()}
+
+        tools = asyncio.run(run())
+        self.assertIn("save_to_seed", tools)
+        tool = tools["save_to_seed"]
+        props = tool.inputSchema["properties"]
+        self.assertIn("session_id", props)
+        self.assertIn("seed", props)
+        self.assertIn("close_first", props)
+        self.assertIn("flush_wait_seconds", props)
+        required = tool.inputSchema.get("required", [])
+        self.assertIn("session_id", required)
+        self.assertNotIn("seed", required)
+        self.assertNotIn("close_first", required)
+        self.assertNotIn("flush_wait_seconds", required)
 
 
 if __name__ == "__main__":

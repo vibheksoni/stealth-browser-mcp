@@ -40,7 +40,7 @@ TARGET_UPDATE_EVENTS = (
     uc.cdp.target.TargetDestroyed,
     uc.cdp.target.TargetCrashed,
 )
-PROCESS_EXIT_TIMEOUT = 3.0
+PROCESS_EXIT_TIMEOUT = 15.0
 
 
 def _parse_nonnegative_int_env(
@@ -76,8 +76,13 @@ class BrowserManager:
 
     DEFAULT_IDLE_TIMEOUT_SECONDS = 600
     DEFAULT_IDLE_REAPER_INTERVAL_SECONDS = 60
+    _active_managers: List["BrowserManager"] = []
 
     def __init__(self):
+        if not hasattr(BrowserManager, "_active_managers"):
+            BrowserManager._active_managers = []
+        if self not in BrowserManager._active_managers:
+            BrowserManager._active_managers.append(self)
         self._instances: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
         self._spawn_diagnostics: Dict[str, Dict[str, Any]] = {}
@@ -701,7 +706,12 @@ class BrowserManager:
         async with self._lock:
             return [data['instance'] for data in self._instances.values()]
 
-    async def close_instance(self, instance_id: str, keep: Optional[bool] = None) -> bool:
+    async def close_instance(
+        self,
+        instance_id: str,
+        keep: Optional[bool] = None,
+        timeout: float = 15.0,
+    ) -> bool:
         """
         Close and remove a browser instance.
 
@@ -712,12 +722,20 @@ class BrowserManager:
 
         Args:
             instance_id (str): The ID of the browser instance to close.
+            keep (Optional[bool]): If True, keep session profile directory on disk.
+            timeout (float): Maximum seconds to wait for browser process to exit.
 
         Returns:
             bool: True if the instance existed and was closed, False otherwise.
         """
         async with self._lock:
             data = self._instances.pop(instance_id, None)
+            if data is None:
+                for i_id, inst_data in list(self._instances.items()):
+                    if inst_data.get("session_id") == instance_id:
+                        data = self._instances.pop(i_id, None)
+                        instance_id = i_id
+                        break
         if data is None:
             return False
 
@@ -731,7 +749,7 @@ class BrowserManager:
         except Exception:
             dynamic_hook_system.cancel_instance(instance_id)
 
-        await self._shutdown_browser(browser)
+        await self._shutdown_browser(browser, process_exit_timeout=timeout)
 
         try:
             await asyncio.to_thread(self._finalize_process_cleanup, instance_id, True)
@@ -765,12 +783,17 @@ class BrowserManager:
         await self._notify_close_listeners(instance_id)
         return True
 
-    async def _shutdown_browser(self, browser: Browser) -> None:
+    async def _shutdown_browser(
+        self,
+        browser: Browser,
+        process_exit_timeout: float = PROCESS_EXIT_TIMEOUT,
+    ) -> None:
         """
         Stop a browser process and its CDP connections without hanging.
 
         Args:
             browser (Browser): Browser to stop.
+            process_exit_timeout (float): Maximum seconds to wait for process exit.
 
         Returns:
             None
@@ -788,7 +811,7 @@ class BrowserManager:
         process = getattr(browser, "_process", None)
         if process is not None and process.returncode is None:
             try:
-                await asyncio.wait_for(process.wait(), PROCESS_EXIT_TIMEOUT)
+                await asyncio.wait_for(process.wait(), process_exit_timeout)
             except Exception:
                 for signal_process in (process.terminate, process.kill):
                     try:
@@ -811,6 +834,63 @@ class BrowserManager:
             )
         browser._process = None
         browser._process_pid = None
+
+    async def close_session(
+        self,
+        session_id: str,
+        keep: bool = True,
+        timeout: float = 15.0,
+    ) -> bool:
+        """Close browser instance associated with session_id."""
+        target_id = None
+        async with self._lock:
+            for i_id, data in self._instances.items():
+                if data.get("session_id") == session_id:
+                    target_id = i_id
+                    break
+        if target_id is not None:
+            return await self.close_instance(target_id, keep=keep, timeout=timeout)
+        return False
+
+    @classmethod
+    async def find_and_close_session_browser(
+        cls,
+        session_id: str,
+        keep: bool = True,
+        timeout: float = 15.0,
+        manager: Optional["BrowserManager"] = None,
+    ) -> bool:
+        """Find and gracefully close the browser for a session across all managers."""
+        managers = []
+        if manager is not None:
+            managers.append(manager)
+        for m in list(getattr(cls, "_active_managers", [])):
+            if m not in managers:
+                managers.append(m)
+
+        for mgr in managers:
+            if await mgr.close_session(session_id, keep=keep, timeout=timeout):
+                return True
+
+        # Fallback: if browser process is recorded in session.json, wait or terminate
+        try:
+            from . import profiles
+            if profiles.session_exists(session_id):
+                sdata = profiles.load_session(session_id)
+                browser_pid = sdata.get("browser_pid")
+                if browser_pid and profiles.pid_alive(browser_pid):
+                    import psutil
+                    try:
+                        proc = psutil.Process(browser_pid)
+                        proc.terminate()
+                        await asyncio.to_thread(proc.wait, timeout)
+                        return True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return False
 
     def add_close_listener(self, listener: Callable[[str], Awaitable[Any]]) -> None:
         """
