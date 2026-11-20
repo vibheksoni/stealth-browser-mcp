@@ -24,8 +24,8 @@ then a download path must stay under the data directory.
 A loopback bind behind a reverse proxy counts as off loopback. Do not set
 `--allowed-host` or `--allowed-origin`, and do not set
 `STEALTH_ALLOW_CODE_HOOKS`, `STEALTH_ALLOW_RAW_CDP`,
-`STEALTH_ALLOW_ATTACH`, `STEALTH_ALLOW_REMOTE_ATTACH`, or
-`STEALTH_ALLOW_SEED_PASSWORDS`, if a proxy will forward to this server.
+`STEALTH_ALLOW_ATTACH`, `STEALTH_ALLOW_REMOTE_ATTACH`,
+`STEALTH_ALLOW_SEED_PASSWORDS`, or `STEALTH_ALLOW_SEED_REFRESH`, if a proxy will forward to this server.
 Those flags are also ignored on a request that carries `X-Forwarded-For`
 or `Forwarded`.
 
@@ -35,7 +35,11 @@ refused; the server will not auto-generate a token for a non-loopback bind.
 Generated token files are deleted when the server shuts down.
 
 Idle MCP sessions are closed after `STEALTH_MCP_SESSION_TTL` seconds of no
-requests (default 600). Set it to 0 to disable that expiry. `refresh_seed`
-with `include_passwords` or `include_cards` requires
-`STEALTH_ALLOW_SEED_PASSWORDS=1` and, in HTTP mode, a session that already
-owns a browser instance.
+requests (default 600). Set it to 0 to disable that expiry. `refresh_seed` from a real browser profile or `source_dir` requires
+`STEALTH_ALLOW_SEED_REFRESH=1` in HTTP mode; the flag is refused off
+loopback and behind a proxy. `include_passwords` or `include_cards` also
+requires `STEALTH_ALLOW_SEED_PASSWORDS=1`. In multi-client HTTP, every
+session holds the same token, so these flags plus loopback and a
+non-proxied request are the real owner control, not "owns a browser".
+Seeds are a shared, machine-level namespace: any session can spawn a seed
+another session saved.

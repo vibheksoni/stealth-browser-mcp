@@ -248,7 +248,7 @@ class SeedPasswordFlagTests(unittest.IsolatedAsyncioTestCase):
     async def test_include_passwords_http_requires_owned_instance(self) -> None:
         server._HTTP_MODE = True
         try:
-            with mock.patch.dict(os.environ, {"STEALTH_ALLOW_SEED_PASSWORDS": "1"}):
+            with mock.patch.dict(os.environ, {"STEALTH_ALLOW_SEED_PASSWORDS": "1", "STEALTH_ALLOW_SEED_REFRESH": "1"}):
                 with mock.patch(
                     "stealth_browser_mcp.server.get_current_mcp_session_id",
                     return_value="session-B",

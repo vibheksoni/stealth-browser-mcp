@@ -356,7 +356,8 @@ These are environment variables for the MCP server process. Set them in your she
 | `STEALTH_ALLOW_REMOTE_ATTACH` | unset | Allow `attach_browser` to a non-loopback host. Off by default. Ignored when HTTP is bound off loopback. In HTTP mode, `STEALTH_ALLOW_ATTACH=1` is also required. |
 | `STEALTH_EXPORT_DIRS` | unset | Extra directories `write` paths may use (screenshots, exports). `BROWSER_FILE_UPLOAD_ALLOWED_DIRS` is read-only and does not widen writes. |
 | `STEALTH_MCP_SESSION_TTL` | `600` | Seconds of HTTP inactivity before a session's browsers are closed. `0` disables this expiry. |
-| `STEALTH_ALLOW_SEED_PASSWORDS` | unset | Allow `refresh_seed(include_passwords=true)` or `include_cards=true`. Off by default. In HTTP mode the calling session must own a browser instance. Refused off loopback and behind a proxy. |
+| `STEALTH_ALLOW_SEED_REFRESH` | unset | Allow `refresh_seed` in HTTP mode to copy from a real browser profile or `source_dir`. Off by default. Refused off loopback and behind a proxy. `source_dir` must stay under a known browser profile root. stdio does not need this flag. |
+| `STEALTH_ALLOW_SEED_PASSWORDS` | unset | Allow `refresh_seed(include_passwords=true)` or `include_cards=true`. Off by default. Also requires `STEALTH_ALLOW_SEED_REFRESH=1` in HTTP mode. Refused off loopback and behind a proxy. |
 
 **PowerShell example:**
 

@@ -147,6 +147,32 @@ def list_sources(
     }
 
 
+def allowed_seed_source_roots(platform=None, env=None):
+    """Return known browser user-data roots refresh_seed may copy from."""
+    import sys
+    plat = browser_sources.normalize_platform(platform or sys.platform)
+    env = env if env is not None else os.environ
+    roots = []
+    for family in browser_sources.BROWSER_FAMILIES:
+        try:
+            roots.append(os.path.realpath(browser_sources.user_data_root(family, plat, env)))
+        except Exception:
+            continue
+    return roots
+
+
+def is_allowed_seed_source_dir(path, platform=None, env=None) -> bool:
+    """True when path is a known browser profile root or a directory under one."""
+    try:
+        resolved = os.path.realpath(path)
+    except OSError:
+        return False
+    for root in allowed_seed_source_roots(platform=platform, env=env):
+        if resolved == root or resolved.startswith(root + os.sep):
+            return True
+    return False
+
+
 def refresh_seed(
     name: str,
     source_browser: str,

@@ -4228,6 +4228,24 @@ async def refresh_seed(
     Returns:
         Dict[str, Any]: Summary of the refresh operation (status, counts, bytes).
     """
+    if _HTTP_MODE and not parse_bool_env("STEALTH_ALLOW_SEED_REFRESH", default=False):
+        return {
+            "status": "error",
+            "error": (
+                "refresh_seed from a real browser profile is off by default in HTTP mode. "
+                "Set STEALTH_ALLOW_SEED_REFRESH=1 on a loopback bind. This flag is refused "
+                "off loopback and behind a proxy."
+            ),
+        }
+    if _HTTP_MODE and parse_bool_env("STEALTH_ALLOW_SEED_REFRESH", default=False):
+        from .http_auth import request_appears_proxied
+        if request_appears_proxied() or (
+            _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST)
+        ):
+            return {
+                "status": "error",
+                "error": "refresh_seed is not allowed on an exposed or proxied HTTP bind.",
+            }
     if include_passwords or include_cards:
         if not parse_bool_env("STEALTH_ALLOW_SEED_PASSWORDS", default=False):
             return {
@@ -4255,6 +4273,23 @@ async def refresh_seed(
                         "a browser instance."
                     ),
                 }
+    if _HTTP_MODE:
+        candidate = source_dir
+        looks_like_path = (
+            source_browser
+            and (
+                os.path.sep in source_browser
+                or (os.path.altsep and os.path.altsep in source_browser)
+                or os.path.isdir(source_browser)
+            )
+        )
+        if candidate is None and looks_like_path:
+            candidate = source_browser
+        if candidate is not None and not seed_tools.is_allowed_seed_source_dir(candidate):
+            return {
+                "status": "error",
+                "error": "source_dir must stay under a known browser profile root",
+            }
     return seed_tools.refresh_seed(
         name=name,
         source_browser=source_browser,
@@ -4559,10 +4594,12 @@ def main(argv: Optional[List[str]] = None) -> None:
                 parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False)
                 or parse_bool_env("STEALTH_ALLOW_ATTACH", default=False)
                 or parse_bool_env("STEALTH_ALLOW_SEED_PASSWORDS", default=False)
+                or parse_bool_env("STEALTH_ALLOW_SEED_REFRESH", default=False)
             ) and ((not is_loopback_host(args.host)) or allowed_hosts or allowed_origins):
                 raise ValueError(
-                    "STEALTH_ALLOW_ATTACH, STEALTH_ALLOW_REMOTE_ATTACH, and "
-                    "STEALTH_ALLOW_SEED_PASSWORDS are not allowed when HTTP is bound off "
+                    "STEALTH_ALLOW_ATTACH, STEALTH_ALLOW_REMOTE_ATTACH, "
+                    "STEALTH_ALLOW_SEED_PASSWORDS, and STEALTH_ALLOW_SEED_REFRESH are not "
+                    "allowed when HTTP is bound off "
                     "loopback or when --allowed-host / --allowed-origin is set (a reverse "
                     "proxy in front of a loopback bind counts as off loopback)."
                 )
