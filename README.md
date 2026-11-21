@@ -228,7 +228,7 @@ fastmcp install cursor src/server.py --with-requirements requirements.txt
 
 ### 3. HTTP on loopback (token required)
 
-HTTP is the multi-client transport. It always requires a bearer token and binds to `127.0.0.1` by default. Do not put a reverse proxy in front of a loopback bind, and do not bind off loopback unless you understand [docs/SECURITY.md](docs/SECURITY.md).
+HTTP is the multi-client transport. It always requires a bearer token and binds to `127.0.0.1` by default. Do not put a reverse proxy in front of a loopback bind, and do not bind off loopback unless you understand [docs/SECURITY.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/SECURITY.md).
 
 Write a token file yourself (mode 0600). The commands below print only the path, never the token:
 
