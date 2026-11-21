@@ -79,6 +79,13 @@ node, so a visible or offscreen Chrome can open its DevTools port.
 Input primitives for typing, paste, dropdowns, and chips. A lean
 default tool surface for agents. Bounded snapshots and page summaries.
 
+**RC note: offscreen window visibility on RDP.** `window="offscreen"` launches
+a real headed window at `(-32000, -32000)` (it does not pass `--headless`).
+Remote Desktop (RDP) sessions and window managers that clamp offscreen
+coordinates can cause this window to appear on screen. Unattended use, CI,
+and shared or remote desktops must explicitly request `window="headless"` or
+`headless=True`.
+
 ## How to run it
 
 See the Quickstart in `README.md` for stdio and for HTTP on loopback

@@ -2,6 +2,17 @@
 
 Stealth Browser MCP supports dedicated window modes so headful automation runs without popping up windows or stealing OS focus from the user.
 
+> **Important: Offscreen vs Headless**
+>
+> `offscreen` is a real headed window (not `--headless`). Some environments
+> (Remote Desktop / RDP, single-display setups, and some window managers)
+> ignore or clamp `--window-position=-32000,-32000`, so the window can appear on
+> screen. For unattended soaks, CI, and any shared or remote desktop, callers must
+> use `window="headless"` or `headless=True`.
+>
+> If headed execution is required when offscreen placement is unsupported or
+> clamped, `window="minimized"` is the headed alternative.
+
 ## Available Window Modes
 
 | Mode | Behavior | Focus Behavior | Typical Use Case |
