@@ -226,7 +226,42 @@ fastmcp install cursor src/server.py --with-requirements requirements.txt
 
 </details>
 
-### 3. Test it
+### 3. HTTP on loopback (token required)
+
+HTTP is the multi-client transport. It always requires a bearer token and binds to `127.0.0.1` by default. Do not put a reverse proxy in front of a loopback bind, and do not bind off loopback unless you understand [docs/SECURITY.md](docs/SECURITY.md).
+
+Write a token file yourself (mode 0600). The commands below print only the path, never the token:
+
+```bash
+mkdir -p ~/.config/stealth-browser-mcp
+python3 -c 'import os, secrets; p=os.path.expanduser("~/.config/stealth-browser-mcp/token"); open(p,"w").write(secrets.token_urlsafe(32)+"\n"); os.chmod(p,0o600); print(p)'
+```
+
+Start the server:
+
+```bash
+export STEALTH_MCP_TOKEN_FILE="$HOME/.config/stealth-browser-mcp/token"
+stealth-browser-mcp --transport http --host 127.0.0.1 --port 8000
+```
+
+From a clone, use `PYTHONPATH=src python -m stealth_browser_mcp --transport http --host 127.0.0.1 --port 8000` instead of the `stealth-browser-mcp` command.
+
+Call it with a Bearer token (read the file in your client; do not paste the value into a shell history or a ticket):
+
+```python
+from pathlib import Path
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+
+token = Path.home().joinpath(".config/stealth-browser-mcp/token").read_text().strip()
+client = Client("http://127.0.0.1:8000/mcp/", auth=BearerAuth(token))
+```
+
+`GET /healthz` is unauthenticated after the Host check and returns `{"ok":true}`.
+
+If no token is configured on a loopback bind, the server writes a 0600 file and prints only that path to stderr. A non-loopback bind will not auto-generate a token.
+
+### 4. Test it
 
 Restart your MCP client and ask your agent:
 
@@ -351,7 +386,7 @@ These are environment variables for the MCP server process. Set them in your she
 | `STEALTH_ALLOW_CODE_HOOKS` | unset | Allow `create_dynamic_hook` / `validate_hook_function` to compile caller Python on the server. Off by default. The server refuses to start if this is set and HTTP is bound off loopback. Use `create_simple_dynamic_hook` instead. |
 | `STEALTH_MANAGED_PROFILES_ROOT` | `data_dir()` | Directory that `spawn_browser(user_data_dir=...)` must stay under. Paths outside this root, including symlink escapes, are rejected. Also used as the default when a relative `user_data_dir` is given. |
 | `STEALTH_ALLOW_FILE_URLS` | unset | Allow `navigate` / `new_tab` to open `file:`, `chrome:`, or `devtools:` URLs. Off by default because those schemes can read host files or browser internals. |
-| `STEALTH_ALLOW_RAW_CDP` | unset | Allow `execute_cdp_command` to call methods outside the allowlist. Off by default. Navigation URLs still go through the file:/chrome: block. `setDownloadBehavior` still requires a `download_path` under the data directory. The server refuses to start if this is set and HTTP is bound off loopback. |
+| `STEALTH_ALLOW_RAW_CDP` | unset | Allow `execute_cdp_command` to call methods outside the allowlist. Off by default. Navigation URLs still go through the file:/chrome: block. `setDownloadBehavior` still requires a `download_path` under the caller's session workspace (or `data_dir()` in stdio). The server refuses to start if this is set and HTTP is bound off loopback. |
 | `STEALTH_ALLOW_ATTACH` | unset | Allow `attach_browser` in HTTP mode. Off by default. When on, attach is limited to a Chrome this server spawned for the calling session, or to an external browser this server does not already own. stdio mode does not need this flag. |
 | `STEALTH_ALLOW_REMOTE_ATTACH` | unset | Allow `attach_browser` to a non-loopback host. Off by default. Ignored when HTTP is bound off loopback. In HTTP mode, `STEALTH_ALLOW_ATTACH=1` is also required. |
 | `STEALTH_EXPORT_DIRS` | unset | Extra directories `write` paths may use (screenshots, exports). `BROWSER_FILE_UPLOAD_ALLOWED_DIRS` is read-only and does not widen writes. |
