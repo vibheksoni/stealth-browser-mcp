@@ -96,10 +96,37 @@ def get_session_download_dir(
     Returns:
         Path: Resolved download directory with mode 0700.
     """
-    if base_dir is not None:
+    try:
+        from .path_policy import session_workspace_dir
+        ws = session_workspace_dir()
+    except Exception:
+        ws = paths.data_dir()
+
+    try:
+        from .mcp_sessions import get_current_mcp_session_id
+        has_session = bool(get_current_mcp_session_id())
+    except Exception:
+        has_session = False
+
+    if base_dir is not None and not has_session:
         candidate = Path(base_dir).resolve() / "downloads"
+    elif base_dir is not None and has_session:
+        resolved_base = Path(base_dir).resolve()
+        try:
+            resolved_base.relative_to(ws.resolve())
+            candidate = resolved_base / "downloads"
+        except ValueError:
+            candidate = ws / "downloads" / instance_id
     else:
-        candidate = paths.data_dir() / "downloads" / instance_id
+        candidate = ws / "downloads" / instance_id
+
+    if has_session:
+        try:
+            candidate.resolve().relative_to(ws.resolve())
+        except ValueError:
+            safe_id = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(instance_id)) or "default"
+            candidate = ws / "downloads" / safe_id
+
     return ensure_download_directory(candidate)
 
 

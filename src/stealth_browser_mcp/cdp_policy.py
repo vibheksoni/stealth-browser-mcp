@@ -161,15 +161,42 @@ def _set_param(params: Dict[str, Any], value: Any, *names: str) -> None:
 
 
 def _confine_download_path(path: str) -> str:
+    if not path or not str(path).strip():
+        raise CdpPolicyError("download_path is required")
+
+    data_root = data_dir().resolve()
+    try:
+        from .mcp_sessions import get_current_mcp_session_id
+        sid = get_current_mcp_session_id()
+    except Exception:
+        sid = None
+
+    if sid:
+        from .path_policy import session_workspace_dir
+        target_root = session_workspace_dir().resolve()
+    else:
+        target_root = data_root
+
     raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        raw = target_root / raw
+
     try:
         resolved = raw.resolve()
-        root = data_dir().resolve()
-        resolved.relative_to(root)
+        resolved.relative_to(data_root)
     except (OSError, ValueError) as exc:
         raise CdpPolicyError(
             "download_path must be under the data directory ({}).".format(data_dir())
         ) from exc
+
+    if sid:
+        try:
+            resolved.relative_to(target_root)
+        except (OSError, ValueError) as exc:
+            raise CdpPolicyError(
+                "download_path must be under the session workspace ({}).".format(target_root)
+            ) from exc
+
     return str(resolved)
 
 
