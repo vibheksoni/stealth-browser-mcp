@@ -4294,6 +4294,26 @@ async def refresh_seed(
                 "status": "error",
                 "error": "source_dir must stay under a known browser profile root",
             }
+        if profile is not None:
+            if not seed_tools.is_safe_profile_arg(profile):
+                return {
+                    "status": "error",
+                    "error": seed_tools.GENERIC_PROFILE_ERROR,
+                }
+            resolved_source = seed_tools.resolve_source_root(source_browser, source_dir)
+            if resolved_source is not None and os.path.isdir(resolved_source):
+                p_dir = os.path.join(resolved_source, profile)
+                resolved_root = os.path.realpath(resolved_source)
+                resolved_p = os.path.realpath(p_dir)
+                if (
+                    not seed_tools.is_under_dir(resolved_p, resolved_root)
+                    or not seed_tools.is_allowed_seed_source_dir(resolved_p)
+                    or not os.path.isdir(p_dir)
+                ):
+                    return {
+                        "status": "error",
+                        "error": seed_tools.GENERIC_PROFILE_ERROR,
+                    }
     return seed_tools.refresh_seed(
         name=name,
         source_browser=source_browser,

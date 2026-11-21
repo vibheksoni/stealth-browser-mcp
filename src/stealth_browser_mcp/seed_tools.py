@@ -173,6 +173,70 @@ def is_allowed_seed_source_dir(path, platform=None, env=None) -> bool:
     return False
 
 
+GENERIC_PROFILE_ERROR = "Profile directory does not exist or is not allowed"
+
+
+def is_safe_profile_arg(profile: Any) -> bool:
+    """Check if profile argument is non-empty, relative, and has no path separators or '..'."""
+    if not isinstance(profile, str) or not profile.strip():
+        return False
+    if "\x00" in profile:
+        return False
+    if os.path.isabs(profile) or profile.startswith("/") or profile.startswith("\\"):
+        return False
+    if len(profile) >= 2 and profile[1] == ":":
+        return False
+    if "/" in profile or "\\" in profile or os.path.sep in profile:
+        return False
+    if os.path.altsep and os.path.altsep in profile:
+        return False
+    if ".." in profile:
+        return False
+    if profile.strip() in (".", ".."):
+        return False
+    return True
+
+
+def is_under_dir(child: str, parent: str) -> bool:
+    """Require realpath child to stay strictly under realpath parent."""
+    try:
+        resolved_child = os.path.realpath(child)
+        resolved_parent = os.path.realpath(parent)
+        if resolved_child == resolved_parent:
+            return False
+        rel = os.path.relpath(resolved_child, resolved_parent)
+        if rel.startswith("..") or rel == "." or os.path.isabs(rel):
+            return False
+        return resolved_child.startswith(resolved_parent + os.sep)
+    except (ValueError, OSError):
+        return False
+
+
+def resolve_source_root(
+    source_browser: str,
+    source_dir: Optional[str] = None,
+    platform: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
+    """Resolve the user-data root for a given source_browser and source_dir."""
+    if source_dir is not None:
+        return os.path.abspath(source_dir)
+    if (
+        os.path.isdir(source_browser)
+        or (os.path.sep in source_browser)
+        or (os.path.altsep and os.path.altsep in source_browser)
+    ):
+        return os.path.abspath(source_browser)
+    plat = browser_sources.normalize_platform(platform or sys.platform)
+    family = source_browser.lower() if source_browser else "chrome"
+    if family not in browser_sources.BROWSER_FAMILIES:
+        return None
+    try:
+        return browser_sources.user_data_root(family, plat, env)
+    except Exception:
+        return None
+
+
 def refresh_seed(
     name: str,
     source_browser: str,
@@ -263,8 +327,24 @@ def refresh_seed(
     # Determine profile subdirectory
     profile_dir = None
     if profile is not None:
+        if not is_safe_profile_arg(profile):
+            return {
+                "status": "error",
+                "error": GENERIC_PROFILE_ERROR,
+            }
         profile_subdir = profile
         profile_dir = os.path.join(resolved_source_dir, profile_subdir)
+        resolved_root = os.path.realpath(resolved_source_dir)
+        resolved_profile_dir = os.path.realpath(profile_dir)
+        if (
+            not is_under_dir(resolved_profile_dir, resolved_root)
+            or not is_allowed_seed_source_dir(resolved_profile_dir, platform=platform, env=env)
+            or not os.path.isdir(profile_dir)
+        ):
+            return {
+                "status": "error",
+                "error": GENERIC_PROFILE_ERROR,
+            }
     else:
         ls_path = os.path.join(resolved_source_dir, browser_sources.LOCAL_STATE_FILE)
         profile_subdir = None
@@ -273,11 +353,11 @@ def refresh_seed(
                 with open(ls_path, "r", encoding="utf-8", errors="replace") as handle:
                     ls_text = handle.read()
                 last_used = browser_sources.last_used_profile(ls_text)
-                if last_used and os.path.isdir(os.path.join(resolved_source_dir, last_used)):
+                if last_used and is_safe_profile_arg(last_used) and os.path.isdir(os.path.join(resolved_source_dir, last_used)):
                     profile_subdir = last_used
                 else:
                     for candidate in browser_sources.parse_profiles_from_local_state(ls_text):
-                        if os.path.isdir(os.path.join(resolved_source_dir, candidate)):
+                        if is_safe_profile_arg(candidate) and os.path.isdir(os.path.join(resolved_source_dir, candidate)):
                             profile_subdir = candidate
                             break
             except Exception:
@@ -295,11 +375,25 @@ def refresh_seed(
         if profile_subdir and profile_dir is None:
             profile_dir = os.path.join(resolved_source_dir, profile_subdir)
 
-    if not profile_dir or not os.path.isdir(profile_dir):
-        return {
-            "status": "error",
-            "error": "Profile directory does not exist: {}".format(profile_dir or resolved_source_dir),
-        }
+        if not profile_dir or not os.path.isdir(profile_dir):
+            return {
+                "status": "error",
+                "error": GENERIC_PROFILE_ERROR,
+            }
+
+        resolved_root = os.path.realpath(resolved_source_dir)
+        resolved_profile_dir = os.path.realpath(profile_dir)
+        is_under_or_root = (resolved_profile_dir == resolved_root) or is_under_dir(resolved_profile_dir, resolved_root)
+        if not is_under_or_root:
+            return {
+                "status": "error",
+                "error": GENERIC_PROFILE_ERROR,
+            }
+        if is_allowed_seed_source_dir(resolved_root, platform=platform, env=env) and not is_allowed_seed_source_dir(resolved_profile_dir, platform=platform, env=env):
+            return {
+                "status": "error",
+                "error": GENERIC_PROFILE_ERROR,
+            }
 
     options = sm.SeedOptions(
         include_passwords=include_passwords,
