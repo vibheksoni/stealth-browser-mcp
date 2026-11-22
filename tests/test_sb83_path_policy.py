@@ -97,7 +97,7 @@ class PathConfinementTests(unittest.TestCase):
         dest = self.root / "exports" / "ok.json"
         written = write_private_text(dest, "{\"ok\": true}")
         self.assertTrue(written.is_file())
-        self.assertEqual(written.parent, (self.root / "exports"))
+        self.assertEqual(written.parent.resolve(), (self.root / "exports").resolve())
         if os.name == "posix":
             self.assertEqual(stat.S_IMODE(written.stat().st_mode), 0o600)
 

@@ -206,7 +206,11 @@ class TokenAndWebsocketTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "element_clones" / "el.json"
             write_mode_0600(dest, "{\"ok\": true}")
-            self.assertEqual(stat.S_IMODE(dest.stat().st_mode), 0o600)
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(dest.stat().st_mode), 0o600)
+            else:
+                self.assertTrue(dest.is_file())
+                self.assertTrue(os.access(dest, os.R_OK))
 
 
 class SessionExpiryTests(unittest.IsolatedAsyncioTestCase):

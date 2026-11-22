@@ -101,7 +101,7 @@ def _read_token_file(path: Path) -> str:
         ) from exc
 
     if stat.S_ISLNK(lstat.st_mode):
-        if lstat.st_uid != os.getuid():
+        if hasattr(os, "getuid") and lstat.st_uid != os.getuid():
             raise TokenConfigError(
                 "STEALTH_MCP_TOKEN_FILE is a symlink not owned by the current user."
             )
@@ -114,7 +114,7 @@ def _read_token_file(path: Path) -> str:
 
     if not stat.S_ISREG(lstat.st_mode):
         raise TokenConfigError("STEALTH_MCP_TOKEN_FILE must be a regular file.")
-    if lstat.st_mode & 0o077:
+    if os.name == "posix" and (lstat.st_mode & 0o077):
         raise TokenConfigError(
             "STEALTH_MCP_TOKEN_FILE must not be group- or world-accessible (use mode 0600)."
         )
@@ -146,7 +146,10 @@ def write_generated_token_file(directory: Optional[Path] = None) -> Tuple[str, P
     path = Path(raw_path)
     token = secrets.token_urlsafe(32)
     try:
-        os.fchmod(fd, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:
+            os.chmod(path, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(token + "\n")
     except Exception:
@@ -301,7 +304,7 @@ def is_loopback_host(host: str) -> bool:
 
 
 def _parse_ip_literal(host: str):
-    """Parse a literal IP, including IPv4 decimal forms like 2130706433."""
+    """Parse a literal IP, including IPv4 decimal and abbreviated forms."""
     text = (host or "").strip().lower()
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
@@ -309,9 +312,23 @@ def _parse_ip_literal(host: str):
         return ipaddress.ip_address(text)
     except ValueError:
         pass
-    if text.isdigit():
+    parts = text.split(".")
+    if 1 <= len(parts) <= 4 and all(p.isdigit() for p in parts):
         try:
-            return ipaddress.IPv4Address(int(text))
+            nums = [int(p) for p in parts]
+            if len(nums) == 1:
+                val = nums[0]
+                if 0 <= val <= 0xFFFFFFFF:
+                    return ipaddress.IPv4Address(val)
+            elif len(nums) == 2:
+                if 0 <= nums[0] <= 255 and 0 <= nums[1] <= 0xFFFFFF:
+                    return ipaddress.IPv4Address((nums[0] << 24) | nums[1])
+            elif len(nums) == 3:
+                if 0 <= nums[0] <= 255 and 0 <= nums[1] <= 255 and 0 <= nums[2] <= 0xFFFF:
+                    return ipaddress.IPv4Address((nums[0] << 24) | (nums[1] << 16) | nums[2])
+            elif len(nums) == 4:
+                if all(0 <= n <= 255 for n in nums):
+                    return ipaddress.IPv4Address((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3])
         except (ValueError, OverflowError):
             return None
     return None

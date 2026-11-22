@@ -16,6 +16,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -258,34 +259,35 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
         self.assertEqual(res_abs["error"], generic_error)
 
     def test_refresh_seed_valid_profiles_accepted(self):
-        # Normal profile "Default" under chrome root
-        res_default = asyncio.run(
-            server.refresh_seed.fn(
-                name="seed-default",
-                source_browser="chrome",
-                profile="Default",
+        with mock.patch("stealth_browser_mcp.browser_sources.normalize_platform", return_value="linux"):
+            # Normal profile "Default" under chrome root
+            res_default = asyncio.run(
+                server.refresh_seed.fn(
+                    name="seed-default",
+                    source_browser="chrome",
+                    profile="Default",
+                )
             )
-        )
-        self.assertEqual(res_default["status"], "ok")
-        self.assertEqual(res_default["seed"], "seed-default")
-        self.assertEqual(res_default["profile"], "Default")
-        self.assertTrue(profiles.seed_exists("seed-default"))
-        self.assertTrue(seed_contains_marker("seed-default", "VALIDCOOKIES-chrome"))
-        self.assertFalse(seed_contains_marker("seed-default", "FAKECOOKIES-outside"))
+            self.assertEqual(res_default["status"], "ok")
+            self.assertEqual(res_default["seed"], "seed-default")
+            self.assertEqual(res_default["profile"], "Default")
+            self.assertTrue(profiles.seed_exists("seed-default"))
+            self.assertTrue(seed_contains_marker("seed-default", "VALIDCOOKIES-chrome"))
+            self.assertFalse(seed_contains_marker("seed-default", "FAKECOOKIES-outside"))
 
-        # Normal profile "Profile 1" under chrome root
-        res_p1 = asyncio.run(
-            server.refresh_seed.fn(
-                name="seed-p1",
-                source_browser="chrome",
-                profile="Profile 1",
+            # Normal profile "Profile 1" under chrome root
+            res_p1 = asyncio.run(
+                server.refresh_seed.fn(
+                    name="seed-p1",
+                    source_browser="chrome",
+                    profile="Profile 1",
+                )
             )
-        )
-        self.assertEqual(res_p1["status"], "ok")
-        self.assertEqual(res_p1["seed"], "seed-p1")
-        self.assertEqual(res_p1["profile"], "Profile 1")
-        self.assertTrue(profiles.seed_exists("seed-p1"))
-        self.assertTrue(seed_contains_marker("seed-p1", "VALIDCOOKIES-profile1"))
+            self.assertEqual(res_p1["status"], "ok")
+            self.assertEqual(res_p1["seed"], "seed-p1")
+            self.assertEqual(res_p1["profile"], "Profile 1")
+            self.assertTrue(profiles.seed_exists("seed-p1"))
+            self.assertTrue(seed_contains_marker("seed-p1", "VALIDCOOKIES-profile1"))
 
     def test_seed_tools_direct_enforces_confinement(self):
         # Direct calls to seed_tools.refresh_seed (defense in depth)
@@ -293,6 +295,7 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
             name="dir-f1",
             source_browser="chrome",
             profile="../../../outside/Default",
+            platform="linux",
         )
         self.assertEqual(res_direct_traversal["status"], "error")
         self.assertFalse(seed_contains_marker("dir-f1", "FAKECOOKIES-outside"))
@@ -301,6 +304,7 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
             name="dir-f2",
             source_browser="chrome",
             profile=str(self.outside_dir),
+            platform="linux",
         )
         self.assertEqual(res_direct_abs["status"], "error")
         self.assertFalse(seed_contains_marker("dir-f2", "FAKECOOKIES-outside"))
@@ -309,6 +313,7 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
             name="dir-f-dotdot",
             source_browser="chrome",
             profile="../x",
+            platform="linux",
         )
         self.assertEqual(res_direct_dotdot["status"], "error")
 
@@ -316,6 +321,7 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
             name="dir-f-abs",
             source_browser="chrome",
             profile="/abs",
+            platform="linux",
         )
         self.assertEqual(res_direct_slash_abs["status"], "error")
 
@@ -323,6 +329,7 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
             name="dir-f3",
             source_browser="chrome",
             profile="nonexistent-probe",
+            platform="linux",
         )
         self.assertEqual(res_direct_missing["status"], "error")
 
@@ -335,6 +342,7 @@ class TestSB96SeedProfileConfinement(unittest.TestCase):
             name="dir-valid",
             source_browser="chrome",
             profile="Default",
+            platform="linux",
         )
         self.assertEqual(res_direct_valid["status"], "ok")
         self.assertTrue(seed_contains_marker("dir-valid", "VALIDCOOKIES-chrome"))

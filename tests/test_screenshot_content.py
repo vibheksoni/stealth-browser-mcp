@@ -166,7 +166,10 @@ class ScreenshotContentTests(unittest.TestCase):
         result = self.call(file_path=str(target))
         self.assertFalse(result.isError)
         self.assertTrue(target.is_file())
-        self.assertIn(str(target), result.content[0].text)
+        self.assertTrue(
+            str(target.resolve()) in result.content[0].text
+            or str(target) in result.content[0].text
+        )
         self.assertNotIn("Read tool", result.content[0].text)
 
     def test_invalid_format_fails_before_capture(self):

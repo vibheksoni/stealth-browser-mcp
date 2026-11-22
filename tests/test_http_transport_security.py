@@ -87,6 +87,7 @@ class TokenFilePolicyTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    @unittest.skipIf(os.name != "posix", "POSIX file permission bits only")
     def test_group_readable_token_file_raises(self) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False) as handle:
             handle.write("secret-file-token\n")
@@ -119,8 +120,12 @@ class TokenFilePolicyTests(unittest.TestCase):
             text = stderr.getvalue()
             self.assertIn(str(path), text)
             self.assertNotIn(token, text)
-            mode = path.stat().st_mode
-            self.assertEqual(mode & 0o777, 0o600)
+            if os.name == "posix":
+                mode = path.stat().st_mode
+                self.assertEqual(mode & 0o777, 0o600)
+            else:
+                self.assertTrue(path.is_file())
+                self.assertTrue(os.access(path, os.R_OK))
             self.assertEqual(path.read_text(encoding="utf-8").strip(), token)
         finally:
             path.unlink(missing_ok=True)

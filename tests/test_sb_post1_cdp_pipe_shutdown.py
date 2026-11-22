@@ -41,6 +41,10 @@ from stealth_browser_mcp.cdp_pipe import (
 )
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "asyncio add_reader is not implemented for pipe fds on the Windows ProactorEventLoop",
+)
 class PipeShutdownTests(unittest.IsolatedAsyncioTestCase):
     """Exercise the reader shutdown path against a real pipe fd."""
 
@@ -242,6 +246,10 @@ class PipeChildFdSurvivalTests(unittest.TestCase):
             preexec_fn=preexec_fn,
         )
 
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "preexec_fn and pass_fds are Unix-only",
+    )
     def test_child_fds_survive_exec(self) -> None:
         for child_fd in CHILD_CDP_FDS:
             if not _fd_is_open(child_fd):

@@ -16,6 +16,7 @@ import asyncio
 import functools
 import json
 import os
+import sys
 import unittest
 from unittest import IsolatedAsyncioTestCase
 
@@ -145,6 +146,10 @@ class FakePipe:
                 pass
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "asyncio add_reader is not implemented for pipe fds on the Windows ProactorEventLoop",
+)
 class PipeClientTransportTests(IsolatedAsyncioTestCase):
     async def _client(self):
         fake = FakePipe()
@@ -191,6 +196,10 @@ class PipeClientTransportTests(IsolatedAsyncioTestCase):
         self.assertEqual(frame["method"], "Page.frameNavigated")
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "asyncio add_reader is not implemented for pipe fds on the Windows ProactorEventLoop",
+)
 class PipeWebSocketAdapterTests(IsolatedAsyncioTestCase):
     @guarded
     async def test_attributes_and_send_recv(self):
