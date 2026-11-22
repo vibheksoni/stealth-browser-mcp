@@ -15,20 +15,29 @@ from __future__ import annotations
 import asyncio
 import os
 import select
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from typing import Optional
+from unittest.mock import patch
 
+import nodriver as uc
+
+from stealth_browser_mcp import browser_launcher
 from stealth_browser_mcp.browser_launcher import (
     CHILD_CDP_FDS,
     _fd_is_open,
     PipeBrowser,
+    launch_browser,
     prepare_child_pipe_launch,
 )
 from stealth_browser_mcp.cdp_pipe import (
     CdpPipeError,
     PipeCDPClient,
     PipeDescriptors,
+    open_chrome_pipe,
 )
 
 
@@ -282,6 +291,180 @@ class PipeChildFdSurvivalTests(unittest.TestCase):
                     os.close(fd)
                 except OSError:
                     pass
+
+
+class DistinctPipeBrowserError(Exception):
+    """Sentinel exception to verify original exception surfaces on PipeBrowser failure."""
+
+
+class FakeChildProcess:
+    """Asyncio subprocess stub to verify process termination and reaping without Chrome."""
+
+    def __init__(self, pid: int = 42424):
+        self.pid = pid
+        self.returncode: Optional[int] = None
+        self.terminated = False
+        self.killed = False
+        self.reaped = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        self.reaped = True
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def poll(self) -> Optional[int]:
+        return self.returncode
+
+
+class PipeBrowserEarlyFailureTests(unittest.IsolatedAsyncioTestCase):
+    """SB-POST-2: verify no NameError, no fd leak, and child reaped if PipeBrowser fails."""
+
+    async def test_pipe_browser_init_failure_cleans_up_and_reraises(self) -> None:
+        orig_transport = os.environ.get("STEALTH_CDP_TRANSPORT")
+        os.environ["STEALTH_CDP_TRANSPORT"] = "pipe"
+        self.addCleanup(
+            lambda: os.environ.pop("STEALTH_CDP_TRANSPORT", None)
+            if orig_transport is None
+            else os.environ.__setitem__("STEALTH_CDP_TRANSPORT", orig_transport)
+        )
+
+        config = uc.Config(
+            headless=True,
+            browser_executable_path="/bin/true",
+        )
+        temp_dir = config.user_data_dir
+        self.assertFalse(config.uses_custom_data_dir)
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+
+        fake_proc = FakeChildProcess()
+        captured_descriptors: list = []
+        real_open_pipe = open_chrome_pipe
+
+        def capturing_open_pipe():
+            descs = real_open_pipe()
+            captured_descriptors.append(descs)
+            return descs
+
+        async def fake_subprocess_exec(*args, **kwargs):
+            return fake_proc
+
+        with patch.object(
+            browser_launcher, "open_chrome_pipe", side_effect=capturing_open_pipe
+        ), patch(
+            "asyncio.create_subprocess_exec", side_effect=fake_subprocess_exec
+        ), patch.object(
+            browser_launcher,
+            "PipeBrowser",
+            side_effect=DistinctPipeBrowserError("synthetic PipeBrowser init failure"),
+        ):
+            with self.assertRaises(DistinctPipeBrowserError) as cm:
+                await launch_browser(config, timeout=5.0)
+
+        # 1. Assert the original exception surfaced, not NameError or UnboundLocalError
+        self.assertIsInstance(cm.exception, DistinctPipeBrowserError)
+        self.assertFalse(issubclass(type(cm.exception), NameError))
+
+        # 2. Assert no leaked pipe fds (the descriptor fds are closed)
+        self.assertEqual(len(captured_descriptors), 1, "Descriptors should be captured")
+        descs = captured_descriptors[0]
+        for fd in (descs.command_r, descs.command_w, descs.response_r, descs.response_w):
+            self.assertFalse(
+                _fd_is_open(fd), f"Descriptor fd {fd} must be closed after failure"
+            )
+
+        # 3. Assert fake process was stopped (terminate/kill or returncode set) and reaped
+        self.assertTrue(
+            fake_proc.terminated or fake_proc.killed or fake_proc.returncode is not None,
+            "Process must be terminated or killed",
+        )
+        self.assertTrue(fake_proc.reaped, "Process wait() must be called to reap it")
+        self.assertIsNotNone(fake_proc.returncode, "Process returncode must be set")
+
+        # 4. Assert temporary user_data_dir was cleaned up when uses_custom_data_dir is False
+        self.assertFalse(
+            os.path.exists(temp_dir),
+            "Temporary user_data_dir should be removed on failure when uses_custom_data_dir is False",
+        )
+
+    @unittest.skipUnless(sys.platform != "win32", "preexec_fn and pass_fds are Unix-only")
+    async def test_pipe_browser_init_failure_with_child_process(self) -> None:
+        orig_transport = os.environ.get("STEALTH_CDP_TRANSPORT")
+        os.environ["STEALTH_CDP_TRANSPORT"] = "pipe"
+        self.addCleanup(
+            lambda: os.environ.pop("STEALTH_CDP_TRANSPORT", None)
+            if orig_transport is None
+            else os.environ.__setitem__("STEALTH_CDP_TRANSPORT", orig_transport)
+        )
+
+        config = uc.Config(
+            headless=True,
+            browser_executable_path=sys.executable,
+        )
+        temp_dir = config.user_data_dir
+        self.assertFalse(config.uses_custom_data_dir)
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+
+        captured_descriptors: list = []
+        real_open_pipe = open_chrome_pipe
+
+        def capturing_open_pipe():
+            descs = real_open_pipe()
+            captured_descriptors.append(descs)
+            return descs
+
+        real_create_subprocess = asyncio.create_subprocess_exec
+        spawned_procs: list = []
+
+        async def stubbed_subprocess_exec(*args, **kwargs):
+            proc = await real_create_subprocess(
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                close_fds=kwargs.get("close_fds", True),
+                pass_fds=kwargs.get("pass_fds", ()),
+                preexec_fn=kwargs.get("preexec_fn", None),
+            )
+            spawned_procs.append(proc)
+            return proc
+
+        with patch.object(
+            browser_launcher, "open_chrome_pipe", side_effect=capturing_open_pipe
+        ), patch(
+            "asyncio.create_subprocess_exec", side_effect=stubbed_subprocess_exec
+        ), patch.object(
+            browser_launcher,
+            "PipeBrowser",
+            side_effect=DistinctPipeBrowserError("synthetic PipeBrowser init failure"),
+        ):
+            with self.assertRaises(DistinctPipeBrowserError) as cm:
+                await launch_browser(config, timeout=5.0)
+
+        self.assertIsInstance(cm.exception, DistinctPipeBrowserError)
+        self.assertFalse(issubclass(type(cm.exception), NameError))
+        self.assertEqual(len(spawned_procs), 1)
+        child_proc = spawned_procs[0]
+        self.assertIsNotNone(child_proc.returncode, "Child process must have exited and been reaped")
+
+        self.assertEqual(len(captured_descriptors), 1)
+        descs = captured_descriptors[0]
+        for fd in (descs.command_r, descs.command_w, descs.response_r, descs.response_w):
+            self.assertFalse(
+                _fd_is_open(fd), f"Descriptor fd {fd} must be closed after failure"
+            )
+
+        self.assertFalse(os.path.exists(temp_dir))
 
 
 if __name__ == "__main__":

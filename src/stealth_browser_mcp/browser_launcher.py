@@ -476,6 +476,7 @@ async def launch_browser(
         )
         descriptors.close_parent_unused()
 
+        browser = None
         try:
             browser = PipeBrowser(config, descriptors)
             browser._process = process
@@ -483,7 +484,7 @@ async def launch_browser(
             await asyncio.wait_for(browser.start(), timeout=timeout)
             return browser
         except BaseException:
-            client = getattr(browser, "_client", None)
+            client = getattr(browser, "_client", None) if browser is not None else None
             if client is not None and hasattr(client, "sync_close"):
                 client.sync_close()
             else:
