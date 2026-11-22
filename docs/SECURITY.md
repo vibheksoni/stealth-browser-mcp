@@ -11,11 +11,23 @@ local user, or another process in the same network namespace, can attach
 to that port and drive the browser.
 
 Do not run this server on a shared login or a shared netns.
-`--remote-debugging-pipe` would close that gap, but nodriver does not
-support it today without a large rewrite, so the port remains
-loopback-only and is documented here rather than treated as a release
-blocker. Attaching to a browser that is already running still needs the
-port.
+Attaching to a browser that is already running still needs the port.
+
+An opt-in transport closes this gap for browsers this server spawns.
+Set STEALTH_CDP_TRANSPORT=pipe to launch spawned Chrome with
+--remote-debugging-pipe instead of a loopback --remote-debugging-port
+(see src/stealth_browser_mcp/cdp_pipe.py). CDP then runs over inherited
+pipes and no DevTools TCP port is opened. The loopback port stays the
+default and STEALTH_CDP_TRANSPORT unset, empty, or "port" keeps that
+behavior unchanged. Attaching to an already-running external browser
+still needs the port.
+
+Status: opt-in and working. The transport runs CDP over inherited pipes,
+shuts down cleanly on Chrome EOF (unregistering the read fd and failing
+in-flight calls instead of spinning the event loop), and opens no DevTools
+TCP port. A gated real headless test (tests/test_sb_post1_cdp_pipe_real.py,
+run with STEALTH_BROWSER_TESTS=1) verified the launch, the absence of a
+DevTools port, and a successful navigation. Verified 2026-11-21.
 
 ## HTTP
 
