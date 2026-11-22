@@ -1,12 +1,13 @@
 """Chrome process launch with a patient DevTools handshake and no leaked processes."""
 
 import asyncio
+import inspect
 import os
 import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import nodriver as uc
 import psutil
@@ -109,6 +110,72 @@ def _read_active_port(profile_dir: Path) -> Optional[int]:
         return None
 
 
+def clear_profile_locks(user_data_dir: Optional[Union[str, Path]]) -> None:
+    """Clear Chrome singleton lock, lockfile, and any file locks on profile."""
+    if not user_data_dir:
+        return
+    try:
+        p = Path(user_data_dir)
+        for name in ("SingletonLock", "lockfile", "parent.lock"):
+            target = p / name
+            try:
+                if target.is_symlink() or target.exists():
+                    target.unlink(missing_ok=True)
+            except Exception:
+                pass
+        for lock_path in (
+            p.with_suffix(".lock"),
+            p / ".lock",
+            Path(str(p) + ".lock"),
+            Path(str(p) + ".lock.holder"),
+        ):
+            try:
+                if lock_path.is_symlink() or lock_path.exists():
+                    lock_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def kill_process_tree(process: Any) -> None:
+    """Terminate and kill a process and all its children via psutil and process methods."""
+    pid = getattr(process, "pid", None)
+    if pid and isinstance(pid, int):
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    child.terminate()
+                except Exception:
+                    pass
+            if children:
+                try:
+                    _, alive = psutil.wait_procs(children, timeout=1.0)
+                    for child in alive:
+                        try:
+                            child.kill()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    for signal_name in ("terminate", "kill"):
+        signal_process = getattr(process, signal_name, None)
+        if signal_process is None:
+            continue
+        try:
+            signal_process()
+            break
+        except ProcessLookupError:
+            break
+        except Exception:
+            continue
+
+
 async def _stop_process(process: Any, browser: Optional[Any] = None) -> None:
     """
     Terminate a process, killing it if it does not exit in time.
@@ -133,9 +200,11 @@ async def _stop_process(process: Any, browser: Optional[Any] = None) -> None:
             descriptors.close()
 
     if getattr(process, "returncode", None) is not None:
+        kill_process_tree(process)
         await _shutdown()
         return
     if hasattr(process, "poll") and process.poll() is not None:
+        kill_process_tree(process)
         await _shutdown()
         return
 
@@ -143,36 +212,27 @@ async def _stop_process(process: Any, browser: Optional[Any] = None) -> None:
         try:
             await asyncio.wait_for(browser.connection.send(uc.cdp.browser.close()), 5.0)
             if hasattr(process, "wait"):
-                wait_res = process.wait()
-                if asyncio.iscoroutine(wait_res):
-                    await asyncio.wait_for(wait_res, 10.0)
+                wait_fn = getattr(process, "wait")
+                if inspect.iscoroutinefunction(wait_fn):
+                    await asyncio.wait_for(wait_fn(), 10.0)
                 else:
-                    await asyncio.to_thread(process.wait, 10.0)
+                    await asyncio.to_thread(wait_fn, 10.0)
+                kill_process_tree(process)
                 await _shutdown()
                 return
         except Exception:
             pass
 
-    for signal_name in ("terminate", "kill"):
-        signal_process = getattr(process, signal_name, None)
-        if signal_process is None:
-            continue
+    kill_process_tree(process)
+    if hasattr(process, "wait"):
         try:
-            signal_process()
-            if hasattr(process, "wait"):
-                wait_res = process.wait()
-                if asyncio.iscoroutine(wait_res):
-                    await asyncio.wait_for(wait_res, PROCESS_EXIT_TIMEOUT)
-                else:
-                    await asyncio.to_thread(process.wait, PROCESS_EXIT_TIMEOUT)
-            await _shutdown()
-            return
-        except ProcessLookupError:
-            await _shutdown()
-            return
+            wait_fn = getattr(process, "wait")
+            if inspect.iscoroutinefunction(wait_fn):
+                await asyncio.wait_for(wait_fn(), 2.0)
+            else:
+                await asyncio.to_thread(wait_fn, 2.0)
         except Exception:
-            continue
-
+            pass
     await _shutdown()
 
 
@@ -271,6 +331,8 @@ class PipeBrowser(Browser):
             if self.tabs:
                 break
             if self._process is not None and self._process.returncode is not None:
+                if self._process.returncode == 21:
+                    raise Exception("Browser exited during startup with code 21: profile in use")
                 raise Exception(
                     f"Browser exited during startup with code {self._process.returncode}"
                 )
@@ -423,6 +485,7 @@ async def launch_browser(
     config: uc.Config,
     timeout: float = DEVTOOLS_READY_TIMEOUT,
     args_modifier: Optional[Callable[[List[str]], List[str]]] = None,
+    on_process_started: Optional[Callable[[Any], None]] = None,
 ) -> Browser:
     """
     Start Chrome for a nodriver config and connect to it.
@@ -442,6 +505,8 @@ async def launch_browser(
         timeout (float): Seconds to wait for the DevTools endpoint.
         args_modifier (Optional[Callable[[List[str]], List[str]]]): Optional modifier
             to transform launch arguments after config() is evaluated.
+        on_process_started (Optional[Callable[[Any], None]]): Optional callback invoked
+            immediately after the Chrome subprocess is started.
 
     Returns:
         Browser: Connected nodriver browser whose `_process` is the launched Chrome.
@@ -475,6 +540,11 @@ async def launch_browser(
             preexec_fn=preexec_fn,
         )
         descriptors.close_parent_unused()
+        if on_process_started is not None:
+            try:
+                on_process_started(process)
+            except Exception:
+                pass
 
         browser = None
         try:
@@ -490,6 +560,10 @@ async def launch_browser(
             else:
                 descriptors.close()
             await _stop_process(process)
+            # Code 21 means another process still holds this profile.
+            # Do not unlink its SingletonLock.
+            if getattr(process, "returncode", None) != 21:
+                clear_profile_locks(config.user_data_dir)
             if not config.uses_custom_data_dir:
                 shutil.rmtree(config.user_data_dir, ignore_errors=True)
             raise
@@ -511,6 +585,11 @@ async def launch_browser(
         stderr=asyncio.subprocess.DEVNULL,
         close_fds=sys.platform != "win32",
     )
+    if on_process_started is not None:
+        try:
+            on_process_started(process)
+        except Exception:
+            pass
     try:
         deadline = time.monotonic() + timeout
         while not (
@@ -518,6 +597,8 @@ async def launch_browser(
             or await asyncio.to_thread(_is_listening, process.pid, config.port)
         ):
             if process.returncode is not None:
+                if process.returncode == 21:
+                    raise Exception("Browser exited during startup with code 21: profile in use")
                 raise Exception(f"Browser exited during startup with code {process.returncode}")
             if time.monotonic() >= deadline:
                 raise Exception(
@@ -534,6 +615,10 @@ async def launch_browser(
         return browser
     except BaseException:
         await _stop_process(process)
+        # Code 21 means another process still holds this profile.
+        # Do not unlink its SingletonLock.
+        if getattr(process, "returncode", None) != 21:
+            clear_profile_locks(config.user_data_dir)
         if not config.uses_custom_data_dir:
             shutil.rmtree(config.user_data_dir, ignore_errors=True)
         raise

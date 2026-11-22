@@ -352,6 +352,7 @@ def _register_manager_listeners() -> None:
     browser_manager.add_close_listener(page_bindings.forget_instance)
     browser_manager.add_close_listener(download_manager.forget_instance)
     browser_manager.add_close_listener(mcp_session_manager.on_instance_closed)
+    browser_manager.add_close_listener(browser_manager.clear_dialog_instance)
 
 
 _register_manager_listeners()
@@ -777,6 +778,51 @@ async def navigate(
         wait_until=wait_until,
         timeout=timeout,
         referrer=referrer,
+    )
+
+@section_tool("browser-management")
+async def get_dialogs(
+    instance_id: str,
+) -> List[Dict[str, Any]]:
+    """
+    List pending and recently handled JavaScript dialogs for a browser instance.
+
+    Args:
+        instance_id (str): Browser instance ID.
+
+    Returns:
+        List[Dict[str, Any]]: List of dialog dictionaries with type, message,
+            url, frame_id, policy_action, and pending/handled status.
+    """
+    return browser_manager.get_dialogs(instance_id)
+
+@section_tool("browser-management")
+async def handle_dialog(
+    instance_id: str,
+    accept: bool = True,
+    prompt_text: Optional[str] = None,
+    dialog_id: Optional[str] = None,
+    action: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Accept or dismiss a pending JavaScript dialog.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        accept (bool): True to accept (OK), False to dismiss (Cancel).
+        prompt_text (Optional[str]): Text to submit if the dialog is a prompt.
+        dialog_id (Optional[str]): Optional ID of a specific pending dialog.
+        action (Optional[str]): Optional action ('accept' or 'dismiss').
+
+    Returns:
+        Dict[str, Any]: Result indicating whether the dialog was handled.
+    """
+    return await browser_manager.handle_dialog(
+        instance_id=instance_id,
+        accept=accept,
+        prompt_text=prompt_text,
+        dialog_id=dialog_id,
+        action=action,
     )
 
 @section_tool("browser-management")

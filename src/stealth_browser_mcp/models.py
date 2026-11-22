@@ -111,6 +111,7 @@ class BrowserOptions(BaseModel):
     check_url: Optional[str] = Field(default=None, description="Optional URL to verify cookie carryover")
     keep: bool = Field(default=False, description="Keep session directory on close")
     cap: Optional[int] = Field(default=None, description="Maximum concurrent sessions cap")
+    spawn_timeout: Optional[float] = Field(default=None, description="Maximum timeout in seconds for spawning browser")
 
 
 class NavigationOptions(BaseModel):
