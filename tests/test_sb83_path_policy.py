@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.symlink_helper import create_symlink
+
 from stealth_browser_mcp.path_policy import (
     PathPolicyError,
     reject_blocked_url,
@@ -89,7 +91,7 @@ class PathConfinementTests(unittest.TestCase):
 
     def test_symlink_escape_rejected(self) -> None:
         link = self.root / "escape"
-        link.symlink_to("/etc")
+        create_symlink(link, "/etc", target_is_directory=True)
         with self.assertRaisesRegex(PathPolicyError, "must stay under"):
             resolve_managed_path(str(link / "hostname"))
 

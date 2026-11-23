@@ -240,9 +240,11 @@ class ToolSurfaceMiddleware(Middleware):
         self,
         core_tools: Iterable[str] = CORE_TOOLS,
         mode: Optional[str] = None,
+        cdp_tools: Optional[Iterable[str]] = None,
     ) -> None:
         self.core_tools: Set[str] = set(core_tools)
         self._mode = mode
+        self._cdp_tools: Optional[Set[str]] = set(cdp_tools) if cdp_tools is not None else None
         self._expanded: OrderedDict[str, Set[str]] = OrderedDict()
         self._max_sessions = 1024
 
@@ -250,12 +252,18 @@ class ToolSurfaceMiddleware(Middleware):
         if self._mode is not None:
             return self._mode
         env_mode = os.getenv("STEALTH_MCP_TOOLS", "").strip().lower()
-        if env_mode == "full":
-            return "full"
+        if env_mode in ("full", "core+cdp-functions"):
+            return env_mode
         return "core"
 
     def set_mode(self, mode: Optional[str]) -> None:
         self._mode = mode.strip().lower() if mode else None
+
+    def get_cdp_tools(self) -> Set[str]:
+        if self._cdp_tools is not None:
+            return self._cdp_tools
+        from . import server
+        return set(getattr(server, "SECTION_TOOLS", {}).get("cdp-functions", []))
 
     def get_expanded_categories(self, session_key: str) -> Set[str]:
         return self._expanded.get(session_key, set())
@@ -277,7 +285,8 @@ class ToolSurfaceMiddleware(Middleware):
         call_next: CallNext[mt.ListToolsRequest, List[Tool]],
     ) -> List[Tool]:
         tools = await call_next(context)
-        if self.get_mode() == "full":
+        mode = self.get_mode()
+        if mode == "full":
             return tools
 
         session_key = extract_session_key(context)
@@ -292,13 +301,15 @@ class ToolSurfaceMiddleware(Middleware):
             for name in names:
                 tool_to_cat[name] = cat
 
+        cdp_tool_names = self.get_cdp_tools() if mode == "core+cdp-functions" else set()
+
         filtered: List[Tool] = []
         for t in tools:
             name = getattr(t, "key", None) or getattr(t, "name", None)
             if not name:
                 filtered.append(t)
                 continue
-            if name in self.core_tools:
+            if name in self.core_tools or (mode == "core+cdp-functions" and name in cdp_tool_names):
                 filtered.append(t)
             else:
                 cat = tool_to_cat.get(name)

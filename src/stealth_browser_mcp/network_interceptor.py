@@ -22,6 +22,29 @@ MAX_STORED_BODY_BYTES = 64 * 1024 * 1024
 TEXT_RESOURCE_TYPES = {"document", "xhr", "fetch", "script", "eventsource"}
 BINARY_RESOURCE_TYPES = {"image", "media", "font", "websocket", "manifest"}
 INTERNAL_URL_PREFIXES = ("chrome://", "chrome-untrusted://", "chrome-extension://", "devtools://")
+BROWSER_BACKGROUND_DOMAINS = (
+    "assets.msn.com",
+    "ntp.msn.com",
+    "edge.microsoft.com",
+    "activity.windows.com",
+    "data.msn.com",
+    "config.edge.skype.com",
+    "browser.pipe.aria.microsoft.com",
+    "web.vortex.data.microsoft.com",
+    "clients2.google.com",
+    "optimizationguide-pa.googleapis.com",
+    "safebrowsing.googleapis.com",
+    "update.googleapis.com",
+)
+NON_PAGE_TARGET_TYPES = {
+    "service_worker",
+    "worker",
+    "shared_worker",
+    "background_page",
+    "browser",
+    "other",
+    "worklet",
+}
 TEXT_MIME_MARKERS = ("json", "text/", "javascript", "xml", "x-www-form-urlencoded", "graphql")
 
 
@@ -120,6 +143,42 @@ class NetworkInterceptor:
             debug_logger.log_error("network_interceptor", "setup_interception", e)
             raise Exception(f"Failed to setup network interception: {str(e)}")
 
+    @staticmethod
+    def _is_page_target(event: Any, request: Any = None) -> bool:
+        """Check if request event originates from a page target rather than browser background or worker."""
+        if getattr(event, "is_page_target", None) is False:
+            return False
+
+        target_type = getattr(event, "target_type", None)
+        if target_type is not None:
+            tt_str = str(target_type).strip().lower()
+            if tt_str in NON_PAGE_TARGET_TYPES or tt_str not in ("page", "iframe"):
+                return False
+
+        target = getattr(event, "target", None) or getattr(event, "target_info", None)
+        if target is not None:
+            t_type = getattr(target, "type_", getattr(target, "type", None))
+            if t_type is not None:
+                tt_str = str(t_type).strip().lower()
+                if tt_str in NON_PAGE_TARGET_TYPES or tt_str not in ("page", "iframe"):
+                    return False
+
+        req = request or getattr(event, "request", None)
+        url = getattr(req, "url", "")
+        if url.startswith(INTERNAL_URL_PREFIXES):
+            return False
+
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if any(host == bg or host.endswith("." + bg) for bg in BROWSER_BACKGROUND_DOMAINS):
+                return False
+        except Exception:
+            pass
+
+        return True
+
     async def _on_request(self, event, instance_id: str):
         """
         Handle request event.
@@ -130,7 +189,7 @@ class NetworkInterceptor:
         try:
             request_id = event.request_id
             request = event.request
-            if request.url.startswith(INTERNAL_URL_PREFIXES):
+            if not self._is_page_target(event, request):
                 return
             resource_type = event.type_.value if getattr(event, "type_", None) else None
 

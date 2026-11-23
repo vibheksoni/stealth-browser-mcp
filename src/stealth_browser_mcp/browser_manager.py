@@ -5,6 +5,7 @@ import json
 import asyncio
 import os
 import re
+import sys
 import time
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -936,11 +937,16 @@ class BrowserManager:
             attached=True,
         )
 
+        executable = check_browser_executable()
+        if not executable:
+            executable = sys.executable
+
         browser: Optional[Browser] = None
         try:
             config = uc.Config(
                 host=host,
                 port=port,
+                browser_executable_path=executable,
             )
 
             browser = await uc.Browser.create(config)
@@ -1244,15 +1250,17 @@ class BrowserManager:
         """
         connection = getattr(browser, "connection", None)
         process = getattr(browser, "_process", None)
-        if connection is not None:
+        process_already_exited = process is not None and getattr(process, "returncode", None) is not None
+
+        if connection is not None and not process_already_exited:
             handlers = getattr(connection, "handlers", {})
             for event_type in TARGET_UPDATE_EVENTS:
                 handlers.pop(event_type, None)
             try:
-                await asyncio.wait_for(connection.send(uc.cdp.browser.close()), CLOSE_STEP_TIMEOUT)
+                await asyncio.wait_for(connection.send(uc.cdp.browser.close()), min(CLOSE_STEP_TIMEOUT, process_exit_timeout))
                 if process is not None and getattr(process, "returncode", None) is None:
                     try:
-                        await asyncio.wait_for(process.wait(), process_exit_timeout)
+                        await asyncio.wait_for(process.wait(), min(CLOSE_STEP_TIMEOUT, process_exit_timeout))
                     except Exception:
                         pass
             except Exception:
@@ -1262,22 +1270,34 @@ class BrowserManager:
             for signal_process in (process.terminate, process.kill):
                 try:
                     signal_process()
-                    await asyncio.wait_for(process.wait(), PROCESS_EXIT_TIMEOUT)
+                    await asyncio.wait_for(process.wait(), min(CLOSE_STEP_TIMEOUT, process_exit_timeout))
                     break
                 except ProcessLookupError:
                     break
                 except Exception:
                     continue
 
-        connections = [getattr(tab, "disconnect", None) for tab in list(getattr(browser, "targets", []) or [])]
-        if connection is not None:
-            connections.append(connection.disconnect)
-        disconnects = [disconnect() for disconnect in connections if disconnect is not None]
-        if disconnects:
-            await asyncio.wait(
-                [asyncio.ensure_future(item) for item in disconnects],
-                timeout=CLOSE_STEP_TIMEOUT,
-            )
+        if not process_already_exited:
+            connections = [getattr(tab, "disconnect", None) for tab in list(getattr(browser, "targets", []) or [])]
+            if connection is not None and hasattr(connection, "disconnect"):
+                connections.append(connection.disconnect)
+            disconnects = []
+            for disconnect in connections:
+                if disconnect is not None:
+                    try:
+                        res = disconnect()
+                        if asyncio.iscoroutine(res):
+                            disconnects.append(res)
+                    except Exception:
+                        pass
+            if disconnects:
+                try:
+                    await asyncio.wait(
+                        [asyncio.ensure_future(item) for item in disconnects],
+                        timeout=min(1.0, CLOSE_STEP_TIMEOUT),
+                    )
+                except Exception:
+                    pass
         browser._process = None
         browser._process_pid = None
 

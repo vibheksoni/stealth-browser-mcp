@@ -278,11 +278,18 @@ def _compact_tool(tool: Any) -> None:
 
     prefix = _collapse_ws(_description_prefix(base))
     prefix = _cap_description(prefix)
-    if not prefix.endswith(INSTANCE_DEFAULT_NOTE):
+
+    params = getattr(tool, "parameters", None)
+    has_instance_id = False
+    if isinstance(params, dict):
+        properties = params.get("properties")
+        if isinstance(properties, dict) and "instance_id" in properties:
+            has_instance_id = True
+
+    if has_instance_id and not prefix.endswith(INSTANCE_DEFAULT_NOTE):
         prefix = prefix + INSTANCE_DEFAULT_NOTE
     tool.description = prefix
 
-    params = getattr(tool, "parameters", None)
     if not isinstance(params, dict):
         return
     params.pop("title", None)

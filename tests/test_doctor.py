@@ -208,6 +208,7 @@ class DoctorChecksTestCase(unittest.TestCase):
         check = doctor.run_checks(
             platform="win32",
             which_fn=lambda name: None,  # browser fail, keyring skipped
+            path_exists_fn=lambda path: False,  # do not probe the live Windows install paths
             seed_ages_fn=lambda: {},
             cap=4,
             live_session_count=1,

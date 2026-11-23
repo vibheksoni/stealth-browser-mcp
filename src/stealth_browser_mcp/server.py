@@ -4669,9 +4669,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     parser.add_argument(
         "--tools",
-        choices=["core", "full"],
+        choices=["core", "full", "core+cdp-functions"],
         default=None,
-        help="Tool visibility profile: 'core' (default) or 'full'. Visibility (--tools core|full) vs availability (--minimal, --xpool-safe, --disable-*). Also set via STEALTH_MCP_TOOLS.",
+        help="Tool visibility profile: 'core' (default), 'core+cdp-functions', or 'full'. Visibility (--tools core|core+cdp-functions|full) vs availability (--minimal, --xpool-safe, --disable-*). Also set via STEALTH_MCP_TOOLS.",
     )
     
     args = parser.parse_args(argv)
@@ -4735,7 +4735,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     tools_mode = args.tools
     if not tools_mode:
         env_mode = os.getenv("STEALTH_MCP_TOOLS", "").strip().lower()
-        if env_mode in {"core", "full"}:
+        if env_mode in {"core", "full", "core+cdp-functions"}:
             tools_mode = env_mode
         else:
             tools_mode = "core"

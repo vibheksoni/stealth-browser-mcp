@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.symlink_helper import create_symlink
+
 from stealth_browser_mcp.browser_args_policy import (
     BrowserArgsPolicyError,
     managed_profiles_root,
@@ -57,7 +59,7 @@ class UserDataDirTests(unittest.TestCase):
             root = Path(tmp) / "root"
             root.mkdir()
             link = root / "escape"
-            link.symlink_to("/etc")
+            create_symlink(link, "/etc", target_is_directory=True)
             with mock.patch.dict(os.environ, {"STEALTH_MANAGED_PROFILES_ROOT": str(root)}):
                 with self.assertRaisesRegex(BrowserArgsPolicyError, "symlink|managed profiles root"):
                     validate_user_data_dir(str(link))

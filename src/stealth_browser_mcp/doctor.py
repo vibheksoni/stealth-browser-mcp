@@ -57,6 +57,8 @@ def _check_browser_binaries(
     platform: str,
     which_fn: Callable[[str], Optional[str]],
     families: tuple = BROWSER_FAMILIES,
+    env: Optional[Dict[str, str]] = None,
+    path_exists_fn: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, Any]:
     """Report which browser families have a launchable executable.
 
@@ -65,18 +67,92 @@ def _check_browser_binaries(
         which_fn: Maps an executable name to a found path (or None). Tests
             inject a fake so no real PATH is searched.
         families: The families to probe; defaults to every supported family.
+        env: Optional environment mapping (e.g. for STEALTH_BROWSER_EXECUTABLE).
+        path_exists_fn: Optional callable to check executable file existence.
 
     Returns:
         A single check dict. ``ok`` when at least one family is found, else
         ``fail``. The detail lists the matched candidate per family.
     """
     platform = normalize_platform(platform)
+    effective_env = env if env is not None else os.environ
+    if path_exists_fn is None:
+        def _default_path_exists(p: str) -> bool:
+            try:
+                return os.path.isfile(p) and (platform == "windows" or os.access(p, os.X_OK))
+            except (OSError, PermissionError):
+                return False
+        path_exists_fn = _default_path_exists
+
     matched: Dict[str, Optional[str]] = {family: None for family in families}
+
+    override = (effective_env.get("STEALTH_BROWSER_EXECUTABLE") or "").strip()
+    if override and path_exists_fn(override):
+        override_lower = override.lower()
+        if "edge" in override_lower or "msedge" in override_lower:
+            matched["edge"] = override
+        elif "brave" in override_lower:
+            matched["brave"] = override
+        elif "chrome" in families:
+            matched["chrome"] = override
+        elif families:
+            matched[families[0]] = override
+
     for family in families:
+        if matched.get(family):
+            continue
         for candidate in binary_candidates(family):
-            if which_fn(candidate):
-                matched[family] = candidate
+            found_which = which_fn(candidate)
+            if found_which:
+                matched[family] = found_which
                 break
+
+    if platform == "windows":
+        windows_paths: Dict[str, List[str]] = {
+            "chrome": [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files\Chromium\Application\chromium.exe",
+            ],
+            "edge": [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            ],
+            "brave": [
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            ],
+        }
+        username = effective_env.get("USERNAME", "")
+        if username:
+            windows_paths["chrome"].append(
+                rf"C:\Users\{username}\AppData\Local\Google\Chrome\Application\chrome.exe"
+            )
+            windows_paths["edge"].append(
+                rf"C:\Users\{username}\AppData\Local\Microsoft\Edge\Application\msedge.exe"
+            )
+            windows_paths["brave"].append(
+                rf"C:\Users\{username}\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe"
+            )
+        localappdata = effective_env.get("LOCALAPPDATA", "")
+        if localappdata:
+            windows_paths["chrome"].append(
+                os.path.join(localappdata, r"Google\Chrome\Application\chrome.exe")
+            )
+            windows_paths["edge"].append(
+                os.path.join(localappdata, r"Microsoft\Edge\Application\msedge.exe")
+            )
+            windows_paths["brave"].append(
+                os.path.join(localappdata, r"BraveSoftware\Brave-Browser\Application\brave.exe")
+            )
+
+        for family in families:
+            if matched.get(family):
+                continue
+            for static_path in windows_paths.get(family, []):
+                if path_exists_fn(static_path):
+                    matched[family] = static_path
+                    break
+
     present = [family for family, path in matched.items() if path]
     detail = ", ".join(
         "{}={}".format(family, matched[family] if matched[family] else "none")
@@ -282,6 +358,7 @@ def run_checks(
     *,
     platform: Optional[str] = None,
     which_fn: Optional[Callable[[str], Optional[str]]] = None,
+    path_exists_fn: Optional[Callable[[str], bool]] = None,
     seed_ages_fn: Optional[Callable[[], Dict[str, int]]] = None,
     cap: Optional[int] = None,
     live_session_count: Optional[int] = None,
@@ -353,7 +430,12 @@ def run_checks(
     dbus_names = lambda: list(LIBSECRET_DBUS_NAMES) if _keyring_dbus_available() else []
 
     checks = [
-        _check_browser_binaries(platform, which_fn),
+        _check_browser_binaries(
+            platform,
+            which_fn,
+            env=env,
+            path_exists_fn=path_exists_fn,
+        ),
         _check_keyring(platform, which_fn, dbus_names),
         _check_seed_ages(seed_ages_fn()),
         _check_live_sessions(cap_value, live),

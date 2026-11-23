@@ -207,6 +207,10 @@ class TwoSubprocessTests(unittest.TestCase):
             self.holder_proc.kill()
             self.holder_proc.wait()
 
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and file_lock.is_pid_alive(holder_pid):
+            time.sleep(0.05)
+
         lock = file_lock.FileLock(self.path, timeout=2.0)
         self.assertFalse(lock.holder_alive())
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from unittest import mock
 
+from tests.symlink_helper import create_symlink
 from stealth_browser_mcp import http_auth
 
 
@@ -107,7 +108,7 @@ class TokenFilePolicyTests(unittest.TestCase):
             real.write_text("file-token-67890\n", encoding="utf-8")
             os.chmod(real, 0o600)
             link = Path(folder) / "link"
-            link.symlink_to(real)
+            create_symlink(link, real)
             os.environ[http_auth.STEALTH_MCP_TOKEN_FILE_ENV] = str(link)
             self.assertEqual(http_auth.get_mcp_token(), "file-token-67890")
 
