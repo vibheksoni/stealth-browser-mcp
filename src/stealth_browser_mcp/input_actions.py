@@ -861,20 +861,71 @@ async def resolve_frame_context(tab: Tab, frame: str) -> Optional[FrameContext]:
             pass
 
     target_tab = tab
+    candidates = []
     if hasattr(tab, "browser") and tab.browser and hasattr(tab.browser, "targets"):
-        for t in tab.browser.targets:
-            if getattr(t, "type_", None) == "iframe":
-                target_info = getattr(t, "target", None)
-                opener = getattr(target_info, "opener_frame_id", None) if target_info else None
-                t_url = getattr(t, "url", None) or (target_info.url if target_info else "")
-                t_id = getattr(t, "target_id", None) or (target_info.target_id if target_info else None)
-                if (frame_id and opener and str(opener) == frame_id) or \
-                   (frame_id and t_id and str(t_id) == frame_id) or \
-                   (frame and t_url and frame in t_url):
-                    target_tab = t
-                    if not frame_id:
-                        frame_id = str(opener or t_id or "")
-                    break
+        candidates.extend(tab.browser.targets)
+    if hasattr(tab, "targets") and isinstance(tab.targets, list):
+        candidates.extend(tab.targets)
+    if hasattr(tab, "attached_targets"):
+        att = tab.attached_targets
+        candidates.extend(att.values() if isinstance(att, dict) else att)
+    if hasattr(tab, "sessions"):
+        sess = tab.sessions
+        candidates.extend(sess.values() if isinstance(sess, dict) else sess)
+    if hasattr(tab, "auto_attached_sessions"):
+        aas = tab.auto_attached_sessions
+        candidates.extend(aas.values() if isinstance(aas, dict) else aas)
+    if hasattr(tab, "_attached_sessions"):
+        _att = tab._attached_sessions
+        candidates.extend(_att.values() if isinstance(_att, dict) else _att)
+
+    for t in candidates:
+        if t is tab:
+            continue
+        t_type = getattr(t, "type_", None) or getattr(t, "type", None)
+        target_info = getattr(t, "target", None) or getattr(t, "target_info", None)
+        if target_info and not t_type:
+            t_type = getattr(target_info, "type_", None) or getattr(target_info, "type", None)
+        opener = getattr(target_info, "opener_frame_id", None) if target_info else getattr(t, "opener_frame_id", None)
+        t_url = getattr(t, "url", None) or (getattr(target_info, "url", "") if target_info else "")
+        t_id = getattr(t, "target_id", None) or (getattr(target_info, "target_id", None) if target_info else None)
+        t_fid = getattr(t, "frame_id", None) or (getattr(target_info, "frame_id", None) if target_info else None)
+        s_id = getattr(t, "session_id", None)
+
+        matches = False
+        if frame_id and opener and str(opener) == str(frame_id):
+            matches = True
+        elif frame_id and t_id and str(t_id) == str(frame_id):
+            matches = True
+        elif frame_id and t_fid and str(t_fid) == str(frame_id):
+            matches = True
+        elif frame and t_url and frame in t_url:
+            matches = True
+        elif frame and t_id and str(t_id) == str(frame):
+            matches = True
+        elif frame and t_fid and str(t_fid) == str(frame):
+            matches = True
+        elif frame and s_id and str(s_id) == str(frame):
+            matches = True
+
+        if matches:
+            target_tab = t
+            if not frame_id:
+                frame_id = str(opener or t_fid or t_id or s_id or "")
+            break
+
+    if target_tab is tab and frame:
+        non_parent = [c for c in candidates if c is not tab]
+        if len(non_parent) == 1:
+            c = non_parent[0]
+            c_type = getattr(c, "type_", None) or getattr(c, "type", None)
+            target_info = getattr(c, "target", None) or getattr(c, "target_info", None)
+            if target_info and not c_type:
+                c_type = getattr(target_info, "type_", None) or getattr(target_info, "type", None)
+            if c_type == "iframe" or hasattr(c, "session_id") or getattr(c, "frame_id", None):
+                target_tab = c
+                if not frame_id:
+                    frame_id = str(getattr(c, "frame_id", None) or getattr(c, "session_id", None) or getattr(c, "target_id", None) or "")
 
     context_id: Optional[int] = None
     if frame_id:
@@ -1150,8 +1201,6 @@ async def call_on_node(tab: Tab, backend_node_id: int, function: str, *args: Any
         target_tab = tab
     if hasattr(tab, "browser") and tab.browser and hasattr(target_tab, "browser") and target_tab.browser and target_tab.browser is not tab.browser:
         target_tab = tab
-    if hasattr(tab, "browser") and tab.browser and not getattr(target_tab, "browser", None):
-        target_tab = tab
 
     resolve_kwargs: Dict[str, Any] = {
         "backend_node_id": cdp.dom.BackendNodeId(backend_node_id)
@@ -1209,8 +1258,6 @@ async def node_center(tab: Tab, backend_node_id: int) -> Optional[Tuple[float, f
         target_tab = tab
     if hasattr(tab, "browser") and tab.browser and hasattr(target_tab, "browser") and target_tab.browser and target_tab.browser is not tab.browser:
         target_tab = tab
-    if hasattr(tab, "browser") and tab.browser and not getattr(target_tab, "browser", None):
-        target_tab = tab
 
     quads = None
     try:
@@ -1243,8 +1290,6 @@ async def scroll_into_view(tab: Tab, backend_node_id: int) -> Optional[Tuple[flo
     if getattr(target_tab, "closed", False):
         target_tab = tab
     if hasattr(tab, "browser") and tab.browser and hasattr(target_tab, "browser") and target_tab.browser and target_tab.browser is not tab.browser:
-        target_tab = tab
-    if hasattr(tab, "browser") and tab.browser and not getattr(target_tab, "browser", None):
         target_tab = tab
 
     try:
@@ -1446,8 +1491,11 @@ async def clear_field(tab: Tab, backend_node_id: int) -> bool:
     Returns:
         bool: True when there was content to clear.
     """
-    if not await call_on_node(tab, backend_node_id, SELECT_CONTENTS_JS):
+    target_tab = _node_tabs.get(backend_node_id, tab)
+    if getattr(target_tab, "closed", False):
+        target_tab = tab
+    if not await call_on_node(target_tab, backend_node_id, SELECT_CONTENTS_JS):
         return False
-    await press(tab, BACKSPACE_KEY)
+    await press(target_tab, BACKSPACE_KEY)
     return True
 

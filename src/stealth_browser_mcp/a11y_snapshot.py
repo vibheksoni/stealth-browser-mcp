@@ -47,7 +47,7 @@ NON_INTERACTIVE_ROLES: Set[str] = {
     "inlinetextbox",
 }
 
-DOM_WALK_JS = """function () {
+DOM_WALK_JS = """function (frameRef) {
   let counter = 0;
 
   function getAccessibleName(el) {
@@ -169,10 +169,55 @@ DOM_WALK_JS = """function () {
     };
   }
 
-  const rootObj = walk(document.body || document.documentElement);
+  let targetDoc = document;
+  if (frameRef) {
+    let iframe = null;
+    if (frameRef.startsWith('//') || frameRef.toLowerCase().startsWith('xpath=')) {
+      const fXpath = frameRef.toLowerCase().startsWith('xpath=') ? frameRef.substring(6).trim() : frameRef;
+      try {
+        const res = document.evaluate(fXpath, document, null, 9, null);
+        if (res && res.singleNodeValue) iframe = res.singleNodeValue;
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector(frameRef); } catch (e) {}
+    }
+    if (!iframe) {
+      try { iframe = document.querySelector('iframe[name="' + frameRef + '"], iframe#' + frameRef + ', #' + frameRef); } catch (e) {}
+    }
+    if (!iframe) {
+      try {
+        const frames = document.querySelectorAll('iframe, frame');
+        for (let i = 0; i < frames.length; i++) {
+          const f = frames[i];
+          if (f.name === frameRef || f.id === frameRef || (f.src && f.src.includes(frameRef))) {
+            iframe = f;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+    if (!iframe) {
+      try {
+        let frameWin = window.frames[frameRef];
+        if (!frameWin && /^\\d+$/.test(frameRef)) {
+          frameWin = window.frames[parseInt(frameRef, 10)];
+        }
+        if (frameWin && frameWin.document) {
+          targetDoc = frameWin.document;
+        }
+      } catch (e) {}
+    } else {
+      try {
+        targetDoc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document) || document;
+      } catch (e) {}
+    }
+  }
+
+  const rootObj = walk(targetDoc.body || targetDoc.documentElement);
   return {
     root: rootObj,
-    title: document.title || '',
+    title: targetDoc.title || document.title || '',
     interactiveCount: counter
   };
 }"""
@@ -665,11 +710,13 @@ async def _dom_walk_fallback(
     max_nodes: int = 500,
     max_chars: int = 50000,
     interactive_only: bool = False,
+    frame: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fallback snapshot mechanism using a DOM-walk JS evaluation."""
+    frame_arg = json.dumps(frame) if frame else "null"
     eval_res = await asyncio.wait_for(
         tab.send(cdp.runtime.evaluate(
-            expression=f"({DOM_WALK_JS})()",
+            expression=f"({DOM_WALK_JS})({frame_arg})",
             return_by_value=True,
             await_promise=True,
         )),
@@ -734,9 +781,21 @@ async def _dom_walk_fallback(
         pass
     finally:
         try:
+            cleanup_expr = (
+                f"(function(f) {{ "
+                f"let d = document; "
+                f"if (f) {{ "
+                f"  try {{ "
+                f"    let el = document.querySelector(f) || document.querySelector('iframe[name=\"' + f + '\"], iframe#' + f); "
+                f"    if (el && (el.contentDocument || el.contentWindow)) d = el.contentDocument || el.contentWindow.document; "
+                f"  }} catch(e) {{}} "
+                f"}} "
+                f"d.querySelectorAll('[data-a11y-marker]').forEach(e => e.removeAttribute('data-a11y-marker')); "
+                f"}})({frame_arg})"
+            )
             await asyncio.wait_for(
                 tab.send(cdp.runtime.evaluate(
-                    expression="document.querySelectorAll('[data-a11y-marker]').forEach(e => e.removeAttribute('data-a11y-marker'))",
+                    expression=cleanup_expr,
                     return_by_value=True,
                 )),
                 timeout=2.0,
@@ -837,18 +896,62 @@ async def get_accessibility_snapshot(
         Dict[str, Any]: Result dictionary containing tree, text, nodes, truncated, node_count, refs.
     """
     raw_nodes = None
+    resolved_frame_id: Optional[str] = None
+    target_tab = tab
+    f_ctx = None
+
+    if frame:
+        try:
+            from .input_actions import resolve_frame_context
+            f_ctx = await resolve_frame_context(tab, frame)
+            if f_ctx:
+                if f_ctx.frame_id:
+                    resolved_frame_id = str(f_ctx.frame_id)
+                if f_ctx.target_tab and hasattr(f_ctx.target_tab, "send"):
+                    target_tab = f_ctx.target_tab
+        except Exception:
+            pass
+
+        if not resolved_frame_id:
+            try:
+                tree = await tab.send(cdp.page.get_frame_tree())
+                from .input_actions import _find_frame_id_in_tree
+                fid = _find_frame_id_in_tree(tree, frame)
+                if fid:
+                    resolved_frame_id = str(fid)
+            except Exception:
+                pass
+
+        if not resolved_frame_id:
+            resolved_frame_id = str(frame)
+
+    send_tab = target_tab if hasattr(target_tab, "send") else tab
+    ax_params = {"frameId": resolved_frame_id} if resolved_frame_id else None
+
     try:
         try:
             await asyncio.wait_for(
-                tab.send(raw_command("Accessibility.enable")),
+                send_tab.send(raw_command("Accessibility.enable")),
                 timeout=2.0,
             )
         except Exception:
             pass
-        res = await asyncio.wait_for(
-            tab.send(raw_command("Accessibility.getFullAXTree")),
-            timeout=3.0,
-        )
+
+        res = None
+        try:
+            res = await asyncio.wait_for(
+                send_tab.send(raw_command("Accessibility.getFullAXTree", ax_params)),
+                timeout=3.0,
+            )
+        except Exception:
+            if send_tab is not tab and hasattr(tab, "send"):
+                res = await asyncio.wait_for(
+                    tab.send(raw_command("Accessibility.getFullAXTree", ax_params)),
+                    timeout=3.0,
+                )
+            else:
+                raise
+
         if isinstance(res, dict) and "nodes" in res:
             raw_nodes = res["nodes"]
         elif isinstance(res, list):
@@ -863,6 +966,7 @@ async def get_accessibility_snapshot(
             max_nodes=max_nodes,
             max_chars=max_chars,
             interactive_only=interactive_only,
+            frame=frame,
         )
 
     root_tree, refs, ref_details = build_a11y_tree(raw_nodes)
@@ -872,6 +976,16 @@ async def get_accessibility_snapshot(
         max_chars=max_chars,
         interactive_only=interactive_only,
     )
+
+    if target_tab is not tab and refs:
+        try:
+            from .input_actions import _track_node
+            ctx_id = f_ctx.context_id if f_ctx else None
+            for bid in refs.values():
+                if isinstance(bid, int):
+                    _track_node(bid, ctx_id, target_tab)
+        except Exception:
+            pass
 
     a11y_manager.store_snapshot(
         instance_id=instance_id,

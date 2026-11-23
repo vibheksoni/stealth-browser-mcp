@@ -214,7 +214,14 @@ async def _resolve_node_and_facts(
     if override_facts is not None and isinstance(override_facts, dict):
         facts = override_facts
     else:
-        raw = await input_actions.call_on_node(tab, node_id, PROBE_ON_NODE_JS)
+        target_tab = input_actions._node_tabs.get(node_id, tab)
+        if target_tab is tab and frame:
+            cache_key = (input_actions._tab_cache_id(tab), frame)
+            if cache_key in input_actions._frame_contexts:
+                cached_ctx = input_actions._frame_contexts[cache_key]
+                if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                    target_tab = cached_ctx.target_tab
+        raw = await input_actions.call_on_node(target_tab, node_id, PROBE_ON_NODE_JS)
         facts = raw if isinstance(raw, dict) else {}
 
     return node_id, selector, facts
@@ -366,10 +373,17 @@ async def fill(
 
         # Apply chosen strategy
         checked_target: Optional[bool] = None
+        target_tab = input_actions._node_tabs.get(node_id, tab)
+        if target_tab is tab and frame:
+            cache_key = (input_actions._tab_cache_id(tab), frame)
+            if cache_key in input_actions._frame_contexts:
+                cached_ctx = input_actions._frame_contexts[cache_key]
+                if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                    target_tab = cached_ctx.target_tab
 
         if chosen_strategy == "native_setter":
             await fill_native_setter(
-                tab,
+                target_tab,
                 node_id,
                 text=formatted_val,
                 frame=frame,
@@ -378,7 +392,7 @@ async def fill(
 
         elif chosen_strategy == "synthetic_paste":
             paste_res = await fill_synthetic_paste(
-                tab,
+                target_tab,
                 node_id,
                 text=formatted_val,
                 frame=frame,
@@ -386,17 +400,17 @@ async def fill(
             )
             # If paste wasn't prevented and verify is on, check if fallback typing is needed
             if verify:
-                read_data = await input_actions.call_on_node(tab, node_id, READ_VALUE_JS)
+                read_data = await input_actions.call_on_node(target_tab, node_id, READ_VALUE_JS)
                 act_text = str(_extract_prop(read_data, "text", "") or _extract_prop(read_data, "value", "") or "").strip()
                 if not compare_text(formatted_val, act_text, mode="auto").equal:
-                    await input_actions.focus_node(tab, node_id)
-                    await input_actions.clear_field(tab, node_id)
+                    await input_actions.focus_node(target_tab, node_id)
+                    await input_actions.clear_field(target_tab, node_id)
                     for char in formatted_val:
-                        await input_actions.type_character(tab, char)
+                        await input_actions.type_character(target_tab, char)
 
         elif chosen_strategy == "os_paste":
             await fill_os_paste(
-                tab,
+                target_tab,
                 node_id,
                 text=formatted_val,
                 frame=frame,
@@ -404,16 +418,16 @@ async def fill(
             )
 
         elif chosen_strategy == "typing":
-            await input_actions.focus_node(tab, node_id)
-            await input_actions.clear_field(tab, node_id)
+            await input_actions.focus_node(target_tab, node_id)
+            await input_actions.clear_field(target_tab, node_id)
             for char in formatted_val:
-                await input_actions.type_character(tab, char)
+                await input_actions.type_character(target_tab, char)
 
         elif chosen_strategy == "choose_option":
             tag_name = str(facts.get("tag_name") or "").lower()
             if tag_name == "select":
                 handled = await input_actions.call_on_node(
-                    tab, node_id, SELECT_OPTION_ON_NODE_JS, formatted_val
+                    target_tab, node_id, SELECT_OPTION_ON_NODE_JS, formatted_val
                 )
                 if not handled:
                     try:
@@ -432,11 +446,11 @@ async def fill(
                 checked_target = formatted_val.strip().lower() in ("true", "1", "checked", "yes", "on")
             else:
                 checked_target = bool(formatted_val)
-            await input_actions.call_on_node(tab, node_id, SET_CHECKED_JS, checked_target)
+            await input_actions.call_on_node(target_tab, node_id, SET_CHECKED_JS, checked_target)
 
         elif chosen_strategy == "radio":
             checked_target = True
-            await input_actions.call_on_node(tab, node_id, SET_CHECKED_JS, True)
+            await input_actions.call_on_node(target_tab, node_id, SET_CHECKED_JS, True)
 
         elif chosen_strategy == "file":
             if isinstance(value, (list, tuple)):
@@ -451,7 +465,7 @@ async def fill(
         actual_for_preview: Optional[str] = None
 
         if verify:
-            read_data = await input_actions.call_on_node(tab, node_id, READ_VALUE_JS)
+            read_data = await input_actions.call_on_node(target_tab, node_id, READ_VALUE_JS)
 
             if chosen_strategy == "checkbox":
                 actual_checked = bool(_extract_prop(read_data, "checked", False))
@@ -498,13 +512,13 @@ async def fill(
             ):
                 try:
                     await fill_os_paste(
-                        tab,
+                        target_tab,
                         node_id,
                         text=formatted_val,
                         frame=frame,
                         instance_id=instance_id,
                     )
-                    read_data = await input_actions.call_on_node(tab, node_id, READ_VALUE_JS)
+                    read_data = await input_actions.call_on_node(target_tab, node_id, READ_VALUE_JS)
                     if kind in (ElementKind.CONTENTEDITABLE, ElementKind.RICH_EDITOR):
                         act_text = str(_extract_prop(read_data, "text", "") or _extract_prop(read_data, "value", "") or "")
                         comp = compare_text(formatted_val, act_text, mode="auto")

@@ -302,15 +302,23 @@ class DOMHandler:
             backend_node_id = await DOMHandler._resolve_target(
                 tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
             )
-            await input_actions.focus_node(tab, backend_node_id)
+            target_tab = input_actions._node_tabs.get(backend_node_id, tab)
+            if target_tab is tab and frame:
+                cache_key = (input_actions._tab_cache_id(tab), frame)
+                if cache_key in input_actions._frame_contexts:
+                    cached_ctx = input_actions._frame_contexts[cache_key]
+                    if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                        target_tab = cached_ctx.target_tab
+
+            await input_actions.focus_node(target_tab, backend_node_id)
             if clear_first:
-                await input_actions.clear_field(tab, backend_node_id)
+                await input_actions.clear_field(target_tab, backend_node_id)
             use_grapheme = grapheme if grapheme is not None else not text.isascii()
             if use_grapheme:
                 from .grapheme_typing import type_graphemes
 
                 await type_graphemes(
-                    tab,
+                    target_tab,
                     text,
                     ime=ime,
                     delay_ms=delay_ms,
@@ -320,7 +328,7 @@ class DOMHandler:
             else:
                 delay = max(delay_ms, 0) / 1000
                 for index, char in enumerate(text):
-                    await input_actions.type_character(tab, char, parse_newlines or shift_enter, shift_enter)
+                    await input_actions.type_character(target_tab, char, parse_newlines or shift_enter, shift_enter)
                     if delay and index < len(text) - 1:
                         await asyncio.sleep(delay)
             return True
@@ -423,11 +431,19 @@ class DOMHandler:
             backend_node_id = await DOMHandler._resolve_target(
                 tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
             )
+            target_tab = input_actions._node_tabs.get(backend_node_id, tab)
+            if target_tab is tab and frame:
+                cache_key = (input_actions._tab_cache_id(tab), frame)
+                if cache_key in input_actions._frame_contexts:
+                    cached_ctx = input_actions._frame_contexts[cache_key]
+                    if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                        target_tab = cached_ctx.target_tab
+
             if mode == "native":
                 from .fill_native_setter import fill_native_setter
 
                 await fill_native_setter(
-                    tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                    target_tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
                 )
                 return True
 
@@ -435,27 +451,27 @@ class DOMHandler:
                 from .fill_os_paste import fill_os_paste
 
                 await fill_os_paste(
-                    tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                    target_tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
                 )
                 return True
 
-            await input_actions.focus_node(tab, backend_node_id)
+            await input_actions.focus_node(target_tab, backend_node_id)
             if clear_first:
-                await input_actions.clear_field(tab, backend_node_id)
+                await input_actions.clear_field(target_tab, backend_node_id)
 
             if mode == "synthetic":
                 from .fill_synthetic_paste import fill_synthetic_paste
 
                 await fill_synthetic_paste(
-                    tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                    target_tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
                 )
                 return True
             elif mode == "type":
                 for char in text:
-                    await input_actions.type_character(tab, char)
+                    await input_actions.type_character(target_tab, char)
                 return True
             else:
-                await tab.send(cdp.input_.insert_text(text))
+                await target_tab.send(cdp.input_.insert_text(text))
                 return True
         except Exception as e:
             raise Exception(f"Failed to paste text: {str(e)}")
@@ -500,11 +516,23 @@ class DOMHandler:
             descriptor = resolve_key_descriptor(key)
             modifier_mask, canonical_modifiers = resolve_modifiers(modifiers)
 
+            target_tab = tab
             if selector:
                 backend_node_id = await DOMHandler._resolve_target(
                     tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
                 )
-                await input_actions.focus_node(tab, backend_node_id)
+                target_tab = input_actions._node_tabs.get(backend_node_id, tab)
+                if target_tab is tab and frame:
+                    cache_key = (input_actions._tab_cache_id(tab), frame)
+                    if cache_key in input_actions._frame_contexts:
+                        cached_ctx = input_actions._frame_contexts[cache_key]
+                        if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                            target_tab = cached_ctx.target_tab
+                await input_actions.focus_node(target_tab, backend_node_id)
+            elif frame:
+                frame_ctx = await input_actions.resolve_frame_context(tab, frame)
+                if frame_ctx and frame_ctx.target_tab:
+                    target_tab = frame_ctx.target_tab
 
             text = descriptor["text"]
             unmodified_text = text
@@ -518,7 +546,7 @@ class DOMHandler:
                 unmodified_text = None
 
             for index in range(count):
-                await tab.send(cdp.input_.dispatch_key_event(
+                await target_tab.send(cdp.input_.dispatch_key_event(
                     "keyDown",
                     modifiers=modifier_mask,
                     key=key,
@@ -527,7 +555,7 @@ class DOMHandler:
                     text=text,
                     unmodified_text=unmodified_text
                 ))
-                await tab.send(cdp.input_.dispatch_key_event(
+                await target_tab.send(cdp.input_.dispatch_key_event(
                     "keyUp",
                     modifiers=modifier_mask,
                     key=key,

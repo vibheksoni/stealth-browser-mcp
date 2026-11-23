@@ -2179,6 +2179,18 @@ class BrowserManager:
         if target_id and target_id in configured_tabs:
             return options.timezone_id
         await self.dialog_manager.configure_tab(tab, instance_id)
+        try:
+            await tab.send(uc.cdp.target.set_auto_attach(
+                auto_attach=True,
+                wait_for_debugger_on_start=False,
+                flatten=True,
+            ))
+        except Exception as error:
+            debug_logger.log_warning(
+                "browser_manager",
+                "configure_tab",
+                f"Failed to enable auto attach for {instance_id}: {error}",
+            )
         if options.extra_headers:
             await tab.send(uc.cdp.network.set_extra_http_headers(
                 headers=uc.cdp.network.Headers(options.extra_headers)

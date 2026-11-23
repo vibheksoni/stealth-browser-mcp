@@ -90,7 +90,7 @@ from .har_export import build_har, export_to_json
 from . import seed_snapshots
 from . import seed_tools
 from . import seed_save
-from .window_mode import normalize_window_mode, open_background_tab
+from .window_mode import format_window_bounds, normalize_window_mode, open_background_tab
 from .profile_policy import (
     SCRAPE_POLICY_JS,
     classify_policies,
@@ -101,6 +101,15 @@ from . import instance_default as _instance_default
 from . import tool_compact
 from . import tool_surface
 from . import agent_guide
+
+SCREENSHOT_CAPTURE_TIMEOUT: float = float(os.getenv("STEALTH_SCREENSHOT_TIMEOUT", "5.0"))
+
+
+class ScreenshotTimeoutError(ToolError, TimeoutError):
+    """Raised when screenshot capture times out."""
+
+    pass
+
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -1695,6 +1704,80 @@ async def take_screenshot(
     if not tab:
         raise instance_not_found_error(instance_id)
 
+    try:
+        from fastmcp.exceptions import ToolError
+    except Exception:
+        ToolError = RuntimeError
+
+    import asyncio
+
+    try:
+        from .window_mode import format_window_bounds
+    except Exception:
+        try:
+            from stealth_browser_mcp.window_mode import format_window_bounds
+        except Exception:
+            format_window_bounds = None
+
+    try:
+        from .server import ScreenshotTimeoutError
+    except Exception:
+        try:
+            from stealth_browser_mcp.server import ScreenshotTimeoutError
+        except Exception:
+            class ScreenshotTimeoutError(ToolError, TimeoutError):
+                pass
+
+    is_minimized = False
+    if hasattr(browser_manager, "get_instance"):
+        try:
+            inst_data = await browser_manager.get_instance(instance_id)
+            if inst_data:
+                mode = None
+                if isinstance(inst_data, dict):
+                    mode = inst_data.get("window")
+                    if not mode and "instance" in inst_data:
+                        mode = getattr(inst_data["instance"], "window", None)
+                    if not mode and "options" in inst_data:
+                        mode = getattr(inst_data["options"], "window", None)
+                else:
+                    mode = getattr(inst_data, "window", None)
+                if isinstance(mode, str) and mode.lower().strip() == "minimized":
+                    is_minimized = True
+        except Exception:
+            pass
+
+    if not is_minimized:
+        tab_window = getattr(tab, "window", None) or getattr(tab, "window_mode", None)
+        if isinstance(tab_window, str) and tab_window.lower().strip() == "minimized":
+            is_minimized = True
+
+    if not is_minimized and hasattr(tab, "send") and callable(tab.send):
+        try:
+            cmd = None
+            if hasattr(uc, "cdp") and hasattr(uc.cdp, "browser") and hasattr(uc.cdp.browser, "get_window_for_target"):
+                cmd = uc.cdp.browser.get_window_for_target()
+            if cmd is not None:
+                w_res = await asyncio.wait_for(tab.send(cmd), timeout=1.0)
+                bounds_dict = format_window_bounds(w_res) if format_window_bounds else None
+                if not bounds_dict or not bounds_dict.get("windowState"):
+                    if isinstance(w_res, dict):
+                        b = w_res.get("bounds", w_res)
+                        b_dict = format_window_bounds(b) if format_window_bounds else None
+                        if b_dict and b_dict.get("windowState"):
+                            bounds_dict = b_dict
+                if bounds_dict:
+                    state = bounds_dict.get("windowState")
+                    if isinstance(state, str) and state.lower().strip() == "minimized":
+                        is_minimized = True
+        except Exception:
+            pass
+
+    if is_minimized:
+        raise ToolError("Cannot take a screenshot of a minimized window")
+
+    timeout_bound = float(globals().get("SCREENSHOT_CAPTURE_TIMEOUT", 5.0))
+
     dpr: Optional[float] = None
     try:
         dpr_val = await tab.evaluate("window.devicePixelRatio")
@@ -1712,12 +1795,28 @@ async def take_screenshot(
     if file_path:
         save_path = resolve_managed_path(file_path, for_write=True)
         if target_clip:
-            raw_bytes = await capture_clip_screenshot(tab, target_clip, format=format, quality=quality)
+            try:
+                raw_bytes = await asyncio.wait_for(
+                    capture_clip_screenshot(tab, target_clip, format=format, quality=quality),
+                    timeout=timeout_bound,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ScreenshotTimeoutError(
+                    f"Screenshot capture timed out after {timeout_bound}s"
+                ) from exc
         else:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
                 tmp_capture = Path(tmp_file.name)
             try:
-                await tab.save_screenshot(tmp_capture, format=format, full_page=full_page)
+                try:
+                    await asyncio.wait_for(
+                        tab.save_screenshot(tmp_capture, format=format, full_page=full_page),
+                        timeout=timeout_bound,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise ScreenshotTimeoutError(
+                        f"Screenshot capture timed out after {timeout_bound}s"
+                    ) from exc
                 raw_bytes = tmp_capture.read_bytes()
             finally:
                 if tmp_capture.exists():
@@ -1751,10 +1850,26 @@ async def take_screenshot(
 
     try:
         if target_clip:
-            raw_bytes = await capture_clip_screenshot(tab, target_clip, format="png")
+            try:
+                raw_bytes = await asyncio.wait_for(
+                    capture_clip_screenshot(tab, target_clip, format="png"),
+                    timeout=timeout_bound,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ScreenshotTimeoutError(
+                    f"Screenshot capture timed out after {timeout_bound}s"
+                ) from exc
             tmp_path.write_bytes(raw_bytes)
         else:
-            await tab.save_screenshot(tmp_path, format="png", full_page=full_page)
+            try:
+                await asyncio.wait_for(
+                    tab.save_screenshot(tmp_path, format="png", full_page=full_page),
+                    timeout=timeout_bound,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ScreenshotTimeoutError(
+                    f"Screenshot capture timed out after {timeout_bound}s"
+                ) from exc
         image_bytes, metadata = fit_screenshot(tmp_path, format, quality, max_width)
         if dpr is not None:
             metadata["device_pixel_ratio"] = dpr
