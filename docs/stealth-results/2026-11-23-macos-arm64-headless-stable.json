@@ -1,8 +1,8 @@
 {
   "runner": "macos-arm64-headless-stable",
   "date": "2026-11-23",
-  "started_at": "2026-11-23T05:30:02+00:00",
-  "finished_at": "2026-11-23T05:31:12+00:00",
+  "started_at": "2026-11-23T16:10:29+00:00",
+  "finished_at": "2026-11-23T16:12:01+00:00",
   "environment": {
     "os": "macos",
     "os_release": "macOS-26.7.2-arm64-arm-64bit",
@@ -13,9 +13,9 @@
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
-      "run_id": "45118119603",
-      "run_url": "https://github.com/arpeake/stealth-browser-mcp/actions/runs/45118119603",
-      "commit": "c6c8157dc55a44ca29f4f9f2e0b5f12a2c8bf31b",
+      "run_id": "45213405927",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/45213405927",
+      "commit": "2bf1548fa5f79d80a39891fb4e7717fea87d85a4",
       "event": "schedule",
       "runner_image": "macos26"
     },
@@ -72,10 +72,10 @@
           "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
           "--headless=new",
           "--remote-debugging-host=127.0.0.1",
-          "--remote-debugging-port=49217"
+          "--remote-debugging-port=49212"
         ]
       },
-      "duration_seconds": 1.15,
+      "duration_seconds": 3.28,
       "error": null
     },
     {
@@ -140,8 +140,8 @@
           "passed": true,
           "critical": true,
           "value": [
-            756,
-            556
+            1920,
+            1080
           ]
         },
         {
@@ -191,12 +191,12 @@
         "webgl_vendor": "Google Inc. (Apple)",
         "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
         "outer_size": [
-          756,
-          556
+          1920,
+          1080
         ],
         "outer_size_at_load": [
-          0,
-          0
+          1920,
+          1080
         ],
         "screen": [
           800,
@@ -204,7 +204,7 @@
           24
         ]
       },
-      "duration_seconds": 2.14,
+      "duration_seconds": 3.48,
       "error": null
     },
     {
@@ -243,7 +243,7 @@
       "details": {
         "webgl_renderer": "Stealth Benchmark Renderer"
       },
-      "duration_seconds": 2.58,
+      "duration_seconds": 4.2,
       "error": null
     },
     {
@@ -275,13 +275,13 @@
           "name": "mouse moved before click",
           "passed": true,
           "critical": false,
-          "value": 3
+          "value": 6
         },
         {
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 49.7
+          "value": 92.8
         },
         {
           "name": "key events are trusted",
@@ -315,11 +315,11 @@
         }
       ],
       "details": {
-        "press_ms": 49.7,
-        "mouse_moves": 3,
+        "press_ms": 92.8,
+        "mouse_moves": 6,
         "injected_nodes": 0
       },
-      "duration_seconds": 1.92,
+      "duration_seconds": 3.43,
       "error": null
     },
     {
@@ -550,7 +550,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 6.02,
+      "duration_seconds": 7.89,
       "error": null
     },
     {
@@ -606,7 +606,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 4.42,
+      "duration_seconds": 5.31,
       "error": null
     },
     {
@@ -641,7 +641,7 @@
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 5.79,
+      "duration_seconds": 10.54,
       "error": null
     },
     {
@@ -663,7 +663,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 2.91,
+      "duration_seconds": 3.23,
       "error": null
     },
     {
@@ -708,13 +708,13 @@
       "details": {
         "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "c77e7f8e7c1bda0568797c7cfad1d131",
+        "ja3_hash": "805da44e52e8518ce34edd70efc725ee",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 1.33,
+      "duration_seconds": 2.77,
       "error": null
     }
   ],

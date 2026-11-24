@@ -1,8 +1,8 @@
 {
   "runner": "windows-x64-headless-stable",
   "date": "2026-11-23",
-  "started_at": "2026-11-23T05:30:38+00:00",
-  "finished_at": "2026-11-23T05:31:39+00:00",
+  "started_at": "2026-11-23T16:11:13+00:00",
+  "finished_at": "2026-11-23T16:12:28+00:00",
   "environment": {
     "os": "windows",
     "os_release": "Windows-10-10.0.26100-SP0",
@@ -13,9 +13,9 @@
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
-      "run_id": "45118119603",
-      "run_url": "https://github.com/arpeake/stealth-browser-mcp/actions/runs/45118119603",
-      "commit": "c6c8157dc55a44ca29f4f9f2e0b5f12a2c8bf31b",
+      "run_id": "45213405927",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/45213405927",
+      "commit": "2bf1548fa5f79d80a39891fb4e7717fea87d85a4",
       "event": "schedule",
       "runner_image": "win25-vs2026"
     },
@@ -71,10 +71,10 @@
           "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
           "--headless=new",
           "--remote-debugging-host=127.0.0.1",
-          "--remote-debugging-port=54998"
+          "--remote-debugging-port=50819"
         ]
       },
-      "duration_seconds": 3.7,
+      "duration_seconds": 4.2,
       "error": null
     },
     {
@@ -139,8 +139,8 @@
           "passed": true,
           "critical": true,
           "value": [
-            780,
-            580
+            1920,
+            1080
           ]
         },
         {
@@ -190,8 +190,8 @@
         "webgl_vendor": "Google Inc. (Microsoft)",
         "webgl_renderer": "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)",
         "outer_size": [
-          780,
-          580
+          1920,
+          1080
         ],
         "outer_size_at_load": [
           0,
@@ -203,7 +203,7 @@
           24
         ]
       },
-      "duration_seconds": 4.39,
+      "duration_seconds": 5.66,
       "error": null
     },
     {
@@ -242,7 +242,7 @@
       "details": {
         "webgl_renderer": "Stealth Benchmark Renderer"
       },
-      "duration_seconds": 5.0,
+      "duration_seconds": 6.19,
       "error": null
     },
     {
@@ -280,7 +280,7 @@
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 52.6
+          "value": 65.6
         },
         {
           "name": "key events are trusted",
@@ -314,11 +314,11 @@
         }
       ],
       "details": {
-        "press_ms": 52.6,
+        "press_ms": 65.6,
         "mouse_moves": 3,
         "injected_nodes": 0
       },
-      "duration_seconds": 4.39,
+      "duration_seconds": 5.41,
       "error": null
     },
     {
@@ -549,7 +549,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 9.03,
+      "duration_seconds": 10.36,
       "error": null
     },
     {
@@ -605,7 +605,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 7.14,
+      "duration_seconds": 8.01,
       "error": null
     },
     {
@@ -640,7 +640,7 @@
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 7.91,
+      "duration_seconds": 9.86,
       "error": null
     },
     {
@@ -649,7 +649,7 @@
       "category": "JS challenge",
       "url": "https://nowsecure.nl/",
       "status": "PASS",
-      "summary": "Reached protected page after 0.0s",
+      "summary": "Reached protected page after 0.1s",
       "checks": [
         {
           "name": "challenge cleared",
@@ -660,9 +660,9 @@
       ],
       "details": {
         "title": "nowsecure.nl",
-        "waited_seconds": 0.0
+        "waited_seconds": 0.1
       },
-      "duration_seconds": 4.39,
+      "duration_seconds": 5.44,
       "error": null
     },
     {
@@ -707,13 +707,13 @@
       "details": {
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "b9b27f6acf3203485415527f0734d40d",
+        "ja3_hash": "2940e7c9448fd5efb4d687b06c191b5e",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 3.81,
+      "duration_seconds": 5.12,
       "error": null
     }
   ],

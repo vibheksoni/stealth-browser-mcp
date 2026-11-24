@@ -101,6 +101,8 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - **Attach to running Chrome** - Connect to an already running Chrome browser via remote debugging port to automate within corporate or managed profiles ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)).
 - **Clean MCP integration** - Works through standard MCP clients without custom brokers.
 
+Want the story behind it? Read [How I built stealth-browser-mcp](https://opendoors.wtf/blog/stealth-browser-mcp/) on my blog.
+
 ---
 
 ## Quickstart

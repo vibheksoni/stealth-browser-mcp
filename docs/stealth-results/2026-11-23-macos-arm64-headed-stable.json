@@ -1,8 +1,8 @@
 {
   "runner": "macos-arm64-headed-stable",
   "date": "2026-11-23",
-  "started_at": "2026-11-23T05:30:06+00:00",
-  "finished_at": "2026-11-23T05:31:33+00:00",
+  "started_at": "2026-11-23T16:20:32+00:00",
+  "finished_at": "2026-11-23T16:22:17+00:00",
   "environment": {
     "os": "macos",
     "os_release": "macOS-26.7.2-arm64-arm-64bit",
@@ -13,9 +13,9 @@
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
-      "run_id": "45118119603",
-      "run_url": "https://github.com/arpeake/stealth-browser-mcp/actions/runs/45118119603",
-      "commit": "c6c8157dc55a44ca29f4f9f2e0b5f12a2c8bf31b",
+      "run_id": "45213405927",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/45213405927",
+      "commit": "2bf1548fa5f79d80a39891fb4e7717fea87d85a4",
       "event": "schedule",
       "runner_image": "macos26"
     },
@@ -31,7 +31,7 @@
       "category": "Browser configuration",
       "url": "",
       "status": "PASS",
-      "summary": "19 arguments, none flagged",
+      "summary": "17 arguments, none flagged",
       "checks": [
         {
           "name": "no automation flags",
@@ -68,14 +68,12 @@
           "--disable-search-engine-choice-screen",
           "--disable-session-crashed-bubble",
           "--disable-features=IsolateOrigins,site-per-process",
-          "--window-position=-32000,-32000",
-          "--window-size=1920,1080",
           "--disable-features=IsolateOrigins,site-per-process,MacAppCodeSignClone",
           "--remote-debugging-host=127.0.0.1",
-          "--remote-debugging-port=49198"
+          "--remote-debugging-port=49194"
         ]
       },
-      "duration_seconds": 3.76,
+      "duration_seconds": 4.79,
       "error": null
     },
     {
@@ -204,7 +202,7 @@
           24
         ]
       },
-      "duration_seconds": 3.34,
+      "duration_seconds": 5.15,
       "error": null
     },
     {
@@ -243,7 +241,7 @@
       "details": {
         "webgl_renderer": "Stealth Benchmark Renderer"
       },
-      "duration_seconds": 3.78,
+      "duration_seconds": 6.77,
       "error": null
     },
     {
@@ -275,13 +273,13 @@
           "name": "mouse moved before click",
           "passed": true,
           "critical": false,
-          "value": 6
+          "value": 3
         },
         {
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 76.6
+          "value": 86.8
         },
         {
           "name": "key events are trusted",
@@ -315,11 +313,11 @@
         }
       ],
       "details": {
-        "press_ms": 76.6,
-        "mouse_moves": 6,
+        "press_ms": 86.8,
+        "mouse_moves": 3,
         "injected_nodes": 0
       },
-      "duration_seconds": 3.54,
+      "duration_seconds": 4.72,
       "error": null
     },
     {
@@ -550,7 +548,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 6.99,
+      "duration_seconds": 9.5,
       "error": null
     },
     {
@@ -606,7 +604,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 5.29,
+      "duration_seconds": 6.79,
       "error": null
     },
     {
@@ -641,7 +639,7 @@
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 11.3,
+      "duration_seconds": 11.07,
       "error": null
     },
     {
@@ -663,7 +661,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 4.41,
+      "duration_seconds": 6.34,
       "error": null
     },
     {
@@ -708,13 +706,13 @@
       "details": {
         "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "cdeb41ae62bf78a660155bb1e523921f",
+        "ja3_hash": "6bd2dcdc91e82370987d7d91096ffa51",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 2.0,
+      "duration_seconds": 2.81,
       "error": null
     }
   ],

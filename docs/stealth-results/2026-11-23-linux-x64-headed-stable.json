@@ -1,11 +1,11 @@
 {
   "runner": "linux-x64-headed-stable",
   "date": "2026-11-23",
-  "started_at": "2026-11-23T05:30:12+00:00",
-  "finished_at": "2026-11-23T05:30:47+00:00",
+  "started_at": "2026-11-23T16:10:23+00:00",
+  "finished_at": "2026-11-23T16:10:42+00:00",
   "environment": {
     "os": "linux",
-    "os_release": "Linux-7.0.0-1016-aws-x86_64-with-glibc2.43",
+    "os_release": "Linux-7.0.0-1020-azure-x86_64-with-glibc2.43",
     "arch": "x64",
     "python": "3.11.18",
     "nodriver": "0.47.0",
@@ -13,9 +13,9 @@
     "chrome_channel": "stable",
     "ci": {
       "provider": "github-actions",
-      "run_id": "45118119603",
-      "run_url": "https://github.com/arpeake/stealth-browser-mcp/actions/runs/45118119603",
-      "commit": "c6c8157dc55a44ca29f4f9f2e0b5f12a2c8bf31b",
+      "run_id": "45213405927",
+      "run_url": "https://github.com/vibheksoni/stealth-browser-mcp/actions/runs/45213405927",
+      "commit": "2bf1548fa5f79d80a39891fb4e7717fea87d85a4",
       "event": "schedule",
       "runner_image": "ubuntu26"
     },
@@ -31,7 +31,7 @@
       "category": "Browser configuration",
       "url": "",
       "status": "PASS",
-      "summary": "18 arguments, none flagged",
+      "summary": "16 arguments, none flagged",
       "checks": [
         {
           "name": "no automation flags",
@@ -68,13 +68,11 @@
           "--disable-search-engine-choice-screen",
           "--disable-session-crashed-bubble",
           "--disable-features=IsolateOrigins,site-per-process",
-          "--window-position=-32000,-32000",
-          "--window-size=1920,1080",
           "--remote-debugging-host=127.0.0.1",
-          "--remote-debugging-port=50109"
+          "--remote-debugging-port=45023"
         ]
       },
-      "duration_seconds": 0.51,
+      "duration_seconds": 0.58,
       "error": null
     },
     {
@@ -203,7 +201,7 @@
           24
         ]
       },
-      "duration_seconds": 4.91,
+      "duration_seconds": 1.2,
       "error": null
     },
     {
@@ -236,7 +234,7 @@
       "details": {
         "webgl_renderer": null
       },
-      "duration_seconds": 1.65,
+      "duration_seconds": 1.7,
       "error": null
     },
     {
@@ -274,7 +272,7 @@
           "name": "button held for a moment",
           "passed": true,
           "critical": false,
-          "value": 73
+          "value": 65.3
         },
         {
           "name": "key events are trusted",
@@ -308,11 +306,11 @@
         }
       ],
       "details": {
-        "press_ms": 73,
+        "press_ms": 65.3,
         "mouse_moves": 6,
         "injected_nodes": 0
       },
-      "duration_seconds": 1.13,
+      "duration_seconds": 1.27,
       "error": null
     },
     {
@@ -543,7 +541,7 @@
         "SEQUENTUM": "ok",
         "VIDEO_CODECS": "ok"
       },
-      "duration_seconds": 5.73,
+      "duration_seconds": 5.01,
       "error": null
     },
     {
@@ -599,7 +597,7 @@
         "Plugins Length (Old)": "5",
         "Languages (Old)": "en-US,en"
       },
-      "duration_seconds": 3.95,
+      "duration_seconds": 3.85,
       "error": null
     },
     {
@@ -634,7 +632,7 @@
         "headless_percent": 0,
         "stealth_percent": 0
       },
-      "duration_seconds": 1.54,
+      "duration_seconds": 1.5,
       "error": null
     },
     {
@@ -656,7 +654,7 @@
         "title": "nowsecure.nl",
         "waited_seconds": 0.0
       },
-      "duration_seconds": 1.73,
+      "duration_seconds": 1.17,
       "error": null
     },
     {
@@ -701,13 +699,13 @@
       "details": {
         "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
         "http_version": "h2",
-        "ja3_hash": "4b431e8928b1e686219947e88d9c6761",
+        "ja3_hash": "81128782efd50b6d9a8ae9f8a24ce0f0",
         "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
         "peetprint_hash": "fc97c1cdfb1409c9a9326c1b726d1dee",
         "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
         "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86"
       },
-      "duration_seconds": 0.72,
+      "duration_seconds": 0.89,
       "error": null
     }
   ],
