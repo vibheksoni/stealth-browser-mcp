@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Date and Time Inputs Fixture</title>
+</head>
+<body>
+  <h1>Date and Time Inputs Fixture</h1>
+  <form id="date-form" onsubmit="event.preventDefault();">
+    <div>
+      <label for="date-input">Date:</label>
+      <input type="date" id="date-input" name="date-input" value="2026-11-19">
+    </div>
+    <div>
+      <label for="time-input">Time:</label>
+      <input type="time" id="time-input" name="time-input" value="11:18">
+    </div>
+    <div>
+      <label for="datetime-input">Datetime Local:</label>
+      <input type="datetime-local" id="datetime-input" name="datetime-input" value="2026-11-19T11:18">
+    </div>
+    <div>
+      <label for="month-input">Month:</label>
+      <input type="month" id="month-input" name="month-input" value="2026-11">
+    </div>
+    <div>
+      <label for="week-input">Week:</label>
+      <input type="week" id="week-input" name="week-input" value="2026-W47">
+    </div>
+  </form>
+
+  <div id="display-panel" style="margin-top: 15px;">
+    <p>Selected Date: <span id="val-date">2026-11-19</span></p>
+    <p>Selected Time: <span id="val-time">11:18</span></p>
+    <p>Selected Datetime: <span id="val-datetime">2026-11-19T11:18</span></p>
+    <p>Selected Month: <span id="val-month">2026-11</span></p>
+    <p>Selected Week: <span id="val-week">2026-W47</span></p>
+    <p>Total Changes: <span id="change-total">0</span></p>
+  </div>
+
+  <script>
+    (function() {
+      let count = 0;
+      const totalDisplay = document.getElementById("change-total");
+
+      function sync(id, spanId) {
+        const el = document.getElementById(id);
+        const span = document.getElementById(spanId);
+        function handler() {
+          span.textContent = el.value;
+          count++;
+          totalDisplay.textContent = String(count);
+        }
+        el.addEventListener("input", handler);
+        el.addEventListener("change", handler);
+      }
+
+      sync("date-input", "val-date");
+      sync("time-input", "val-time");
+      sync("datetime-input", "val-datetime");
+      sync("month-input", "val-month");
+      sync("week-input", "val-week");
+    })();
+  </script>
+</body>
+</html>

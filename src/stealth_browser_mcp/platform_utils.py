@@ -226,6 +226,9 @@ def check_browser_executable() -> Optional[str]:
             r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
             r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
             r'C:\Users\{}\AppData\Local\Microsoft\Edge\Application\msedge.exe'.format(os.environ.get('USERNAME', '')),
+            # Brave paths
+            r'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe',
+            r'C:\Users\{}\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe'.format(os.environ.get('USERNAME', '')),
         ]
     elif system == 'darwin':
         possible_paths = [
@@ -235,6 +238,8 @@ def check_browser_executable() -> Optional[str]:
             '/Applications/Chromium.app/Contents/MacOS/Chromium',
             # Microsoft Edge paths
             '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            # Brave paths
+            '/Applications/Brave Software/Brave Browser/Contents/MacOS/Brave Browser',
         ]
     else:
         possible_paths = [
@@ -253,6 +258,10 @@ def check_browser_executable() -> Optional[str]:
             '/usr/bin/microsoft-edge-dev',
             '/snap/bin/microsoft-edge',
             '/opt/microsoft/msedge/msedge',
+            # Brave paths
+            '/usr/bin/brave-browser',
+            '/snap/bin/brave-browser',
+            '/opt/brave/brave/brave',
         ]
     
     # First check static paths
@@ -267,7 +276,8 @@ def check_browser_executable() -> Optional[str]:
     # Fallback: search using 'which' command
     browser_names = [
         'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome',
-        'microsoft-edge-stable', 'microsoft-edge', 'msedge'
+        'microsoft-edge-stable', 'microsoft-edge', 'msedge',
+        'brave-browser', 'brave'
     ]
     for name in browser_names:
         try:

@@ -19,6 +19,27 @@ jobs:
       - name: Unit tests
         run: python -m unittest discover -s tests -v
 
+  windows-unit:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -U pip
+      - run: pip install -r requirements.txt
+      - name: Unit tests (Windows, no browser)
+        shell: bash
+        run: |
+          set +e
+          python -W ignore -m unittest discover -s tests > unit.txt 2>&1
+          code=$?
+          grep -E "^(FAIL|ERROR): |^Ran |^FAILED|^OK" unit.txt
+          echo "---- details ----"
+          grep -A16 -E "^(FAIL|ERROR): " unit.txt | head -600
+          exit $code
+
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 15

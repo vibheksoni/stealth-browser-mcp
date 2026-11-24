@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Same-Origin Iframe Fixture</title>
+</head>
+<body>
+  <h1>Same-Origin Iframe Fixture</h1>
+  <div>
+    <label for="outer-input">Outer Input:</label>
+    <input type="text" id="outer-input" placeholder="Outer frame text" value="outer-val">
+  </div>
+
+  <div style="margin-top: 15px;">
+    <iframe id="test-iframe" name="test-iframe" src="iframe_content.html" style="width: 500px; height: 300px; border: 1px solid #ccc;"></iframe>
+  </div>
+
+  <div id="outer-status-panel" style="margin-top: 10px;">
+    <p>Outer Status: <span id="outer-status">ready</span></p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Login Fixture</title>
+</head>
+<body>
+  <h1>Login Fixture Page</h1>
+  <p>Sets both HTTP cookies (Max-Age=86400 for disk persistence) and localStorage on login.</p>
+
+  <div id="auth-panel" style="margin-bottom: 20px; padding: 10px; border: 1px solid #aaa;">
+    <p>Current Status: <strong id="auth-state">logged_out</strong></p>
+    <p>User: <span id="user-display">none</span></p>
+    <p>Cookies: <code id="cookie-display">none</code></p>
+    <p>LocalStorage Token: <code id="storage-display">none</code></p>
+  </div>
+
+  <form id="login-form" method="POST" action="/login">
+    <div>
+      <label for="username">Username:</label>
+      <input type="text" id="username" name="username" value="testadmin">
+    </div>
+    <div style="margin-top: 8px;">
+      <label for="password">Password:</label>
+      <input type="password" id="password" name="password" value="secretpass">
+    </div>
+    <div style="margin-top: 12px;">
+      <button type="submit" id="login-button">Log In</button>
+      <button type="button" id="logout-button">Log Out</button>
+    </div>
+  </form>
+
+  <script>
+    (function() {
+      const authState = document.getElementById("auth-state");
+      const userDisplay = document.getElementById("user-display");
+      const cookieDisplay = document.getElementById("cookie-display");
+      const storageDisplay = document.getElementById("storage-display");
+      const usernameInput = document.getElementById("username");
+      const form = document.getElementById("login-form");
+      const logoutBtn = document.getElementById("logout-button");
+
+      function getCookie(name) {
+        const matches = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([\.$?*|{}\(\)\[\]\\\/\+^])/g, "\\$1") + "=([^;]*)"));
+        return matches ? decodeURIComponent(matches[1]) : null;
+      }
+
+      function syncUI() {
+        const cookieToken = getCookie("session_token");
+        const storageToken = localStorage.getItem("session_token");
+        const cookieUser = getCookie("auth_user");
+        const storageUser = localStorage.getItem("auth_user");
+        const user = storageUser || cookieUser || "none";
+
+        cookieDisplay.textContent = document.cookie || "none";
+        storageDisplay.textContent = storageToken || "none";
+
+        if (cookieToken || storageToken) {
+          authState.textContent = "logged_in";
+          userDisplay.textContent = user;
+        } else {
+          authState.textContent = "logged_out";
+          userDisplay.textContent = "none";
+        }
+      }
+
+      function performLogin(username) {
+        const token = "secret_fixture_cookie_12345";
+        const maxAge = 86400;
+
+        document.cookie = "session_token=" + token + "; Path=/; Max-Age=" + maxAge + "; SameSite=Lax";
+        document.cookie = "auth_user=" + encodeURIComponent(username) + "; Path=/; Max-Age=" + maxAge + "; SameSite=Lax";
+
+        localStorage.setItem("session_token", token);
+        localStorage.setItem("auth_user", username);
+        localStorage.setItem("is_authenticated", "true");
+
+        syncUI();
+      }
+
+      function performLogout() {
+        document.cookie = "session_token=; Path=/; Max-Age=0; SameSite=Lax";
+        document.cookie = "auth_user=; Path=/; Max-Age=0; SameSite=Lax";
+
+        localStorage.removeItem("session_token");
+        localStorage.removeItem("auth_user");
+        localStorage.removeItem("is_authenticated");
+
+        syncUI();
+      }
+
+      form.addEventListener("submit", function(e) {
+        e.preventDefault();
+        const username = usernameInput.value.trim() || "testadmin";
+        performLogin(username);
+      });
+
+      logoutBtn.addEventListener("click", function() {
+        performLogout();
+      });
+
+      syncUI();
+    })();
+  </script>
+</body>
+</html>

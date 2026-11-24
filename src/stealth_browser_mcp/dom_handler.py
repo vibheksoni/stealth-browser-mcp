@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from nodriver import Tab
 
 from . import input_actions
+from .content_cap import DEFAULT_PAGE_CONTENT_CHARS, cap_content, clamp_max_chars
 from .debug_logger import debug_logger
 from .file_upload_security import validate_upload_paths
 from .js_values import evaluate_to_python
@@ -19,7 +20,8 @@ DEFAULT_ELEMENT_TIMEOUT = 10.0
 WAIT_POLL_INTERVAL = 0.1
 ELEMENT_READY_JS = """function (visible, text) {
   if (visible) {
-    const style = window.getComputedStyle(this);
+    const win = this.ownerDocument ? (this.ownerDocument.defaultView || window) : window;
+    const style = win.getComputedStyle(this);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
   }
   return !text || (this.innerText || this.textContent || '').includes(text);
@@ -91,8 +93,9 @@ class DOMHandler:
                              {'text_filter': text_filter, 'visible_only': visible_only,
                               'limit': limit, 'processed_limit': processed_limit})
         try:
-            if selector.startswith('//'):
-                elements = await tab.xpath(selector)
+            if selector.startswith('//') or selector.lower().startswith('xpath='):
+                xpath_sel = selector[6:].strip() if selector.lower().startswith('xpath=') else selector
+                elements = await tab.xpath(xpath_sel)
                 debug_logger.log_info('DOMHandler', 'query_elements',
                                      f'XPath query returned {len(elements)} elements')
             else:
@@ -186,21 +189,32 @@ class DOMHandler:
             return []
 
     @staticmethod
-    async def _resolve_target(tab: Tab, selector: str, timeout: float) -> int:
+    async def _resolve_target(
+        tab: Tab,
+        selector: str,
+        timeout: float,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
+    ) -> int:
         """
-        Resolve a selector to a backend node id or raise.
+        Resolve a selector or ref=<id> to a backend node id or raise.
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             timeout (float): Seconds to wait for the element.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID for ref resolution.
 
         Returns:
             int: Backend node id.
         """
-        backend_node_id = await input_actions.find_node(tab, selector, timeout)
+        backend_node_id = await input_actions.find_node(
+            tab, selector, timeout, frame=frame, instance_id=instance_id
+        )
         if backend_node_id is None:
-            raise Exception(f"Element not found: {selector}")
+            target_desc = f"{selector} (in frame {frame})" if frame else selector
+            raise Exception(f"Element not found: {target_desc}")
         return backend_node_id
 
     @staticmethod
@@ -208,7 +222,9 @@ class DOMHandler:
         tab: Tab,
         selector: str,
         text_match: Optional[str] = None,
-        timeout: int = 10000
+        timeout: int = 10000,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> bool:
         """
         Click an element with trusted mouse events.
@@ -220,9 +236,11 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the element.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             text_match (Optional[str]): Match element by text content.
             timeout (int): Timeout in milliseconds.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
 
         Returns:
             bool: True if click succeeded.
@@ -234,7 +252,9 @@ class DOMHandler:
                     raise Exception(f"Element not found with text: {text_match}")
                 backend_node_id = int(element.backend_node_id)
             else:
-                backend_node_id = await DOMHandler._resolve_target(tab, selector, timeout / 1000)
+                backend_node_id = await DOMHandler._resolve_target(
+                    tab, selector, timeout / 1000, frame=frame, instance_id=instance_id
+                )
             await input_actions.click_node(tab, backend_node_id)
             return True
         except Exception as e:
@@ -248,72 +268,211 @@ class DOMHandler:
         clear_first: bool = True,
         delay_ms: int = 50,
         parse_newlines: bool = False,
-        shift_enter: bool = False
+        shift_enter: bool = False,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        grapheme: Optional[bool] = None,
+        ime: bool = False,
     ) -> bool:
         """
         Type text with trusted keyboard events and human-like delays.
 
         Each ASCII character produces keydown, keypress, input, and keyup
         events, with Shift held for capitals and shifted symbols. Other
-        characters are inserted like an input method would.
+        characters and grapheme clusters (such as emoji ZWJ sequences and CJK)
+        are inserted with Unicode grapheme awareness.
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the input element.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             text (str): Text to type.
             clear_first (bool): Clear input before typing.
             delay_ms (int): Delay between keystrokes in milliseconds.
-            parse_newlines (bool): If True, press Enter for each \n instead of inserting a line break.
-            shift_enter (bool): If True, press Shift+Enter for each \n (for chat apps).
+            parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
+            shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
+            grapheme (Optional[bool]): Enable grapheme-cluster-aware typing. Defaults to True for non-ASCII text.
+            ime (bool): If True, simulate IME composition for CJK characters.
 
         Returns:
             bool: True if typing succeeded.
         """
         try:
-            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT)
-            await input_actions.focus_node(tab, backend_node_id)
+            backend_node_id = await DOMHandler._resolve_target(
+                tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+            )
+            target_tab = input_actions._node_tabs.get(backend_node_id, tab)
+            if target_tab is tab and frame:
+                cache_key = (input_actions._tab_cache_id(tab), frame)
+                if cache_key in input_actions._frame_contexts:
+                    cached_ctx = input_actions._frame_contexts[cache_key]
+                    if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                        target_tab = cached_ctx.target_tab
+
+            await input_actions.focus_node(target_tab, backend_node_id)
             if clear_first:
-                await input_actions.clear_field(tab, backend_node_id)
-            delay = max(delay_ms, 0) / 1000
-            for index, char in enumerate(text):
-                await input_actions.type_character(tab, char, parse_newlines or shift_enter, shift_enter)
-                if delay and index < len(text) - 1:
-                    await asyncio.sleep(delay)
+                await input_actions.clear_field(target_tab, backend_node_id)
+            use_grapheme = grapheme if grapheme is not None else not text.isascii()
+            if use_grapheme:
+                from .grapheme_typing import type_graphemes
+
+                await type_graphemes(
+                    target_tab,
+                    text,
+                    ime=ime,
+                    delay_ms=delay_ms,
+                    parse_newlines=parse_newlines,
+                    shift_enter=shift_enter,
+                )
+            else:
+                delay = max(delay_ms, 0) / 1000
+                for index, char in enumerate(text):
+                    await input_actions.type_character(target_tab, char, parse_newlines or shift_enter, shift_enter)
+                    if delay and index < len(text) - 1:
+                        await asyncio.sleep(delay)
             return True
         except Exception as e:
             raise Exception(f"Failed to type text: {str(e)}")
+
+    @staticmethod
+    async def fill(
+        tab: Tab,
+        selector: str,
+        value: Optional[Any] = None,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        value_env: Optional[str] = None,
+        strategy: str = "auto",
+        verify: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Fill an element using the unified fill_tool implementation.
+
+        Args:
+            tab (Tab): The browser tab object.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
+            value (Optional[Any]): Text or value to fill into the element.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
+            value_env (Optional[str]): Secret environment variable name (STEALTH_SECRET_ prefix).
+            strategy (str): Strategy override ('auto', 'native_setter', etc.).
+            verify (bool): Whether to verify read-back value.
+            **kwargs: Extra keyword arguments.
+
+        Returns:
+            Dict[str, Any]: Result with strategy used, verified bool, and safe preview.
+        """
+        try:
+            from .fill_tool import fill as fill_impl
+
+            return await fill_impl(
+                tab,
+                selector,
+                value=value,
+                value_env=value_env,
+                strategy=strategy,
+                verify=verify,
+                frame=frame,
+                instance_id=instance_id,
+                **kwargs,
+            )
+        except ValueError as exc:
+            if "Unsupported element kind" in str(exc) and "'unknown'" in str(exc):
+                from . import secrets_env
+
+                if value is None and value_env is not None:
+                    value = secrets_env.resolve_value_env(value_env)
+                backend_node_id = await DOMHandler._resolve_target(
+                    tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+                )
+                await input_actions.focus_node(tab, backend_node_id)
+                await input_actions.clear_field(tab, backend_node_id)
+                for char in str(value if value is not None else ""):
+                    await input_actions.type_character(tab, char)
+                return True
+            raise
 
     @staticmethod
     async def paste_text(
         tab: Tab,
         selector: str,
         text: str,
-        clear_first: bool = True
+        clear_first: bool = True,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        mode: Optional[str] = None,
     ) -> bool:
         """
         Insert text in one step, like a paste.
 
-        Much faster than typing character by character. The page receives
-        beforeinput and input events but no key events.
+        Much faster than typing character by character. Supports modes in
+        {'synthetic', 'type', 'native', 'clipboard', 'os_paste'} or None (default keeps current behaviour).
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the input element.
+            selector (str): CSS selector, deep selector, XPath, or ref=<id>.
             text (str): Text to paste.
             clear_first (bool): Clear input before pasting.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
+            mode (Optional[str]): Paste mode ('synthetic', 'type', 'native', 'clipboard', 'os_paste', or None).
 
         Returns:
             bool: True if pasting succeeded.
         """
         from nodriver import cdp
 
+        if mode is not None and mode not in {"synthetic", "type", "native", "clipboard", "os_paste"}:
+            raise ValueError(f"Invalid paste mode: {mode}. Must be one of 'synthetic', 'type', 'native', 'clipboard', 'os_paste'")
+
         try:
-            backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT)
-            await input_actions.focus_node(tab, backend_node_id)
+            backend_node_id = await DOMHandler._resolve_target(
+                tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+            )
+            target_tab = input_actions._node_tabs.get(backend_node_id, tab)
+            if target_tab is tab and frame:
+                cache_key = (input_actions._tab_cache_id(tab), frame)
+                if cache_key in input_actions._frame_contexts:
+                    cached_ctx = input_actions._frame_contexts[cache_key]
+                    if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                        target_tab = cached_ctx.target_tab
+
+            if mode == "native":
+                from .fill_native_setter import fill_native_setter
+
+                await fill_native_setter(
+                    target_tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                )
+                return True
+
+            if mode in ("clipboard", "os_paste"):
+                from .fill_os_paste import fill_os_paste
+
+                await fill_os_paste(
+                    target_tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                )
+                return True
+
+            await input_actions.focus_node(target_tab, backend_node_id)
             if clear_first:
-                await input_actions.clear_field(tab, backend_node_id)
-            await tab.send(cdp.input_.insert_text(text))
-            return True
+                await input_actions.clear_field(target_tab, backend_node_id)
+
+            if mode == "synthetic":
+                from .fill_synthetic_paste import fill_synthetic_paste
+
+                await fill_synthetic_paste(
+                    target_tab, backend_node_id, text=text, frame=frame, instance_id=instance_id
+                )
+                return True
+            elif mode == "type":
+                for char in text:
+                    await input_actions.type_character(target_tab, char)
+                return True
+            else:
+                await target_tab.send(cdp.input_.insert_text(text))
+                return True
         except Exception as e:
             raise Exception(f"Failed to paste text: {str(e)}")
 
@@ -324,7 +483,9 @@ class DOMHandler:
         modifiers: Optional[List[str]] = None,
         selector: Optional[str] = None,
         count: int = 1,
-        delay_ms: int = 50
+        delay_ms: int = 50,
+        frame: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Press a real key using trusted CDP Input.dispatchKeyEvent events.
@@ -337,9 +498,11 @@ class DOMHandler:
             tab (Tab): The browser tab object.
             key (str): DOM KeyboardEvent.key name (Enter, Tab, ArrowDown, F5, ...) or a single printable character.
             modifiers (Optional[List[str]]): Modifier keys to hold: Shift, Control/Ctrl, Alt, Meta/Cmd.
-            selector (Optional[str]): CSS selector to focus before pressing. Presses on the active element when omitted.
+            selector (Optional[str]): CSS selector, deep selector, XPath, or ref=<id> to focus before pressing. Presses on the active element when omitted.
             count (int): Number of times to press the key.
             delay_ms (int): Delay between presses in milliseconds.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+            instance_id (Optional[str]): Browser instance ID.
 
         Returns:
             Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -353,9 +516,23 @@ class DOMHandler:
             descriptor = resolve_key_descriptor(key)
             modifier_mask, canonical_modifiers = resolve_modifiers(modifiers)
 
+            target_tab = tab
             if selector:
-                backend_node_id = await DOMHandler._resolve_target(tab, selector, DEFAULT_ELEMENT_TIMEOUT)
-                await input_actions.focus_node(tab, backend_node_id)
+                backend_node_id = await DOMHandler._resolve_target(
+                    tab, selector, DEFAULT_ELEMENT_TIMEOUT, frame=frame, instance_id=instance_id
+                )
+                target_tab = input_actions._node_tabs.get(backend_node_id, tab)
+                if target_tab is tab and frame:
+                    cache_key = (input_actions._tab_cache_id(tab), frame)
+                    if cache_key in input_actions._frame_contexts:
+                        cached_ctx = input_actions._frame_contexts[cache_key]
+                        if cached_ctx.target_tab and not getattr(cached_ctx.target_tab, "closed", False):
+                            target_tab = cached_ctx.target_tab
+                await input_actions.focus_node(target_tab, backend_node_id)
+            elif frame:
+                frame_ctx = await input_actions.resolve_frame_context(tab, frame)
+                if frame_ctx and frame_ctx.target_tab:
+                    target_tab = frame_ctx.target_tab
 
             text = descriptor["text"]
             unmodified_text = text
@@ -369,7 +546,7 @@ class DOMHandler:
                 unmodified_text = None
 
             for index in range(count):
-                await tab.send(cdp.input_.dispatch_key_event(
+                await target_tab.send(cdp.input_.dispatch_key_event(
                     "keyDown",
                     modifiers=modifier_mask,
                     key=key,
@@ -378,7 +555,7 @@ class DOMHandler:
                     text=text,
                     unmodified_text=unmodified_text
                 ))
-                await tab.send(cdp.input_.dispatch_key_event(
+                await target_tab.send(cdp.input_.dispatch_key_event(
                     "keyUp",
                     modifiers=modifier_mask,
                     key=key,
@@ -518,6 +695,214 @@ class DOMHandler:
             raise Exception(f"Failed to select option: {str(e)}")
 
     @staticmethod
+    async def choose_option(
+        tab: Tab,
+        selector: str,
+        option_text: str,
+        filter_text: Optional[str] = None,
+        timeout: int = 10000,
+        frame: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Choose an option from a custom combobox, listbox, or React-select widget.
+
+        Clicks the trigger to open the dropdown, optionally types filter text,
+        waits for the listbox and options to appear (matching role=listbox/option
+        or React-select class names), clicks the matching option by visible text,
+        and verifies that the selection was applied.
+
+        Args:
+            tab (Tab): The browser tab object.
+            selector (str): CSS selector, deep selector, or XPath for the combobox or trigger.
+            option_text (str): Visible text of the option to pick.
+            filter_text (Optional[str]): Optional text to type to filter options.
+            timeout (int): Timeout in milliseconds. Defaults to 10000.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
+
+        Returns:
+            Dict[str, Any]: { "success": True, "selected": str, "option": str, "verification": str }
+        """
+        from nodriver import cdp
+
+        try:
+            if isinstance(timeout, str):
+                timeout = int(timeout)
+            timeout_sec = max(timeout / 1000.0, 0.5)
+
+            # 1. Click trigger
+            trigger_node_id = await DOMHandler._resolve_target(tab, selector, timeout_sec, frame=frame)
+            await input_actions.click_node(tab, trigger_node_id)
+            await asyncio.sleep(0.05)
+
+            # Selector analysis for deep selectors / xpath
+            parts = input_actions.split_deep_selector(selector) if selector else None
+            is_deep = len(parts) > 1 if parts else False
+            is_xpath = input_actions.is_xpath_selector(selector) if selector else False
+            xpath_expr = input_actions.extract_xpath(selector) if is_xpath else ""
+
+            # Check if frame is cross-origin
+            eval_tab = tab
+            eval_context_id = None
+            eval_frame = frame
+            if frame:
+                frame_ctx = await input_actions.resolve_frame_context(tab, frame)
+                if frame_ctx and frame_ctx.is_cross_origin:
+                    eval_tab = frame_ctx.target_tab or tab
+                    eval_context_id = frame_ctx.context_id
+                    eval_frame = None
+
+            # 2. Optionally type to filter
+            if filter_text:
+                focus_expr = input_actions.build_focus_input_expression(
+                    trigger_selector=selector,
+                    frame=eval_frame,
+                    parts=parts if is_deep else None,
+                    is_xpath=is_xpath,
+                    xpath_expr=xpath_expr,
+                )
+                try:
+                    if eval_context_id is not None:
+                        await eval_tab.send(cdp.runtime.evaluate(
+                            expression=focus_expr,
+                            context_id=cdp.runtime.ExecutionContextId(eval_context_id),
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
+                    else:
+                        await eval_tab.send(cdp.runtime.evaluate(
+                            expression=focus_expr,
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
+                except Exception:
+                    pass
+                for char in filter_text:
+                    await input_actions.type_character(eval_tab, char)
+                    await asyncio.sleep(0.02)
+                await asyncio.sleep(0.05)
+
+            # 3. Wait for listbox/options and pick matching option
+            deadline = time.monotonic() + timeout_sec
+            option_backend_node_id = None
+            clicked_option_id = None
+
+            find_expression = input_actions.build_find_option_expression(
+                option_text=option_text,
+                trigger_selector=selector,
+                frame=eval_frame,
+                parts=parts if is_deep else None,
+                is_xpath=is_xpath,
+                xpath_expr=xpath_expr,
+            )
+
+            while time.monotonic() < deadline:
+                try:
+                    if eval_context_id is not None:
+                        eval_result = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=find_expression,
+                            context_id=cdp.runtime.ExecutionContextId(eval_context_id),
+                            return_by_value=False,
+                            await_promise=True,
+                        ))
+                    else:
+                        eval_result = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=find_expression,
+                            return_by_value=False,
+                            await_promise=True,
+                        ))
+                    remote_obj = eval_result[0] if isinstance(eval_result, tuple) else eval_result
+                    if remote_obj and getattr(remote_obj, "object_id", None):
+                        obj_id = cdp.runtime.RemoteObjectId(remote_obj.object_id)
+                        node = await eval_tab.send(cdp.dom.describe_node(object_id=obj_id))
+                        if node and hasattr(node, "backend_node_id"):
+                            option_backend_node_id = int(node.backend_node_id)
+                            if eval_context_id is not None or eval_tab is not tab:
+                                input_actions._track_node(option_backend_node_id, eval_context_id, eval_tab)
+                            try:
+                                call_res = await eval_tab.send(cdp.runtime.call_function_on(
+                                    "function () { return this.id || null; }",
+                                    object_id=obj_id,
+                                    return_by_value=True,
+                                ))
+                                call_obj = call_res[0] if isinstance(call_res, tuple) else call_res
+                                clicked_option_id = call_obj.get("value") if isinstance(call_obj, dict) else getattr(call_obj, "value", None)
+                            except Exception:
+                                clicked_option_id = None
+                            try:
+                                await eval_tab.send(cdp.runtime.release_object(object_id=obj_id))
+                            except Exception:
+                                pass
+                            break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+
+            if option_backend_node_id is None:
+                raise Exception(f"Option '{option_text}' not found in combobox: {selector}")
+
+            # 4. Click the option
+            await input_actions.click_node(tab, option_backend_node_id)
+
+            # 5. Verify selection
+            verify_deadline = time.monotonic() + min(5.0, timeout_sec)
+            verified = False
+            verification_info = {}
+
+            verify_expression = input_actions.build_verify_selection_expression(
+                option_text=option_text,
+                trigger_selector=selector,
+                frame=eval_frame,
+                clicked_option_id=clicked_option_id,
+                parts=parts if is_deep else None,
+                is_xpath=is_xpath,
+                xpath_expr=xpath_expr,
+            )
+
+            while time.monotonic() < verify_deadline:
+                try:
+                    if eval_context_id is not None:
+                        verify_res = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=verify_expression,
+                            context_id=cdp.runtime.ExecutionContextId(eval_context_id),
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
+                    else:
+                        verify_res = await eval_tab.send(cdp.runtime.evaluate(
+                            expression=verify_expression,
+                            return_by_value=True,
+                            await_promise=True,
+                        ))
+                    remote_obj = verify_res[0] if isinstance(verify_res, tuple) else verify_res
+                    val = remote_obj.get("value") if isinstance(remote_obj, dict) else getattr(remote_obj, "value", None)
+                    if isinstance(val, dict) and val.get("verified"):
+                        verified = True
+                        verification_info = val
+                        break
+                    elif val is True:
+                        verified = True
+                        verification_info = {"verified": True, "reason": "script_true"}
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+
+            if not verified:
+                raise Exception(
+                    f"Option '{option_text}' was clicked but selection could not be verified on: {selector}"
+                )
+
+            return {
+                "success": True,
+                "selected": option_text,
+                "option": option_text,
+                "verification": verification_info.get("reason", "verified"),
+            }
+
+        except Exception as e:
+            raise Exception(f"Failed to choose option: {str(e)}")
+
+    @staticmethod
     async def get_element_state(
         tab: Tab,
         selector: str
@@ -570,7 +955,8 @@ class DOMHandler:
         selector: str,
         timeout: int = 30000,
         visible: bool = True,
-        text_content: Optional[str] = None
+        text_content: Optional[str] = None,
+        frame: Optional[str] = None
     ) -> bool:
         """
         Wait for element to appear and match conditions.
@@ -580,10 +966,11 @@ class DOMHandler:
 
         Args:
             tab (Tab): The browser tab object.
-            selector (str): CSS selector for the element.
+            selector (str): CSS selector, deep selector, or XPath for the element.
             timeout (int): Timeout in milliseconds.
             visible (bool): Wait for element to be visible.
             text_content (Optional[str]): Wait for element to contain text.
+            frame (Optional[str]): Same-origin or cross-origin iframe selector, name, or id.
 
         Returns:
             bool: True if element matches conditions, False otherwise.
@@ -591,7 +978,7 @@ class DOMHandler:
         deadline = time.monotonic() + max(timeout, 0) / 1000
         while True:
             try:
-                backend_node_id = await input_actions.find_node(tab, selector)
+                backend_node_id = await input_actions.find_node(tab, selector, frame=frame)
                 if backend_node_id is not None and await input_actions.call_on_node(
                     tab,
                     backend_node_id,
@@ -639,28 +1026,44 @@ class DOMHandler:
     @staticmethod
     async def get_page_content(
         tab: Tab,
-        include_frames: bool = False
-    ) -> Dict[str, str]:
+        include_frames: bool = False,
+        max_chars: int = DEFAULT_PAGE_CONTENT_CHARS,
+    ) -> Dict[str, Any]:
         """
-        Get page HTML and text content.
+        Get page HTML and text content with size capping.
 
         Args:
             tab (Tab): The browser tab object.
             include_frames (bool): Include iframe contents.
+            max_chars (int): Maximum characters for content (clamped to 1000..200000).
 
         Returns:
-            Dict[str, str]: Dictionary with page content.
+            Dict[str, Any]: Dictionary with page content and truncation metadata.
         """
         try:
             html = await tab.get_content()
             text = await tab.evaluate("document.body.innerText")
 
-            content = {
-                'html': html,
-                'text': text,
+            limit = clamp_max_chars(max_chars)
+            capped_html = cap_content(html, limit)
+            capped_text = cap_content(text, limit)
+
+            is_truncated = capped_html["truncated"] or capped_text["truncated"]
+
+            content: Dict[str, Any] = {
+                'html': capped_html["content"],
+                'text': capped_text["content"],
                 'url': await tab.evaluate("window.location.href"),
-                'title': await tab.evaluate("document.title")
+                'title': await tab.evaluate("document.title"),
+                'truncated': is_truncated,
+                'original_chars': max(capped_html["original_chars"], capped_text["original_chars"]),
             }
+
+            if is_truncated:
+                content['note'] = (
+                    f"Content truncated due to max_chars limit ({limit}). "
+                    "Pass a selector or higher max_chars, or use get_accessibility_snapshot."
+                )
 
             if include_frames:
                 frames = []
@@ -731,3 +1134,44 @@ class DOMHandler:
 
         except Exception as e:
             raise Exception(f"Failed to scroll page: {str(e)}")
+
+    @staticmethod
+    async def get_accessibility_snapshot(
+        tab: Tab,
+        instance_id: Optional[str] = None,
+        max_nodes: int = 500,
+        max_chars: int = 50000,
+        interactive_only: bool = False,
+        frame: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get an accessibility snapshot of the page with stable short refs and size caps.
+
+        Args:
+            tab (Tab): Browser tab.
+            instance_id (Optional[str]): Browser instance ID.
+            max_nodes (int): Maximum nodes to include before truncating. Defaults to 500.
+            max_chars (int): Maximum character length of text tree before truncating. Defaults to 50000.
+            interactive_only (bool): Include only interactive nodes and their ancestors. Defaults to False.
+            frame (Optional[str]): Target frame (omitted for root document).
+
+        Returns:
+            Dict[str, Any]: Snapshot result dictionary.
+        """
+        from . import a11y_snapshot
+        return await a11y_snapshot.get_accessibility_snapshot(
+            tab=tab,
+            instance_id=instance_id,
+            max_nodes=max_nodes,
+            max_chars=max_chars,
+            interactive_only=interactive_only,
+            frame=frame,
+        )
+
+    take_accessibility_snapshot = get_accessibility_snapshot
+
+
+choose_option = DOMHandler.choose_option
+fill = DOMHandler.fill
+get_accessibility_snapshot = DOMHandler.get_accessibility_snapshot
+take_accessibility_snapshot = DOMHandler.take_accessibility_snapshot

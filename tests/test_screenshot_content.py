@@ -13,7 +13,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 from unittest.mock import patch
 
 from fastmcp import Client, FastMCP
@@ -25,7 +25,13 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from stealth_browser_mcp import screenshot_encoder
+from stealth_browser_mcp import screenshot_clip, screenshot_encoder
+from stealth_browser_mcp.screenshot_clip import (
+    capture_clip_screenshot,
+    compute_clip_from_rect,
+    resolve_element_clip,
+    validate_clip_args,
+)
 from stealth_browser_mcp.screenshot_encoder import DEFAULT_QUALITY, fit_screenshot, validate_options
 
 
@@ -33,6 +39,8 @@ class ScreenshotContentTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
+        os.environ["STEALTH_BROWSER_MCP_DATA_DIR"] = self.directory.name
+        self.addCleanup(lambda: os.environ.pop("STEALTH_BROWSER_MCP_DATA_DIR", None))
         self.captures = []
         buffer = io.BytesIO()
         Image.new("RGBA", (96, 64), (30, 60, 90, 128)).save(buffer, format="PNG")
@@ -65,10 +73,17 @@ class ScreenshotContentTests(unittest.TestCase):
 
         namespace = dict(
             __name__="screenshot_test", section_tool=lambda _: mcp.tool,
-            browser_manager=Manager(), Path=Path, Optional=Optional, Union=Union,
+            browser_manager=Manager(), Path=Path, Any=Any, Dict=Dict, Optional=Optional, Union=Union,
             ToolResult=ToolResult, ImageContent=ImageContent, TextContent=TextContent,
             tempfile=tempfile, os=os, base64=base64, json=json, DEFAULT_QUALITY=DEFAULT_QUALITY,
             fit_screenshot=fit_screenshot, validate_screenshot_options=validate_options,
+            validate_clip_args=validate_clip_args,
+            resolve_element_clip=resolve_element_clip,
+            capture_clip_screenshot=capture_clip_screenshot,
+            compute_clip_from_rect=compute_clip_from_rect,
+            screenshot_clip=screenshot_clip,
+            resolve_managed_path=__import__("stealth_browser_mcp.path_policy", fromlist=["resolve_managed_path"]).resolve_managed_path,
+            write_private_bytes=__import__("stealth_browser_mcp.path_policy", fromlist=["write_private_bytes"]).write_private_bytes,
         )
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(ROOT / "src/stealth_browser_mcp/server.py"), "exec"), namespace)
         return mcp
@@ -143,11 +158,18 @@ class ScreenshotContentTests(unittest.TestCase):
         self.assertEqual(result.structured_content["sha256"], hashlib.sha256(image).hexdigest())
 
     def test_explicit_file_export_stays_available(self):
-        target = Path(self.directory.name) / "exports" / "capture.png"
+        export_root = Path(self.directory.name) / "exports"
+        export_root.mkdir(parents=True, exist_ok=True)
+        target = export_root / "capture.png"
+        os.environ["STEALTH_EXPORT_DIRS"] = str(export_root)
+        self.addCleanup(lambda: os.environ.pop("STEALTH_EXPORT_DIRS", None))
         result = self.call(file_path=str(target))
         self.assertFalse(result.isError)
         self.assertTrue(target.is_file())
-        self.assertIn(str(target), result.content[0].text)
+        self.assertTrue(
+            str(target.resolve()) in result.content[0].text
+            or str(target) in result.content[0].text
+        )
         self.assertNotIn("Read tool", result.content[0].text)
 
     def test_invalid_format_fails_before_capture(self):

@@ -40,7 +40,7 @@ class InstalledLayoutTests(unittest.TestCase):
         self.assertIsNone(paths.source_checkout_root())
 
     def test_clones_go_to_user_data_dir(self):
-        self.assertEqual(paths.clone_output_dir(), self.base / "data" / "element_clones")
+        self.assertEqual(paths.clone_output_dir().resolve(), (self.base / "data" / "element_clones").resolve())
 
     def test_upload_root_is_created_in_user_data_dir(self):
         roots = file_upload_security.get_allowed_upload_roots()

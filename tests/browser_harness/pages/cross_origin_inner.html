@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inside Cross-Origin Frame</title>
+</head>
+<body>
+  <h2>Inside Cross-Origin Frame</h2>
+  <div>
+    <label for="cross-input">Cross Input:</label>
+    <input type="text" id="cross-input" name="cross-input" placeholder="Inside cross frame" value="cross-initial">
+  </div>
+  <div style="margin-top: 10px;">
+    <button type="button" id="cross-button">Cross Action</button>
+  </div>
+  <div style="margin-top: 10px;">
+    <p>Cross Value: <span id="cross-status">cross-initial</span></p>
+    <p>Cross Event Count: <span id="cross-count">0</span></p>
+  </div>
+
+  <script>
+    (function() {
+      const input = document.getElementById("cross-input");
+      const status = document.getElementById("cross-status");
+      const countDisplay = document.getElementById("cross-count");
+      let count = 0;
+
+      input.addEventListener("input", function(e) {
+        count++;
+        status.textContent = e.target.value;
+        countDisplay.textContent = String(count);
+      });
+
+      document.getElementById("cross-button").addEventListener("click", function() {
+        status.textContent = "button clicked: " + input.value;
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inputs Fixture</title>
+</head>
+<body>
+  <h1>Plain Inputs Fixture</h1>
+  <form id="test-form" onsubmit="event.preventDefault();">
+    <div>
+      <label for="text-input">Text Input:</label>
+      <input type="text" id="text-input" name="text-input" placeholder="Type text here" value="">
+    </div>
+    <div>
+      <label for="password-input">Password Input:</label>
+      <input type="password" id="password-input" name="password-input" placeholder="Password">
+    </div>
+    <div>
+      <label for="email-input">Email Input:</label>
+      <input type="email" id="email-input" name="email-input" placeholder="user@example.com">
+    </div>
+    <div>
+      <label for="number-input">Number Input:</label>
+      <input type="number" id="number-input" name="number-input" min="0" max="100" value="10">
+    </div>
+    <div>
+      <label for="checkbox-input">Checkbox:</label>
+      <input type="checkbox" id="checkbox-input" name="checkbox-input" value="agree">
+    </div>
+    <div>
+      <label>Radio Options:</label>
+      <input type="radio" id="radio-opt1" name="radio-group" value="opt1" checked> Option 1
+      <input type="radio" id="radio-opt2" name="radio-group" value="opt2"> Option 2
+    </div>
+    <div>
+      <label for="select-input">Select:</label>
+      <select id="select-input" name="select-input">
+        <option value="first">First Option</option>
+        <option value="second">Second Option</option>
+        <option value="third">Third Option</option>
+      </select>
+    </div>
+    <div>
+      <label for="textarea-input">Textarea:</label>
+      <textarea id="textarea-input" name="textarea-input" rows="4" cols="40">Initial textarea content</textarea>
+    </div>
+    <div>
+      <button type="submit" id="submit-btn">Submit</button>
+      <button type="reset" id="reset-btn">Reset</button>
+    </div>
+  </form>
+
+  <div id="status-panel">
+    <p>Last Event: <span id="last-event">none</span></p>
+    <p>Last Value: <span id="last-value">none</span></p>
+    <p>Change Count: <span id="change-count">0</span></p>
+  </div>
+
+  <script>
+    (function() {
+      let count = 0;
+      const lastEvent = document.getElementById("last-event");
+      const lastValue = document.getElementById("last-value");
+      const changeCount = document.getElementById("change-count");
+
+      function update(e) {
+        count++;
+        lastEvent.textContent = e.type + " on " + (e.target.id || e.target.name || e.target.tagName);
+        if (e.target.type === "checkbox") {
+          lastValue.textContent = String(e.target.checked);
+        } else {
+          lastValue.textContent = e.target.value !== undefined ? String(e.target.value) : "";
+        }
+        changeCount.textContent = String(count);
+      }
+
+      const form = document.getElementById("test-form");
+      form.addEventListener("input", update);
+      form.addEventListener("change", update);
+    })();
+  </script>
+</body>
+</html>

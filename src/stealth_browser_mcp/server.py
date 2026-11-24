@@ -4,18 +4,22 @@ import argparse
 import asyncio
 import base64
 import importlib
-import json
 import ipaddress
+import json
+import logging
 import os
 import sys
+import time
 import tempfile
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import nodriver as uc
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from mcp.types import ImageContent, TextContent
 from pydantic_core import to_json
@@ -27,22 +31,85 @@ from .comprehensive_element_cloner import comprehensive_element_cloner
 from .debug_logger import debug_logger
 from .dom_handler import DOMHandler
 from .element_cloner import element_cloner
+from .content_cap import DEFAULT_PAGE_CONTENT_CHARS, clamp_max_chars
+from .errors import instance_not_found_error, no_active_tab_error, tab_not_found_error
 from .file_based_element_cloner import file_based_element_cloner
-from .http_security import (
+from starlette.middleware import Middleware as ASGIMiddleware
+from .browser_args_policy import validate_browser_args, validate_sandbox, validate_user_data_dir
+from .path_policy import reject_blocked_url, resolve_managed_path, write_private_bytes
+from .cdp_policy import refuse_raw_cdp_off_loopback
+from .hook_policy import code_hooks_available, code_hooks_disabled_result, refuse_code_hooks_off_loopback
+from .http_auth import (
+    BearerAuthMiddleware,
+    HostOriginMiddleware,
+    McpPathRewriteMiddleware,
+    TokenConfigError,
     create_http_auth_provider,
-    get_http_auth_token,
+    ensure_http_token,
+    get_mcp_token as get_http_auth_token,
+    parse_csv_list,
+    validate_bind,
+)
+from .instance_default import with_instance_access
+from .page_summary import (
+    ACTION_TOOL_NAMES,
+    decide_history_move,
+    with_page_summary,
+)
+from .mcp_sessions import (
+    SessionLifecycleMiddleware,
+    get_current_mcp_session_id,
+    mcp_session_manager,
 )
 from .models import BrowserOptions
 from .network_interceptor import NetworkInterceptor
 from .page_bindings import page_bindings
 from .dynamic_hook_ai_interface import dynamic_hook_ai
+from .downloads import (
+    download_manager,
+    wait_for_download as wait_for_download_impl,
+    drop_files as drop_files_impl,
+)
 from .persistent_storage import persistent_storage
 from .progressive_element_cloner import progressive_element_cloner
 from .response_handler import response_handler
 from .screenshot_encoder import DEFAULT_QUALITY, fit_screenshot, validate_options as validate_screenshot_options
+from .screenshot_clip import (
+    capture_clip_screenshot,
+    resolve_element_clip,
+    validate_clip_args,
+)
 from .stdio_guard import install_stdio_guard
 from .platform_utils import validate_browser_environment, get_platform_info
 from .process_cleanup import process_cleanup
+from .a11y_snapshot import a11y_manager
+from . import fill_tool
+from . import profiles
+from . import session_state
+from .har_export import build_har, export_to_json
+from . import seed_snapshots
+from . import seed_tools
+from . import seed_save
+from .window_mode import format_window_bounds, normalize_window_mode, open_background_tab
+from .profile_policy import (
+    SCRAPE_POLICY_JS,
+    classify_policies,
+    parse_policy_rows,
+)
+
+from . import instance_default as _instance_default
+from . import tool_compact
+from . import tool_surface
+from . import agent_guide
+
+SCREENSHOT_CAPTURE_TIMEOUT: float = float(os.getenv("STEALTH_SCREENSHOT_TIMEOUT", "5.0"))
+
+
+class ScreenshotTimeoutError(ToolError, TimeoutError):
+    """Raised when screenshot capture times out."""
+
+    pass
+
 
 DISABLED_SECTIONS = set()
 SECTION_TOOLS: Dict[str, List[str]] = defaultdict(list)
@@ -60,6 +127,8 @@ SECTION_DESCRIPTIONS = {
     "dynamic-hooks": "AI-powered network hook system",
 }
 
+AGENT_PRESET_TOOLS: tuple[str, ...] = tool_surface.CORE_TOOLS
+
 
 def parse_bool_env(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -72,7 +141,14 @@ DEBUG_LOGGING_ENABLED = (
     parse_bool_env("STEALTH_BROWSER_DEBUG", default=False)
     or parse_bool_env("DEBUG", default=False)
 )
-HTTP_AUTH_TOKEN = get_http_auth_token()
+try:
+    HTTP_AUTH_TOKEN = get_http_auth_token()
+    _TOKEN_CONFIG_ERROR = None
+except TokenConfigError as exc:
+    HTTP_AUTH_TOKEN = None
+    _TOKEN_CONFIG_ERROR = exc
+_HTTP_MODE = False
+_HTTP_BIND_HOST = None
 
 def is_loopback_host(host: str) -> bool:
     """
@@ -92,11 +168,29 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
+def _probe_version(host: str, port: int, timeout: float = 3.0) -> bool:
+    """Probe Chrome /json/version endpoint with a timeout."""
+    import urllib.request
+    import urllib.error
+
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    url = f"http://{url_host}:{port}/json/version"
+    req = urllib.request.Request(url, headers={"User-Agent": "stealth-browser-mcp"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def section_tool(section: str):
     """Decorator that registers tools and tracks section membership."""
     def decorator(func):
         SECTION_TOOLS[section].append(func.__name__)
-        return mcp.tool(func)
+        target_func = with_instance_access(func)
+        if func.__name__ in ACTION_TOOL_NAMES:
+            target_func = with_page_summary(target_func)
+        return mcp.tool(target_func)
     return decorator
 
 
@@ -110,6 +204,95 @@ def apply_disabled_sections() -> None:
                 # Tool may already be removed by another section policy.
                 continue
 
+class _ClosedResourceNoiseFilter(logging.Filter):
+    """Filter out benign ClosedResourceError logs emitted on client disconnect."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name == "mcp.server.streamable_http"
+            and record.exc_info
+            and getattr(
+                record.exc_info[0]
+                if isinstance(record.exc_info, tuple) and len(record.exc_info) > 0
+                else record.exc_info,
+                "__name__",
+                None,
+            )
+            == "ClosedResourceError"
+        ):
+            return False
+        return True
+
+
+async def shutdown_all() -> None:
+    """Shut down all browser instances, reaper tasks, and background processes."""
+    debug_logger.log_info("server", "shutdown", "Shutting down Browser Automation MCP Server...")
+    try:
+        await mcp_session_manager.stop_session_reaper()
+    except Exception:
+        pass
+    try:
+        await browser_manager.stop_idle_reaper()
+    except Exception as e:
+        debug_logger.log_error("server", "cleanup", e)
+    try:
+        await browser_manager.close_all()
+        debug_logger.log_info("server", "cleanup", "All browser instances closed")
+    except Exception as e:
+        debug_logger.log_error("server", "cleanup", e)
+
+    try:
+        process_cleanup._cleanup_all_tracked()
+        debug_logger.log_info("server", "cleanup", "Process cleanup complete")
+    except Exception as e:
+        debug_logger.log_error("server", "cleanup", f"Process cleanup failed: {e}")
+    try:
+        persistent_instances = persistent_storage.list_instances()
+        if persistent_instances.get("instances"):
+            debug_logger.log_info(
+                "server",
+                "storage_cleanup",
+                f"Clearing in-memory storage with {len(persistent_instances['instances'])} instances...",
+            )
+            persistent_storage.clear_all()
+            debug_logger.log_info("server", "storage_cleanup", "In-memory storage cleared")
+    except Exception as e:
+        debug_logger.log_error("server", "storage_cleanup", e)
+    debug_logger.log_info("server", "shutdown", "Browser Automation MCP Server shutdown complete")
+
+
+def run_shutdown_sync() -> None:
+    """Synchronously run global shutdown and process cleanup."""
+    try:
+        asyncio.run(shutdown_all())
+    except Exception:
+        pass
+    try:
+        process_cleanup._cleanup_all_tracked()
+    except Exception:
+        pass
+    try:
+        from .http_auth import cleanup_generated_token_files
+        cleanup_generated_token_files()
+    except Exception:
+        pass
+
+
+
+def _filter_preset(all_names, preset=None) -> List[str]:
+    """Return the subset of ``all_names`` that survive the core tools filter."""
+    if preset is None:
+        preset = AGENT_PRESET_TOOLS
+    return [name for name in all_names if name in preset]
+
+
+def agent_mode_enabled(agent_flag: bool = False) -> bool:
+    """Check if the deprecated agent preset alias is requested.
+
+    Deprecated alias of the default --tools core profile.
+    """
+    return bool(agent_flag or os.getenv("STEALTH_MCP_PROFILE", "").lower() == "agent")
+
 @asynccontextmanager
 async def app_lifespan(server):
     """
@@ -121,56 +304,20 @@ async def app_lifespan(server):
     debug_logger.log_info("server", "startup", "Starting Browser Automation MCP Server...")
     try:
         await browser_manager.start_idle_reaper()
+        await mcp_session_manager.start_session_reaper()
         yield
     finally:
-        debug_logger.log_info("server", "shutdown", "Shutting down Browser Automation MCP Server...")
-        try:
-            await browser_manager.stop_idle_reaper()
-        except Exception as e:
-            debug_logger.log_error("server", "cleanup", e)
-        try:
-            await browser_manager.close_all()
-            debug_logger.log_info("server", "cleanup", "All browser instances closed")
-        except Exception as e:
-            debug_logger.log_error("server", "cleanup", e)
-        
-        try:
-            process_cleanup._cleanup_all_tracked()
-            debug_logger.log_info("server", "cleanup", "Process cleanup complete")
-        except Exception as e:
-            debug_logger.log_error("server", "cleanup", f"Process cleanup failed: {e}")
-        try:
-            persistent_instances = persistent_storage.list_instances()
-            if persistent_instances.get("instances"):
-                debug_logger.log_info(
-                    "server",
-                    "storage_cleanup",
-                    f"Clearing in-memory storage with {len(persistent_instances['instances'])} instances...",
-                )
-                persistent_storage.clear_all()
-                debug_logger.log_info("server", "storage_cleanup", "In-memory storage cleared")
-        except Exception as e:
-            debug_logger.log_error("server", "storage_cleanup", e)
-        debug_logger.log_info("server", "shutdown", "Browser Automation MCP Server shutdown complete")
+        if not _HTTP_MODE:
+            await shutdown_all()
 
 mcp = FastMCP(
     name="Browser Automation MCP",
-    instructions="""
-    This MCP server provides undetectable browser automation using nodriver (CDP-based).
-    
-    Key features:
-    - Spawn and manage multiple browser instances
-    - Navigate and interact with web pages
-    - Query and manipulate DOM elements
-    - Intercept and analyze network traffic
-    - Execute JavaScript in page context
-    - Manage cookies and storage
-    
-    Instances are built to avoid common bot detection, with trusted input
-    events and a clean headless fingerprint. Measured results against public
-    detection pages are published in STEALTH_TESTS.md.
-    """,
-    auth=create_http_auth_provider(HTTP_AUTH_TOKEN),
+    instructions=agent_guide.build_connect_instructions(),
+    auth=(
+        None
+        if _TOKEN_CONFIG_ERROR is not None
+        else create_http_auth_provider(HTTP_AUTH_TOKEN)
+    ),
     lifespan=app_lifespan,
 )
 
@@ -201,14 +348,20 @@ async def _forget_instance(instance_id: str) -> None:
     """
     await network_interceptor.clear_instance_data(instance_id)
     cdp_function_executor.forget_instance(instance_id)
+    a11y_manager.forget_instance(instance_id)
 
 
 def _register_manager_listeners() -> None:
     """Connect tab preparation and close cleanup to the current browser manager."""
+    mcp_session_manager.set_browser_manager(browser_manager)
     browser_manager.add_tab_listener(_prepare_tab)
     browser_manager.add_tab_listener(page_bindings.prepare_tab)
+    browser_manager.add_tab_listener(download_manager.prepare_tab)
     browser_manager.add_close_listener(_forget_instance)
     browser_manager.add_close_listener(page_bindings.forget_instance)
+    browser_manager.add_close_listener(download_manager.forget_instance)
+    browser_manager.add_close_listener(mcp_session_manager.on_instance_closed)
+    browser_manager.add_close_listener(browser_manager.clear_dialog_instance)
 
 
 _register_manager_listeners()
@@ -229,7 +382,12 @@ async def spawn_browser(
     block_resources: Optional[List[str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     user_data_dir: Optional[str] = None,
-    sandbox: Optional[Any] = None
+    sandbox: Optional[Any] = None,
+    seed: Optional[str] = None,
+    check_url: Optional[str] = None,
+    keep: bool = False,
+    cap: Optional[int] = None,
+    window: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Spawn a new browser instance.
@@ -247,10 +405,18 @@ async def spawn_browser(
         extra_headers (Dict[str, str]): Additional HTTP headers.
         user_data_dir (Optional[str]): Path to user data directory for persistent sessions.
         sandbox (Optional[Any]): Enable browser sandbox. Accepts bool, string ('true'/'false'), int (1/0), or None for auto-detect.
+        seed (Optional[str]): Seed profile name to clone a disposable session from.
+        check_url (Optional[str]): Optional URL to verify cookie carryover via CDP Network.getCookies.
+        keep (bool): Keep session directory on close instead of deleting it.
+        cap (Optional[int]): Maximum concurrent sessions cap.
+        window (Optional[str]): normal | minimized | offscreen | headless. Default comes from env STEALTH_WINDOW_MODE, else offscreen (a real but off-screen window that never steals focus). headless=True is the same as window='headless'. Without a display on Linux it falls back to headless.
 
     Returns:
         Dict[str, Any]: Instance information including instance_id.
     """
+    if window is not None:
+        window = normalize_window_mode(window)
+
     try:
         from .platform_utils import sandbox_must_be_disabled
 
@@ -262,35 +428,232 @@ async def spawn_browser(
             sandbox = bool(sandbox)
         elif not isinstance(sandbox, bool):
             sandbox = bool(sandbox)
-        
+
+        browser_args = validate_browser_args(browser_args or [])
+        user_data_dir = validate_user_data_dir(user_data_dir)
+        sandbox = validate_sandbox(sandbox, http_mode=_HTTP_MODE)
+
         options = BrowserOptions(
             headless=headless,
+            window=window,
             user_agent=user_agent,
             viewport_width=viewport_width,
             viewport_height=viewport_height,
             proxy=proxy,
-            browser_args=browser_args or [],
+            browser_args=browser_args,
             timezone_id=timezone_id,
             idle_timeout_seconds=idle_timeout_seconds,
             block_resources=block_resources or [],
             extra_headers=extra_headers or {},
             user_data_dir=user_data_dir,
-            sandbox=sandbox
+            sandbox=sandbox,
+            seed=seed,
+            check_url=check_url,
+            keep=keep,
+            cap=cap,
         )
         instance = await browser_manager.spawn_browser(options)
+        mcp_sid = get_current_mcp_session_id()
+        if mcp_sid:
+            mcp_session_manager.register_session(mcp_sid, instance.instance_id)
         spawn_diagnostics = await browser_manager.get_spawn_diagnostics(instance.instance_id)
-        return {
+        session_info = await browser_manager.get_session_info(instance.instance_id)
+        result: Dict[str, Any] = {
             "instance_id": instance.instance_id,
             "state": instance.state,
             "headless": instance.headless,
+            "window": getattr(instance, "window", None),
             "viewport": instance.viewport,
             "spawn_diagnostics": spawn_diagnostics or {},
         }
+        if getattr(instance, "window_bounds", None) is not None:
+            result["window_bounds"] = instance.window_bounds
+        if getattr(instance, "window_note", None) is not None:
+            result["window_note"] = instance.window_note
+        if session_info:
+            result.update(session_info)
+        return result
     except Exception as e:
         message = str(e)
         if not message.startswith("Failed to spawn browser"):
             message = f"Failed to spawn browser: {message}"
         raise Exception(message) from e
+
+_ATTACH_FAILS: Dict[str, deque] = {}
+_ATTACH_FAILS_GLOBAL: deque = deque()
+_ATTACH_FAIL_LIMIT = 10
+_ATTACH_FAIL_WINDOW = 60.0
+_ATTACH_FAILS_MAX_KEYS = 256
+
+
+def _attach_rate_key() -> str:
+    return get_current_mcp_session_id() or "anonymous"
+
+
+def _prune_attach_failures(bucket: deque, now: float) -> None:
+    while bucket and now - bucket[0] > _ATTACH_FAIL_WINDOW:
+        bucket.popleft()
+
+
+def _prune_attach_fail_dict(now: float) -> None:
+    for key, bucket in list(_ATTACH_FAILS.items()):
+        _prune_attach_failures(bucket, now)
+        if not bucket:
+            _ATTACH_FAILS.pop(key, None)
+    while len(_ATTACH_FAILS) > _ATTACH_FAILS_MAX_KEYS:
+        # drop the key whose newest failure is oldest
+        oldest_key = min(_ATTACH_FAILS, key=lambda k: _ATTACH_FAILS[k][-1] if _ATTACH_FAILS[k] else 0.0)
+        _ATTACH_FAILS.pop(oldest_key, None)
+
+
+def _check_attach_rate_limit() -> None:
+    now = time.monotonic()
+    _prune_attach_failures(_ATTACH_FAILS_GLOBAL, now)
+    _prune_attach_fail_dict(now)
+    if len(_ATTACH_FAILS_GLOBAL) >= _ATTACH_FAIL_LIMIT:
+        raise ToolError(
+            "attach_browser is rate limited: too many failed probes. Wait and retry."
+        )
+    bucket = _ATTACH_FAILS.setdefault(_attach_rate_key(), deque())
+    _prune_attach_failures(bucket, now)
+    if len(bucket) >= _ATTACH_FAIL_LIMIT:
+        raise ToolError(
+            "attach_browser is rate limited: too many failed probes. Wait and retry."
+        )
+
+
+def _record_attach_failure() -> None:
+    now = time.monotonic()
+    _prune_attach_failures(_ATTACH_FAILS_GLOBAL, now)
+    _ATTACH_FAILS_GLOBAL.append(now)
+    bucket = _ATTACH_FAILS.setdefault(_attach_rate_key(), deque())
+    _prune_attach_failures(bucket, now)
+    bucket.append(now)
+    _prune_attach_fail_dict(now)
+
+
+def reset_attach_rate_limiter() -> None:
+    """Clear attach probe failure buckets (for tests)."""
+    _ATTACH_FAILS.clear()
+    _ATTACH_FAILS_GLOBAL.clear()
+
+
+@section_tool("browser-management")
+async def attach_browser(
+    port: int = 9222,
+    host: str = "127.0.0.1",
+    window: str = "keep",
+) -> Dict[str, Any]:
+    """Attach to an already running Chrome browser via its remote debugging port.
+
+    Connects to Chrome without launching a new process or modifying its window.
+    """
+    if isinstance(port, str):
+        try:
+            port = int(port)
+        except ValueError:
+            raise ToolError(f"Invalid port: {port}")
+
+    if window != "keep":
+        raise ToolError("Only window='keep' is valid for attach_browser.")
+
+    if _HTTP_MODE and not parse_bool_env("STEALTH_ALLOW_ATTACH", default=False):
+        raise ToolError(
+            "attach_browser is disabled in HTTP mode. Set STEALTH_ALLOW_ATTACH=1 to "
+            "allow attaching to a Chrome this server spawned for this session, or to "
+            "an external browser that this server does not already own."
+        )
+    from .http_auth import request_appears_proxied
+    if _HTTP_MODE and request_appears_proxied():
+        raise ToolError(
+            "attach_browser is disabled for proxied HTTP requests (X-Forwarded-For "
+            "or Forwarded is set). A reverse proxy in front of a loopback bind counts "
+            "as off loopback."
+        )
+
+    from .http_auth import connect_host_kind, is_loopback_connect_host
+
+    http_off_loopback = bool(_HTTP_MODE and _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST))
+    allow_remote = parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False) and not http_off_loopback
+    try:
+        host_kind = connect_host_kind(host)
+    except Exception:
+        host_kind = "unknown"
+    if host_kind == "mixed":
+        raise ToolError(
+            f"Host '{host}' resolves to both loopback and non-loopback addresses."
+        )
+    host_is_local = host_kind == "loopback" or is_loopback_connect_host(host)
+    if not host_is_local and http_off_loopback:
+        raise ToolError(
+            f"Host '{host}' is not a loopback address. STEALTH_ALLOW_REMOTE_ATTACH is ignored "
+            "when the HTTP server is bound off loopback."
+        )
+    if not host_is_local and not allow_remote:
+        raise ToolError(
+            f"Host '{host}' is not a loopback address (127.0.0.1, localhost, ::1). "
+            "Set STEALTH_ALLOW_REMOTE_ATTACH=1 to allow remote attach."
+        )
+
+    owned = browser_manager.lookup_instance_by_debug_endpoint(host, port)
+    if owned:
+        sid = get_current_mcp_session_id()
+        if _HTTP_MODE and not sid:
+            raise ToolError(
+                "That debugging port is not available for attach from this session."
+            )
+        try:
+            mcp_session_manager.check_access(owned, sid)
+        except Exception as exc:
+            raise ToolError(
+                "That debugging port is not available for attach from this session."
+            ) from exc
+        existing = await browser_manager.get_instance(owned)
+        if existing:
+            inst = existing.get("instance") if isinstance(existing, dict) else existing
+            state = getattr(inst, "state", None)
+            if state is not None and hasattr(state, "value"):
+                state = state.value
+            elif inst is None and isinstance(existing, dict):
+                state = existing.get("state")
+            return {
+                "instance_id": owned,
+                "state": state,
+                "attached": True,
+                "already_owned": True,
+                "host": host,
+                "port": port,
+                "window": window,
+            }
+
+    _check_attach_rate_limit()
+    reachable = await asyncio.to_thread(_probe_version, host, port, 3.0)
+    if not reachable:
+        _record_attach_failure()
+        raise ToolError(
+            f"Could not connect to Chrome at http://{host}:{port}/json/version. "
+            f"Chrome must be started with --remote-debugging-port={port} and a non-default --user-data-dir. "
+            "See docs/MANAGED_PROFILES.md for instructions."
+        )
+
+    try:
+        instance = await browser_manager.attach_browser(port=port, host=host, window=window)
+        mcp_sid = get_current_mcp_session_id()
+        if mcp_sid:
+            mcp_session_manager.register_session(mcp_sid, instance.instance_id)
+
+        return {
+            "instance_id": instance.instance_id,
+            "state": instance.state,
+            "attached": True,
+            "host": host,
+            "port": port,
+            "window": window,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        raise ToolError(f"Failed to attach to browser: {str(e)}") from e
 
 @section_tool("browser-management")
 async def list_instances() -> List[Dict[str, Any]]:
@@ -309,7 +672,8 @@ async def list_instances() -> List[Dict[str, Any]]:
             "state": inst.state,
             "current_url": inst.current_url,
             "title": inst.title,
-            "source": "active"
+            "source": "active",
+            "attached": getattr(inst, "attached", False),
         })
     memory_ids = {inst.instance_id for inst in memory_instances}
     for instance_id, inst_data in storage_instances.get("instances", {}).items():
@@ -319,8 +683,18 @@ async def list_instances() -> List[Dict[str, Any]]:
                 "state": inst_data["state"] + " (stored)",
                 "current_url": inst_data["current_url"],
                 "title": inst_data["title"],
-                "source": "stored"
+                "source": "stored",
+                "attached": inst_data.get("attached", False),
             })
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        return mcp_session_manager.filter_instances(result)
     return result
 
 @section_tool("browser-management")
@@ -334,6 +708,15 @@ async def close_instance(instance_id: str) -> bool:
     Returns:
         bool: True if closed successfully.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.close_instance(instance_id)
 
 @section_tool("browser-management")
@@ -347,9 +730,31 @@ async def get_instance_state(instance_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Optional[Dict[str, Any]]: Complete state information.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     state = await browser_manager.get_page_state(instance_id)
     if state:
-        return state.dict()
+        result = state.dict()
+        inst_data = await browser_manager.get_instance(instance_id)
+        if inst_data and "instance" in inst_data:
+            inst = inst_data["instance"]
+            if hasattr(inst, "window"):
+                result["window"] = inst.window
+            if hasattr(inst, "headless") and "headless" not in result:
+                result["headless"] = inst.headless
+            if getattr(inst, "window_bounds", None) is not None:
+                result["window_bounds"] = inst.window_bounds
+            if getattr(inst, "window_note", None) is not None:
+                result["window_note"] = inst.window_note
+            result["attached"] = getattr(inst, "attached", inst_data.get("attached", False))
+        return result
     return None
 
 @section_tool("browser-management")
@@ -375,6 +780,7 @@ async def navigate(
     """
     if isinstance(timeout, str):
         timeout = int(timeout)
+    url = reject_blocked_url(url)
     return await browser_manager.navigate(
         instance_id=instance_id,
         url=url,
@@ -384,7 +790,101 @@ async def navigate(
     )
 
 @section_tool("browser-management")
-async def go_back(instance_id: str) -> bool:
+async def get_dialogs(
+    instance_id: str,
+) -> List[Dict[str, Any]]:
+    """
+    List pending and recently handled JavaScript dialogs for a browser instance.
+
+    Args:
+        instance_id (str): Browser instance ID.
+
+    Returns:
+        List[Dict[str, Any]]: List of dialog dictionaries with type, message,
+            url, frame_id, policy_action, and pending/handled status.
+    """
+    return browser_manager.get_dialogs(instance_id)
+
+@section_tool("browser-management")
+async def handle_dialog(
+    instance_id: str,
+    accept: bool = True,
+    prompt_text: Optional[str] = None,
+    dialog_id: Optional[str] = None,
+    action: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Accept or dismiss a pending JavaScript dialog.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        accept (bool): True to accept (OK), False to dismiss (Cancel).
+        prompt_text (Optional[str]): Text to submit if the dialog is a prompt.
+        dialog_id (Optional[str]): Optional ID of a specific pending dialog.
+        action (Optional[str]): Optional action ('accept' or 'dismiss').
+
+    Returns:
+        Dict[str, Any]: Result indicating whether the dialog was handled.
+    """
+    return await browser_manager.handle_dialog(
+        instance_id=instance_id,
+        accept=accept,
+        prompt_text=prompt_text,
+        dialog_id=dialog_id,
+        action=action,
+    )
+
+@section_tool("browser-management")
+async def wait_for(
+    instance_id: str,
+    selector: Optional[str] = None,
+    visible: bool = True,
+    present: bool = False,
+    state: Optional[str] = None,
+    text: Optional[str] = None,
+    url: Optional[str] = None,
+    networkidle: bool = False,
+    timeout: int = 30000,
+) -> Dict[str, Any]:
+    """
+    Wait for page or element conditions.
+
+    Supports waiting for:
+    - Element visibility or presence (selector + visible/present/state)
+    - Text content (in selector element or on page)
+    - URL navigation / match (exact, substring, or regex)
+    - Network idle (~500 ms with no in-flight requests)
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (Optional[str]): CSS selector or XPath.
+        visible (bool): Wait for element to be visible (default: True).
+        present (bool): Wait for element to be present in DOM (not necessarily visible).
+        state (Optional[str]): State to wait for ('visible' or 'present'/'attached').
+        text (Optional[str]): Text content to wait for.
+        url (Optional[str]): URL or URL substring/regex to wait for.
+        networkidle (bool): Wait for network to become idle (~500 ms with no in-flight requests).
+        timeout (int): Timeout in milliseconds (default: 30000).
+
+    Returns:
+        Dict[str, Any]: Result indicating success and elapsed time.
+    """
+    if isinstance(timeout, str):
+        timeout = int(timeout)
+    return await browser_manager.wait_for(
+        instance_id=instance_id,
+        selector=selector,
+        visible=visible,
+        present=present,
+        state=state,
+        text=text,
+        url=url,
+        networkidle=networkidle,
+        timeout=timeout,
+    )
+
+@section_tool("browser-management")
+async def go_back(instance_id: str) -> Dict[str, Any]:
     """
     Navigate back in history.
 
@@ -392,16 +892,37 @@ async def go_back(instance_id: str) -> bool:
         instance_id (str): Browser instance ID.
 
     Returns:
-        bool: True if navigation was successful.
+        Dict[str, Any]: Navigation result with success flag and optional message.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
+
+    try:
+        history = await tab.send(uc.cdp.page.get_navigation_history())
+        if isinstance(history, tuple) and len(history) == 2:
+            current_index, entries = history
+        elif isinstance(history, dict):
+            current_index = int(history.get("currentIndex", 0))
+            entries = history.get("entries", [])
+        else:
+            current_index, entries = history
+
+        urls = [
+            getattr(e, "url", "") if hasattr(e, "url") else (e.get("url", "") if isinstance(e, dict) else str(e))
+            for e in entries
+        ]
+        refusal = decide_history_move("back", current_index, urls)
+        if refusal is not None:
+            return {"success": False, "message": refusal}
+    except Exception:
+        pass
+
     await tab.back()
-    return True
+    return {"success": True}
 
 @section_tool("browser-management")
-async def go_forward(instance_id: str) -> bool:
+async def go_forward(instance_id: str) -> Dict[str, Any]:
     """
     Navigate forward in history.
 
@@ -409,13 +930,34 @@ async def go_forward(instance_id: str) -> bool:
         instance_id (str): Browser instance ID.
 
     Returns:
-        bool: True if navigation was successful.
+        Dict[str, Any]: Navigation result with success flag and optional message.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
+
+    try:
+        history = await tab.send(uc.cdp.page.get_navigation_history())
+        if isinstance(history, tuple) and len(history) == 2:
+            current_index, entries = history
+        elif isinstance(history, dict):
+            current_index = int(history.get("currentIndex", 0))
+            entries = history.get("entries", [])
+        else:
+            current_index, entries = history
+
+        urls = [
+            getattr(e, "url", "") if hasattr(e, "url") else (e.get("url", "") if isinstance(e, dict) else str(e))
+            for e in entries
+        ]
+        refusal = decide_history_move("forward", current_index, urls)
+        if refusal is not None:
+            return {"success": False, "message": refusal}
+    except Exception:
+        pass
+
     await tab.forward()
-    return True
+    return {"success": True}
 
 @section_tool("browser-management")
 async def reload_page(instance_id: str, ignore_cache: bool = False) -> bool:
@@ -431,9 +973,153 @@ async def reload_page(instance_id: str, ignore_cache: bool = False) -> bool:
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     await tab.reload(ignore_cache=ignore_cache)
     return True
+
+@section_tool("browser-management")
+async def wait_for_download(
+    instance_id: Optional[str] = None,
+    timeout: float = 30.0,
+    filename_pattern: Optional[str] = None,
+    instance: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Wait for a file download to complete in the session download directory.
+
+    Args:
+        instance_id (Optional[str]): Browser instance ID.
+        timeout (float): Maximum seconds to wait (default: 30.0).
+        filename_pattern (Optional[str]): Glob pattern or filename to match.
+        instance (Optional[str]): Alias for instance_id.
+
+    Returns:
+        Dict[str, Any]: Details of downloaded file including file_path, filename, and file_size.
+    """
+    target_id = instance_id or instance
+    return await wait_for_download_impl(
+        instance=target_id,
+        timeout=timeout,
+        filename_pattern=filename_pattern,
+        browser_manager=browser_manager,
+    )
+
+@section_tool("browser-management")
+async def snapshot_seed(
+    name: str,
+    label: Optional[str] = None,
+    max_snapshots: Optional[int] = 5,
+) -> Dict[str, Any]:
+    """
+    Take a snapshot of a seed directory.
+
+    Copies the seed directory to data_dir/snapshots/<name>/<timestamp>-<label>/
+    under the per-seed lock.
+
+    Args:
+        name (str): Validated seed name.
+        label (Optional[str]): Optional descriptive label for the snapshot.
+        max_snapshots (Optional[int]): Number of recent snapshots to retain (default: 5).
+
+    Returns:
+        Dict[str, Any]: Information about the created snapshot.
+    """
+    return seed_snapshots.snapshot_seed(name=name, label=label, max_snapshots=max_snapshots)
+
+@section_tool("browser-management")
+async def list_seed_snapshots(
+    name: str,
+) -> List[Dict[str, Any]]:
+    """
+    List snapshots for a seed directory.
+
+    Args:
+        name (str): Validated seed name.
+
+    Returns:
+        List[Dict[str, Any]]: List of snapshot descriptions.
+    """
+    return seed_snapshots.list_seed_snapshots(name=name)
+
+@section_tool("browser-management")
+async def restore_seed_snapshot(
+    name: str,
+    snapshot_id: str,
+) -> Dict[str, Any]:
+    """
+    Restore a seed directory from a snapshot.
+
+    Restores the exact file set under the per-seed lock and refuses if live
+    sessions use the seed.
+
+    Args:
+        name (str): Validated seed name.
+        snapshot_id (str): Identifier of the snapshot to restore.
+
+    Returns:
+        Dict[str, Any]: Result indicating restoration status.
+    """
+    return seed_snapshots.restore_seed_snapshot(name=name, snapshot_id=snapshot_id)
+
+@section_tool("browser-management")
+async def save_to_seed(
+    session_id: str,
+    seed: Optional[str] = None,
+    close_first: bool = False,
+    flush_wait_seconds: float = 6.0,
+) -> Dict[str, Any]:
+    """
+    Save a running session's profile state back into its seed (or a new seed name).
+
+    Saves a session's profile state (cookies, local storage, settings) back into
+    its originating seed or a new seed name under the per-seed lock. Takes an
+    automatic snapshot of the existing seed first. The original source browser
+    profile is never modified.
+
+    Args:
+        session_id (str): ID of the session (or browser instance ID) to save from.
+        seed (Optional[str]): Target seed name (1-40 chars, [a-z0-9_-]). Defaults
+            to the seed the session was spawned from.
+        close_first (bool): Gracefully close the session's browser before saving
+            to guarantee all in-memory buffers (cookies and local storage) are
+            committed to disk. Defaults to False.
+        flush_wait_seconds (float): Seconds to wait before saving when close_first
+            is False so localStorage has time to commit. Defaults to 6.0. Set to
+            0 to disable.
+
+    Returns:
+        Dict[str, Any]: Operation summary with status, seed name, and file counts.
+    """
+    owned_instance = await browser_manager.find_instance_id_for_session_or_instance(session_id)
+    if owned_instance:
+        mcp_session_manager.check_access(owned_instance)
+    elif get_current_mcp_session_id() and mcp_session_manager.isolation_armed():
+        raise instance_not_found_error(session_id)
+    if not profiles.session_exists(session_id):
+        session_info = await browser_manager.get_session_info(session_id)
+        if session_info and session_info.get("session_id"):
+            session_id = session_info["session_id"]
+    if close_first:
+        close_res = seed_save.close_session_browser(
+            session_id=session_id,
+            timeout=15.0,
+            browser_manager=browser_manager,
+        )
+        if asyncio.iscoroutine(close_res):
+            await close_res
+        return seed_save.save_to_seed(
+            session_id=session_id,
+            seed=seed,
+            close_first=close_first,
+            flush_wait_seconds=flush_wait_seconds,
+            browser_already_closed=True,
+        )
+    return seed_save.save_to_seed(
+        session_id=session_id,
+        seed=seed,
+        close_first=close_first,
+        flush_wait_seconds=flush_wait_seconds,
+    )
 
 @section_tool("element-interaction")
 async def query_elements(
@@ -458,7 +1144,7 @@ async def query_elements(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     debug_logger.log_info('Server', 'query_elements', f'Received limit parameter: {limit} (type: {type(limit)})')
     elements = await dom_handler.query_elements(
         tab, selector, text_filter, visible_only, limit
@@ -483,16 +1169,18 @@ async def click_element(
     instance_id: str,
     selector: str,
     text_match: Optional[str] = None,
-    timeout: int = 10000
+    timeout: int = 10000,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Click an element.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector, deep selector (host >>> button), or XPath.
         text_match (Optional[str]): Click element with matching text.
         timeout (int): Timeout in milliseconds.
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if clicked successfully.
@@ -501,8 +1189,10 @@ async def click_element(
         timeout = int(timeout)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.click_element(tab, selector, text_match, timeout)
+        raise instance_not_found_error(instance_id)
+    return await dom_handler.click_element(
+        tab, selector, text_match, timeout, frame=frame, instance_id=instance_id
+    )
 
 @section_tool("element-interaction")
 async def type_text(
@@ -512,7 +1202,8 @@ async def type_text(
     clear_first: bool = True,
     delay_ms: int = 50,
     parse_newlines: bool = False,
-    shift_enter: bool = False
+    shift_enter: bool = False,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Type text into an input field with trusted keyboard events.
@@ -521,12 +1212,13 @@ async def type_text(
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector.
+        selector (str): CSS selector, deep selector (host >>> input), XPath, or ref=<id>.
         text (str): Text to type.
         clear_first (bool): Clear field before typing.
         delay_ms (int): Delay between keystrokes in milliseconds.
-        parse_newlines (bool): If True, press Enter for each \n instead of inserting a line break.
-        shift_enter (bool): If True, press Shift+Enter for each \n (for chat apps).
+        parse_newlines (bool): If True, press Enter for each \\n instead of inserting a line break.
+        shift_enter (bool): If True, press Shift+Enter for each \\n (for chat apps).
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if typed successfully.
@@ -535,32 +1227,121 @@ async def type_text(
         delay_ms = int(delay_ms)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.type_text(tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter)
+        raise instance_not_found_error(instance_id)
+    return await dom_handler.type_text(
+        tab, selector, text, clear_first, delay_ms, parse_newlines, shift_enter, frame=frame, instance_id=instance_id
+    )
+
+@section_tool("element-interaction")
+async def fill(
+    instance_id: str,
+    selector: str,
+    value: Optional[str] = None,
+    value_env: Optional[str] = None,
+    strategy: str = "auto",
+    verify: bool = True,
+    frame: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Fill an input, textarea, select, combobox, or contenteditable element with verification.
+
+    Classifies the element kind, picks an appropriate input strategy (native setter,
+    synthetic paste, custom combobox choose_option, or formatted input), and
+    verifies the result when verify is True. Sensitive values (passwords or value_env)
+    are never echoed back in plain text.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector, deep selector, XPath, or ref=<id>.
+        value (Optional[str]): Text or value to fill into the input.
+        value_env (Optional[str]): Name of an environment variable holding the secret
+            (must start with STEALTH_SECRET_).
+        strategy (str): Input strategy: 'auto', 'native_setter', 'synthetic_paste',
+            'os_paste', 'typing', or 'choose_option'. Defaults to 'auto'.
+        verify (bool): Whether to verify the filled value by reading it back. Defaults to True.
+        frame (Optional[str]): Target element within an iframe (selector, name, or id).
+
+    Returns:
+        Dict[str, Any]: Result with strategy used, verified status, and safe preview.
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise instance_not_found_error(instance_id)
+    return await fill_tool.fill(
+        tab,
+        selector,
+        value=value,
+        value_env=value_env,
+        strategy=strategy,
+        verify=verify,
+        frame=frame,
+        instance_id=instance_id,
+    )
+
+@section_tool("element-interaction")
+async def fill_element(
+    instance_id: str,
+    selector: str,
+    value: Optional[str] = None,
+    value_env: Optional[str] = None,
+    strategy: str = "auto",
+    verify: bool = True,
+    frame: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Fill an input field with text (alias for fill).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector, XPath, deep selector, or ref=<id> (e.g. ref=e1).
+        value (Optional[str]): Text or value to fill into the input.
+        value_env (Optional[str]): Secret environment variable name (STEALTH_SECRET_ prefix).
+        strategy (str): Strategy override ('auto', 'native_setter', etc.).
+        verify (bool): Whether to verify read-back value.
+        frame (Optional[str]): Target element within an iframe (selector, name, or id).
+
+    Returns:
+        Dict[str, Any]: Result with strategy used, verified status, and safe preview.
+    """
+    return await fill(
+        instance_id=instance_id,
+        selector=selector,
+        value=value,
+        value_env=value_env,
+        strategy=strategy,
+        verify=verify,
+        frame=frame,
+    )
 
 @section_tool("element-interaction")
 async def paste_text(
     instance_id: str,
     selector: str,
     text: str,
-    clear_first: bool = True
+    clear_first: bool = True,
+    frame: Optional[str] = None,
+    mode: Optional[str] = None,
 ) -> bool:
     """
     Paste text instantly into an input field.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector, deep selector, XPath, or ref=<id>.
         text (str): Text to paste.
         clear_first (bool): Clear field before pasting.
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
+        mode (Optional[str]): Paste mode in {'synthetic', 'type', 'native', 'clipboard', 'os_paste'}. Defaults to None (keeps current behaviour).
 
     Returns:
         bool: True if pasted successfully.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.paste_text(tab, selector, text, clear_first)
+        raise instance_not_found_error(instance_id)
+    return await dom_handler.paste_text(
+        tab, selector, text, clear_first, frame=frame, instance_id=instance_id, mode=mode
+    )
 
 @section_tool("element-interaction")
 async def press_key(
@@ -569,7 +1350,8 @@ async def press_key(
     modifiers: Optional[List[str]] = None,
     selector: Optional[str] = None,
     count: int = 1,
-    delay_ms: int = 50
+    delay_ms: int = 50,
+    frame: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Press a real key using trusted CDP key events.
@@ -582,9 +1364,10 @@ async def press_key(
         instance_id (str): Browser instance ID.
         key (str): DOM KeyboardEvent.key name (Enter, Tab, Escape, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, Backspace, Delete, Home, End, PageUp, PageDown, Space, F1-F12) or a single printable character.
         modifiers (Optional[List[str]]): Modifier keys to hold: Shift, Control (Ctrl), Alt, Meta (Cmd).
-        selector (Optional[str]): CSS selector to focus before pressing. Presses on the focused element when omitted.
+        selector (Optional[str]): CSS selector, deep selector, XPath, or ref=<id> to focus before pressing. Presses on the focused element when omitted.
         count (int): Number of times to press the key.
         delay_ms (int): Delay between presses in milliseconds.
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         Dict[str, Any]: { success: True, key: str, count: int, modifiers: [str, ...] }
@@ -597,8 +1380,10 @@ async def press_key(
         modifiers = [modifiers]
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.press_key(tab, key, modifiers, selector, count, delay_ms)
+        raise instance_not_found_error(instance_id)
+    return await dom_handler.press_key(
+        tab, key, modifiers, selector, count, delay_ms, frame=frame, instance_id=instance_id
+    )
 
 @section_tool("element-interaction")
 async def file_upload(
@@ -623,8 +1408,32 @@ async def file_upload(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.file_upload(tab, selector, paths)
+
+@section_tool("element-interaction")
+async def drop_files(
+    selector: str,
+    paths: List[str],
+    instance_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Drop files onto a drag-and-drop zone element via CDP Input.dispatchDragEvent / DataTransfer events.
+
+    Args:
+        selector (str): CSS selector, deep selector, or XPath for the drop target element.
+        paths (List[str]): List of absolute file paths to drop.
+        instance_id (Optional[str]): Browser instance ID.
+
+    Returns:
+        Dict[str, Any]: { success: True, count: N, files: [basename, ...] }
+    """
+    return await drop_files_impl(
+        selector=selector,
+        paths=paths,
+        instance_id=instance_id,
+        browser_manager=browser_manager,
+    )
 
 @section_tool("element-interaction")
 async def select_option(
@@ -649,7 +1458,7 @@ async def select_option(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     
     converted_index = None
     if index is not None:
@@ -659,6 +1468,48 @@ async def select_option(
             raise Exception(f"Invalid index value: {index}. Must be a number.")
     
     return await dom_handler.select_option(tab, selector, value, text, converted_index)
+
+@section_tool("element-interaction")
+async def choose_option(
+    instance_id: str,
+    selector: str,
+    option_text: str,
+    filter_text: Optional[str] = None,
+    timeout: int = 10000,
+    frame: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Select an option from a custom combobox, listbox, or React-select widget.
+
+    Clicks the trigger element to open the dropdown, optionally types filter text,
+    waits for the listbox and options to appear (matching role=listbox/option or
+    React-select style class names), clicks the matching option by visible text,
+    and verifies that the selection was applied.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        selector (str): CSS selector, deep selector, or XPath for the combobox or trigger element.
+        option_text (str): Visible text of the option to pick.
+        filter_text (Optional[str]): Optional text to type into the combobox to filter options.
+        timeout (int): Timeout in milliseconds to wait for elements. Defaults to 10000.
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
+
+    Returns:
+        Dict[str, Any]: { "success": True, "selected": str, "option": str, "verification": str }
+    """
+    if isinstance(timeout, str):
+        timeout = int(timeout)
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise instance_not_found_error(instance_id)
+    return await dom_handler.choose_option(
+        tab,
+        selector,
+        option_text,
+        filter_text=filter_text,
+        timeout=timeout,
+        frame=frame
+    )
 
 @section_tool("element-interaction")
 async def get_element_state(
@@ -677,7 +1528,7 @@ async def get_element_state(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.get_element_state(tab, selector)
 
 @section_tool("element-interaction")
@@ -686,17 +1537,19 @@ async def wait_for_element(
     selector: str,
     timeout: int = 30000,
     visible: bool = True,
-    text_content: Optional[str] = None
+    text_content: Optional[str] = None,
+    frame: Optional[str] = None
 ) -> bool:
     """
     Wait for an element to appear.
 
     Args:
         instance_id (str): Browser instance ID.
-        selector (str): CSS selector or XPath.
+        selector (str): CSS selector, deep selector, or XPath.
         timeout (int): Timeout in milliseconds.
         visible (bool): Wait for element to be visible.
         text_content (Optional[str]): Wait for specific text content.
+        frame (Optional[str]): Target element within an iframe (same-origin or cross-origin; selector, name, or id).
 
     Returns:
         bool: True if element found.
@@ -705,8 +1558,8 @@ async def wait_for_element(
         timeout = int(timeout)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    return await dom_handler.wait_for_element(tab, selector, timeout, visible, text_content)
+        raise instance_not_found_error(instance_id)
+    return await dom_handler.wait_for_element(tab, selector, timeout, visible, text_content, frame=frame)
 
 @section_tool("element-interaction")
 async def scroll_page(
@@ -731,7 +1584,7 @@ async def scroll_page(
         amount = int(amount)
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await dom_handler.scroll_page(tab, direction, amount, smooth)
 
 @section_tool("element-interaction")
@@ -753,7 +1606,7 @@ async def execute_script(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     try:
         result = await dom_handler.execute_script(tab, script, args)
         bounded = response_handler.handle_response(result, "script_result")
@@ -772,7 +1625,8 @@ async def execute_script(
 @section_tool("element-interaction")
 async def get_page_content(
     instance_id: str,
-    include_frames: bool = False
+    include_frames: bool = False,
+    max_chars: int = DEFAULT_PAGE_CONTENT_CHARS,
 ) -> Dict[str, Any]:
     """
     Get page HTML and text content.
@@ -780,14 +1634,15 @@ async def get_page_content(
     Args:
         instance_id (str): Browser instance ID.
         include_frames (bool): Include iframe information.
+        max_chars (int): Max characters for content (1000..200000). Defaults to 40000.
 
     Returns:
         Dict[str, Any]: Page content including HTML, text, and metadata.
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
-    content = await dom_handler.get_page_content(tab, include_frames)
+        raise instance_not_found_error(instance_id)
+    content = await dom_handler.get_page_content(tab, include_frames, max_chars=max_chars)
     
     return response_handler.handle_response(
         content, 
@@ -802,58 +1657,322 @@ async def take_screenshot(
     format: str = "png",
     file_path: Optional[str] = None,
     quality: int = DEFAULT_QUALITY,
-    max_width: Optional[int] = None
-) -> Union[str, ToolResult]:
+    max_width: Optional[int] = None,
+    selector: Optional[str] = None,
+    clip: Optional[Dict[str, float]] = None,
+) -> ToolResult:
     """
     Take a screenshot of the page.
 
     The image is returned as MCP image content with metadata. It is scaled
     down, keeping its aspect ratio, when it is wider than max_width, longer
     than 8000 pixels on a side, or too large to send inline. The metadata
-    reports the original size and the scale used.
+    reports the original size and the scale used. Optionally captures a
+    specific element via selector or custom region via clip.
 
     Args:
         instance_id (str): Browser instance ID.
         full_page (bool): Capture full page (not just viewport).
         format (str): Image format ('png' or 'jpeg'). Use jpeg with a lower quality for smaller images.
-        file_path (Optional[str]): Save the full-resolution screenshot to this path on the server instead.
+        file_path (Optional[str]): Save the full-resolution screenshot to this path on the server in addition to returning image content.
         quality (int): JPEG quality from 1 to 100. PNG is lossless and ignores it.
         max_width (Optional[int]): Largest width in pixels to return, for a smaller image.
+        selector (Optional[str]): CSS selector to capture just that element's bounding box.
+        clip (Optional[Dict[str, float]]): Region to capture as {"x", "y", "width", "height"} in page CSS pixels.
 
     Returns:
-        Union[str, ToolResult]: Server file location when file_path is given, otherwise
-            an MCP image with format, width, height, original size, scale, quality,
-            byte count, and SHA-256 metadata.
+        ToolResult: MCP image content block with format, width, height, original size,
+            scale, quality, byte count, SHA-256 metadata, and device_pixel_ratio.
+            Image dimensions are rendered in physical device pixels.
+            When file_path is given, it also includes the server file location text
+            and metadata path.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
+
     format = validate_screenshot_options(format, quality, max_width)
+    validated_clip = validate_clip_args(selector=selector, clip=clip)
 
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
+
+    try:
+        from fastmcp.exceptions import ToolError
+    except Exception:
+        ToolError = RuntimeError
+
+    import asyncio
+
+    try:
+        from .window_mode import format_window_bounds
+    except Exception:
+        try:
+            from stealth_browser_mcp.window_mode import format_window_bounds
+        except Exception:
+            format_window_bounds = None
+
+    try:
+        from .server import ScreenshotTimeoutError
+    except Exception:
+        try:
+            from stealth_browser_mcp.server import ScreenshotTimeoutError
+        except Exception:
+            class ScreenshotTimeoutError(ToolError, TimeoutError):
+                pass
+
+    is_minimized = False
+    if hasattr(browser_manager, "get_instance"):
+        try:
+            inst_data = await browser_manager.get_instance(instance_id)
+            if inst_data:
+                mode = None
+                if isinstance(inst_data, dict):
+                    mode = inst_data.get("window")
+                    if not mode and "instance" in inst_data:
+                        mode = getattr(inst_data["instance"], "window", None)
+                    if not mode and "options" in inst_data:
+                        mode = getattr(inst_data["options"], "window", None)
+                else:
+                    mode = getattr(inst_data, "window", None)
+                if isinstance(mode, str) and mode.lower().strip() == "minimized":
+                    is_minimized = True
+        except Exception:
+            pass
+
+    if not is_minimized:
+        tab_window = getattr(tab, "window", None) or getattr(tab, "window_mode", None)
+        if isinstance(tab_window, str) and tab_window.lower().strip() == "minimized":
+            is_minimized = True
+
+    if not is_minimized and hasattr(tab, "send") and callable(tab.send):
+        try:
+            cmd = None
+            if hasattr(uc, "cdp") and hasattr(uc.cdp, "browser") and hasattr(uc.cdp.browser, "get_window_for_target"):
+                cmd = uc.cdp.browser.get_window_for_target()
+            if cmd is not None:
+                w_res = await asyncio.wait_for(tab.send(cmd), timeout=1.0)
+                bounds_dict = format_window_bounds(w_res) if format_window_bounds else None
+                if not bounds_dict or not bounds_dict.get("windowState"):
+                    if isinstance(w_res, dict):
+                        b = w_res.get("bounds", w_res)
+                        b_dict = format_window_bounds(b) if format_window_bounds else None
+                        if b_dict and b_dict.get("windowState"):
+                            bounds_dict = b_dict
+                if bounds_dict:
+                    state = bounds_dict.get("windowState")
+                    if isinstance(state, str) and state.lower().strip() == "minimized":
+                        is_minimized = True
+        except Exception:
+            pass
+
+    if is_minimized:
+        raise ToolError("Cannot take a screenshot of a minimized window")
+
+    timeout_bound = float(globals().get("SCREENSHOT_CAPTURE_TIMEOUT", 5.0))
+
+    dpr: Optional[float] = None
+    try:
+        dpr_val = await tab.evaluate("window.devicePixelRatio")
+        if isinstance(dpr_val, (int, float)) and dpr_val > 0:
+            dpr = float(dpr_val)
+    except Exception:
+        dpr = None
+
+    target_clip: Optional[Dict[str, float]] = None
+    if selector:
+        target_clip = await resolve_element_clip(tab, selector)
+    elif validated_clip:
+        target_clip = validated_clip
 
     if file_path:
-        save_path = Path(file_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        await tab.save_screenshot(save_path, format=format, full_page=full_page)
-        return f"Screenshot saved on the server: {str(save_path.absolute())}"
+        save_path = resolve_managed_path(file_path, for_write=True)
+        if target_clip:
+            try:
+                raw_bytes = await asyncio.wait_for(
+                    capture_clip_screenshot(tab, target_clip, format=format, quality=quality),
+                    timeout=timeout_bound,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ScreenshotTimeoutError(
+                    f"Screenshot capture timed out after {timeout_bound}s"
+                ) from exc
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                tmp_capture = Path(tmp_file.name)
+            try:
+                try:
+                    await asyncio.wait_for(
+                        tab.save_screenshot(tmp_capture, format=format, full_page=full_page),
+                        timeout=timeout_bound,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise ScreenshotTimeoutError(
+                        f"Screenshot capture timed out after {timeout_bound}s"
+                    ) from exc
+                raw_bytes = tmp_capture.read_bytes()
+            finally:
+                if tmp_capture.exists():
+                    os.unlink(tmp_capture)
+        write_private_bytes(save_path, raw_bytes)
+        image_bytes, metadata = fit_screenshot(save_path, format, quality, max_width)
+        metadata["path"] = str(save_path)
+        if dpr is not None:
+            metadata["device_pixel_ratio"] = dpr
+        if target_clip is not None:
+            metadata["region"] = target_clip
+        if selector is not None:
+            metadata["selector"] = selector
+        return ToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=f"Screenshot saved on the server: {str(save_path.absolute())}",
+                ),
+                ImageContent(
+                    type="image",
+                    mimeType=f"image/{format}",
+                    data=base64.b64encode(image_bytes).decode("ascii"),
+                ),
+            ],
+            structured_content=metadata,
+        )
 
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
         tmp_path = Path(tmp_file.name)
 
     try:
-        await tab.save_screenshot(tmp_path, format="png", full_page=full_page)
+        if target_clip:
+            try:
+                raw_bytes = await asyncio.wait_for(
+                    capture_clip_screenshot(tab, target_clip, format="png"),
+                    timeout=timeout_bound,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ScreenshotTimeoutError(
+                    f"Screenshot capture timed out after {timeout_bound}s"
+                ) from exc
+            tmp_path.write_bytes(raw_bytes)
+        else:
+            try:
+                await asyncio.wait_for(
+                    tab.save_screenshot(tmp_path, format="png", full_page=full_page),
+                    timeout=timeout_bound,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ScreenshotTimeoutError(
+                    f"Screenshot capture timed out after {timeout_bound}s"
+                ) from exc
         image_bytes, metadata = fit_screenshot(tmp_path, format, quality, max_width)
+        if dpr is not None:
+            metadata["device_pixel_ratio"] = dpr
+        if target_clip is not None:
+            metadata["region"] = target_clip
+        if selector is not None:
+            metadata["selector"] = selector
         return ToolResult(
-            content=[ImageContent(
-                type="image",
-                mimeType=f"image/{format}",
-                data=base64.b64encode(image_bytes).decode("ascii"),
-            ), TextContent(type="text", text=json.dumps(metadata))],
+            content=[
+                ImageContent(
+                    type="image",
+                    mimeType=f"image/{format}",
+                    data=base64.b64encode(image_bytes).decode("ascii"),
+                ),
+                TextContent(type="text", text=json.dumps(metadata)),
+            ],
             structured_content=metadata,
         )
     finally:
         if tmp_path.exists():
             os.unlink(tmp_path)
+
+
+@section_tool("element-interaction")
+async def get_accessibility_snapshot(
+    instance_id: str,
+    max_nodes: int = 500,
+    max_chars: int = 50000,
+    interactive_only: bool = False,
+    frame: Optional[str] = None,
+    include_json: bool = False,
+) -> Dict[str, Any]:
+    """
+    Get an accessibility snapshot of the page.
+
+    Returns a compact text tree with stable short refs (e.g. ref=e12)
+    for interactive nodes, with hard size caps (max_nodes and max_chars) and
+    a truncated flag. Stored refs can be targeted with click_element, fill,
+    and type_text using selector="ref=<id>".
+
+    Args:
+        instance_id (str): Browser instance ID.
+        max_nodes (int): Maximum number of nodes to return in the snapshot. Defaults to 500.
+        max_chars (int): Maximum characters for the text tree. Defaults to 50000.
+        interactive_only (bool): When True, only include interactive elements. Defaults to False.
+        frame (Optional[str]): Target frame selector, name, or id. Defaults to None (root document).
+        include_json (bool): When True, include full JSON node tree under 'nodes'. Defaults to False.
+
+    Returns:
+        Dict[str, Any]: { "tree": str, "node_count": int, "truncated": bool, "refs": dict, optional "nodes" when include_json }
+    """
+    if isinstance(max_nodes, str):
+        max_nodes = int(max_nodes)
+    if isinstance(max_chars, str):
+        max_chars = int(max_chars)
+    if isinstance(include_json, str):
+        include_json = include_json.strip().lower() in {"1", "true", "yes", "on"}
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise instance_not_found_error(instance_id)
+    result = await dom_handler.get_accessibility_snapshot(
+        tab,
+        instance_id=instance_id,
+        max_nodes=max_nodes,
+        max_chars=max_chars,
+        interactive_only=interactive_only,
+        frame=frame,
+    )
+    from .a11y_snapshot import cap_snapshot_response
+    return cap_snapshot_response(result, max_chars=max_chars, include_json=include_json)
+
+
+@section_tool("element-interaction")
+async def take_accessibility_snapshot(
+    instance_id: str,
+    max_nodes: int = 500,
+    max_chars: int = 50000,
+    interactive_only: bool = False,
+    frame: Optional[str] = None,
+    include_json: bool = False,
+) -> Dict[str, Any]:
+    """
+    Take an accessibility snapshot of the page (alias for get_accessibility_snapshot).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        max_nodes (int): Maximum number of nodes to return in the snapshot. Defaults to 500.
+        max_chars (int): Maximum characters for the text tree. Defaults to 50000.
+        interactive_only (bool): When True, only include interactive elements. Defaults to False.
+        frame (Optional[str]): Target frame selector, name, or id. Defaults to None.
+        include_json (bool): When True, include full JSON node tree under 'nodes'. Defaults to False.
+
+    Returns:
+        Dict[str, Any]: { "tree": str, "node_count": int, "truncated": bool, "refs": dict, optional "nodes" when include_json }
+    """
+    return await get_accessibility_snapshot(
+        instance_id=instance_id,
+        max_nodes=max_nodes,
+        max_chars=max_chars,
+        interactive_only=interactive_only,
+        frame=frame,
+        include_json=include_json,
+    )
 
 
 @section_tool("network-debugging")
@@ -899,7 +2018,7 @@ async def get_request_details(
     Returns:
         Optional[Dict[str, Any]]: Request details including headers, cookies, and body.
     """
-    request = await network_interceptor.get_request(request_id)
+    request = await network_interceptor.get_request_for_caller(request_id)
     if request:
         return request.dict()
     return None
@@ -918,7 +2037,7 @@ async def get_response_details(
     Returns:
         Optional[Dict[str, Any]]: Response details including status, headers, and metadata.
     """
-    response = await network_interceptor.get_response(request_id)
+    response = await network_interceptor.get_response_for_caller(request_id)
     if response:
         return response.dict()
     return None
@@ -941,7 +2060,10 @@ async def get_response_content(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
+    request = await network_interceptor.get_request_for_caller(request_id)
+    if not request or request.instance_id != instance_id:
+        return None
     body = await network_interceptor.get_response_body(tab, request_id)
     if body:
         try:
@@ -1009,6 +2131,66 @@ async def export_network_data(
         bool: True if successful.
     """
     return await network_interceptor.export_to_json(instance_id, filepath)
+
+
+@section_tool("network-debugging")
+async def export_har(
+    instance_id: str,
+    path: Optional[str] = None,
+    include_sensitive: bool = False,
+) -> Union[Dict[str, Any], str]:
+    """
+    Export captured network traffic for an instance as a HAR 1.2 document.
+
+    Authorization, Cookie, and Set-Cookie header values are redacted by
+    default; pass include_sensitive to include them.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        path (Optional[str]): Optional file path to write the HAR document.
+        include_sensitive (bool): Include redacted (Authorization/Cookie) values.
+
+    Returns:
+        Union[Dict[str, Any], str]: The HAR 1.2 document, or the written path.
+    """
+    requests = await network_interceptor.list_requests(instance_id)
+    entries = []
+    for request in requests:
+        response = await network_interceptor.get_response(request.request_id)
+        req_ts = request.timestamp.isoformat() if hasattr(request.timestamp, "isoformat") else str(request.timestamp)
+        entry: Dict[str, Any] = {
+            "request": {
+                "request_id": request.request_id,
+                "url": request.url,
+                "method": request.method,
+                "headers": dict(request.headers),
+                "cookies": dict(request.cookies),
+                "post_data": request.post_data,
+                "timestamp": req_ts,
+            }
+        }
+        if response is not None:
+            resp_ts = response.timestamp.isoformat() if hasattr(response.timestamp, "isoformat") else str(response.timestamp)
+            resp_dict: Dict[str, Any] = {
+                "status": response.status,
+                "content_type": response.content_type,
+                "headers": dict(response.headers),
+                "timestamp": resp_ts,
+            }
+            if response.body is not None:
+                try:
+                    resp_dict["text"] = response.body.decode("utf-8")
+                except UnicodeDecodeError:
+                    resp_dict["body"] = response.body
+            entry["response"] = resp_dict
+        entries.append(entry)
+
+    har = build_har(entries, include_sensitive=include_sensitive)
+
+    if path:
+        export_to_json(har, path)
+        return path
+    return har
 
 
 @section_tool("network-debugging")
@@ -1085,7 +2267,7 @@ async def modify_headers(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await network_interceptor.modify_headers(tab, headers)
 
 
@@ -1106,7 +2288,7 @@ async def get_cookies(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await network_interceptor.get_cookies(tab, urls)
 
 
@@ -1141,7 +2323,7 @@ async def set_cookie(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     
     if not url and not domain:
         current_url = tab.url if hasattr(tab, 'url') else None
@@ -1186,8 +2368,90 @@ async def clear_cookies(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await network_interceptor.clear_cookies(tab, url)
+
+
+@section_tool("cookies-storage")
+async def save_session(
+    instance_id: str,
+    file_path: Optional[str] = None,
+    origins: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Save browser session state (cookies and localStorage per origin) to JSON.
+
+    Saves cookies via CDP Network.getAllCookies and localStorage per origin
+    in Playwright-compatible storageState format. The output file is written
+    with mode 0600 (POSIX).
+
+    Args:
+        instance_id (str): Browser instance ID.
+        file_path (Optional[str]): Destination JSON file path.
+        origins (Optional[List[str]]): Specific origins to save localStorage for.
+
+    Returns:
+        Dict[str, Any]: Result with file_path, cookies_count, origins_count, and session data.
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise instance_not_found_error(instance_id)
+    return await session_state.save_session(
+        instance_id=instance_id,
+        file_path=file_path,
+        origins=origins,
+        browser_manager=browser_manager,
+    )
+
+
+@section_tool("cookies-storage")
+async def restore_session(
+    instance_id: str,
+    file_path: Optional[str] = None,
+    session_data: Optional[Dict[str, Any]] = None,
+    clear_existing: bool = True,
+) -> Dict[str, Any]:
+    """
+    Restore browser session state (cookies and localStorage per origin) from JSON.
+
+    Restores cookies via CDP Network.setCookies and localStorage per origin
+    from Playwright-compatible storageState format.
+
+    Args:
+        instance_id (str): Browser instance ID.
+        file_path (Optional[str]): Source JSON file path.
+        session_data (Optional[Dict[str, Any]]): Session state dictionary.
+        clear_existing (bool): Whether to clear existing cookies and storage before restore.
+
+    Returns:
+        Dict[str, Any]: Result with success, cookies_restored, and origins_restored.
+    """
+    tab = await browser_manager.get_tab(instance_id)
+    if not tab:
+        raise instance_not_found_error(instance_id)
+    return await session_state.restore_session(
+        instance_id=instance_id,
+        file_path=file_path,
+        session_data=session_data,
+        clear_existing=clear_existing,
+        browser_manager=browser_manager,
+    )
+
+
+
+_BROWSER_RESOURCE_NOT_FOUND = json.dumps({"error": "Instance not found"})
+
+
+def _browser_resource_allowed(instance_id: str) -> bool:
+    """Return True when the current MCP session may read this browser resource."""
+    sid = get_current_mcp_session_id()
+    if _HTTP_MODE and not sid:
+        return False
+    try:
+        mcp_session_manager.check_access(instance_id, sid)
+        return True
+    except Exception:
+        return False
 
 
 @mcp.resource("browser://{instance_id}/state")
@@ -1201,10 +2465,12 @@ async def get_browser_state_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of the browser state or error message.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     state = await browser_manager.get_page_state(instance_id)
     if state:
         return to_json(state, indent=2).decode()
-    return json.dumps({"error": "Instance not found"})
+    return _BROWSER_RESOURCE_NOT_FOUND
 
 
 @mcp.resource("browser://{instance_id}/cookies")
@@ -1218,11 +2484,13 @@ async def get_cookies_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of cookies or error message.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     tab = await browser_manager.get_tab(instance_id)
     if tab:
         cookies = await network_interceptor.get_cookies(tab)
         return to_json(cookies, indent=2).decode()
-    return json.dumps({"error": "Instance not found"})
+    return _BROWSER_RESOURCE_NOT_FOUND
 
 
 @mcp.resource("browser://{instance_id}/network")
@@ -1236,6 +2504,8 @@ async def get_network_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of network requests.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     requests = await network_interceptor.list_requests(instance_id)
     return to_json(requests, indent=2).decode()
 
@@ -1251,10 +2521,12 @@ async def get_console_resource(instance_id: str) -> str:
     Returns:
         str: JSON string of console logs or error message.
     """
+    if not _browser_resource_allowed(instance_id):
+        return _BROWSER_RESOURCE_NOT_FOUND
     state = await browser_manager.get_page_state(instance_id)
     if state:
         return json.dumps(state.console_logs, indent=2)
-    return json.dumps({"error": "Instance not found"})
+    return _BROWSER_RESOURCE_NOT_FOUND
 
 
 @section_tool("debugging")
@@ -1330,15 +2602,20 @@ async def export_debug_logs(
         str: Path to the exported file.
     """
     try:
-        filepath = await asyncio.wait_for(
-            asyncio.to_thread(
-                debug_logger.export_to_file_paginated,
-                filename,
+        def _export_confined():
+            debug_data = debug_logger.get_debug_view_paginated(
                 max_errors if not include_all else None,
                 max_warnings if not include_all else None,
                 max_info if not include_all else None,
-                format
-            ),
+            )
+            fmt = debug_logger.choose_export_format(debug_data, format)
+            dest = debug_logger.rewrite_export_filename(str(filename), fmt)
+            resolved = resolve_managed_path(dest, for_write=True)
+            payload = debug_logger.serialize_export(debug_data, fmt)
+            return str(write_private_bytes(resolved, payload))
+
+        filepath = await asyncio.wait_for(
+            asyncio.to_thread(_export_confined),
             timeout=30.0
         )
         return filepath
@@ -1371,6 +2648,15 @@ async def list_tabs(instance_id: str) -> List[Dict[str, str]]:
     Returns:
         List[Dict[str, str]]: List of tabs with their details.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.list_tabs(instance_id)
 
 
@@ -1389,6 +2675,15 @@ async def switch_tab(
     Returns:
         bool: True if switched successfully.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.switch_to_tab(instance_id, tab_id)
 
 
@@ -1407,6 +2702,15 @@ async def close_tab(
     Returns:
         bool: True if closed successfully.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     return await browser_manager.close_tab(instance_id, tab_id)
 
 
@@ -1421,9 +2725,18 @@ async def get_active_tab(instance_id: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Active tab information.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
     tab = await browser_manager.get_active_tab(instance_id)
     if not tab:
-        return {"error": "No active tab found"}
+        raise no_active_tab_error(instance_id)
     browser = await browser_manager.get_browser(instance_id, touch_activity=False)
     if browser:
         try:
@@ -1453,6 +2766,16 @@ async def new_tab(
     Returns:
         Dict[str, Any]: New tab information.
     """
+    try:
+        from .mcp_sessions import mcp_session_manager
+    except Exception:
+        try:
+            from stealth_browser_mcp.mcp_sessions import mcp_session_manager
+        except Exception:
+            mcp_session_manager = None
+    if mcp_session_manager is not None:
+        mcp_session_manager.check_access(instance_id)
+    url = reject_blocked_url(url)
     try:
         new_tab_obj = await browser_manager.open_tab(instance_id, url)
         return {
@@ -1490,7 +2813,7 @@ async def extract_element_styles(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_styles(
         tab,
         selector=selector,
@@ -1526,7 +2849,7 @@ async def extract_element_structure(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_structure(
         tab,
         selector=selector,
@@ -1562,7 +2885,7 @@ async def extract_element_events(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_events(
         tab,
         selector=selector,
@@ -1598,7 +2921,7 @@ async def extract_element_animations(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_animations(
         tab,
         selector=selector,
@@ -1634,7 +2957,7 @@ async def extract_element_assets(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await element_cloner.extract_element_assets(
         tab,
         selector=selector,
@@ -1672,7 +2995,7 @@ async def extract_element_styles_cdp(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await element_cloner.extract_element_styles_cdp(
         tab,
         selector=selector,
@@ -1706,7 +3029,7 @@ async def extract_related_files(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await element_cloner.extract_related_files(
         tab,
         analyze_css=analyze_css,
@@ -1753,7 +3076,7 @@ async def clone_element_complete(
             raise Exception(f"Invalid JSON in extraction_options: {extraction_options}")
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     result = await comprehensive_element_cloner.extract_complete_element(
         tab,
         selector=selector,
@@ -1869,6 +3192,23 @@ async def validate_browser_environment_tool() -> Dict[str, Any]:
         }
 
 
+@section_tool("debugging")
+async def doctor() -> Dict[str, Any]:
+    """
+    Run environment health checks: browser binaries per family, Linux keyring
+    reachability, seed ages, live sessions vs cap, stale locks, and whether the
+    data directory is writable. Secrets are redacted from the output.
+
+    Returns:
+        Dict[str, Any]: A summary with per-check status and an overall verdict.
+    """
+    try:
+        from .doctor import run_checks as doctor_run_checks
+        return doctor_run_checks()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @section_tool("progressive-cloning")
 async def clone_element_progressive(
     instance_id: str,
@@ -1888,7 +3228,7 @@ async def clone_element_progressive(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await progressive_element_cloner.clone_element_progressive(tab, selector, include_children)
 
 
@@ -2076,7 +3416,7 @@ async def clone_element_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     parsed_options = None
     if extraction_options:
         try:
@@ -2110,7 +3450,7 @@ async def extract_complete_element_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_complete_element_to_file(
         tab, selector, include_children
     )
@@ -2144,7 +3484,7 @@ async def extract_complete_element_cdp(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     cdp_cloner = CDPElementCloner()
     return await cdp_cloner.extract_complete_element_cdp(tab, selector, include_children)
 
@@ -2174,7 +3514,7 @@ async def extract_element_styles_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_styles_to_file(
         tab,
         selector=selector,
@@ -2210,7 +3550,7 @@ async def extract_element_structure_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_structure_to_file(
         tab,
         selector=selector,
@@ -2246,7 +3586,7 @@ async def extract_element_events_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_events_to_file(
         tab,
         selector=selector,
@@ -2282,7 +3622,7 @@ async def extract_element_animations_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_animations_to_file(
         tab,
         selector=selector,
@@ -2318,7 +3658,7 @@ async def extract_element_assets_to_file(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        raise Exception(f"Instance not found: {instance_id}")
+        raise instance_not_found_error(instance_id)
     return await file_based_element_cloner.extract_element_assets_to_file(
         tab,
         selector=selector,
@@ -2396,7 +3736,7 @@ async def execute_cdp_command(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.execute_cdp_command(tab, command, params or {})
 
 
@@ -2568,7 +3908,7 @@ async def call_javascript_function(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.call_discovered_function(tab, function_path, args or [])
 
 
@@ -2589,7 +3929,7 @@ async def inspect_function_signature(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.inspect_function_signature(tab, function_path)
 
 
@@ -2612,7 +3952,7 @@ async def inject_and_execute_script(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.inject_and_execute_script(tab, script_code, context_id)
 
 
@@ -2635,7 +3975,7 @@ async def create_persistent_function(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     try:
         source = await cdp_function_executor.prepare_persistent_function(tab, function_name, function_code, instance_id)
         identifier = await browser_manager.add_init_script(instance_id, source)
@@ -2667,7 +4007,7 @@ async def execute_function_sequence(
     from .cdp_function_executor import FunctionCall
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return [{"success": False, "error": f"Instance not found: {instance_id}"}]
+        return [{"success": False, "error": str(instance_not_found_error(instance_id))}]
     calls = []
     for call_data in function_calls:
         calls.append(FunctionCall(
@@ -2707,7 +4047,7 @@ async def create_page_binding(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     try:
         return await page_bindings.create(tab, instance_id, binding_name, auto_resolve, auto_response)
     except Exception as e:
@@ -2806,7 +4146,7 @@ async def execute_python_in_browser(
     """
     tab = await browser_manager.get_tab(instance_id)
     if not tab:
-        return {"success": False, "error": f"Instance not found: {instance_id}"}
+        return {"success": False, "error": str(instance_not_found_error(instance_id))}
     return await cdp_function_executor.execute_python_in_browser(tab, python_code)
 
 
@@ -2858,6 +4198,8 @@ async def create_dynamic_hook(
             return HookAction(action="continue")
         ```
     """
+    if not code_hooks_available():
+        return code_hooks_disabled_result()
     return await dynamic_hook_ai.create_dynamic_hook(
         name=name,
         requirements=requirements,
@@ -2997,12 +4339,252 @@ def validate_hook_function(function_code: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Validation results with issues and warnings
     """
+    if not code_hooks_available():
+        return code_hooks_disabled_result()
     return dynamic_hook_ai.validate_hook_function(function_code=function_code)
+
+
+@section_tool("browser-management")
+async def list_sources() -> Dict[str, Any]:
+    """
+    List installed browser profile sources and existing seeds with their age.
+
+    Discovers installed Chrome, Edge, and Brave browser profiles on Linux,
+    and reports existing seeds created with refresh_seed.
+
+    Returns:
+        Dict[str, Any]: Discovered browser profile sources and existing seeds.
+    """
+    return seed_tools.list_sources()
+
+
+@section_tool("browser-management")
+async def refresh_seed(
+    name: str,
+    source_browser: str,
+    profile: Optional[str] = None,
+    include_passwords: bool = False,
+    include_cards: bool = False,
+    indexeddb_cap_bytes: int = 50 * 1024 * 1024,
+    source_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Refresh or create a curated browser profile seed from a source browser.
+
+    Copies session state (cookies, local storage, extensions, settings) without
+    caches from the source profile into a dedicated seed directory. The source
+    directory is opened read-only and never modified.
+
+    Args:
+        name (str): Unique name for the seed (1-40 chars, [a-z0-9_-]).
+        source_browser (str): Source browser family ("chrome", "edge", "brave")
+            or path to user data directory.
+        profile (Optional[str]): Profile directory name inside the source (e.g.
+            "Default" or "Profile 1"). Defaults to auto-detecting the last-used profile.
+        include_passwords (bool): Whether to include saved login credentials.
+            Defaults to False.
+        include_cards (bool): Whether to include saved payment data.
+            Defaults to False.
+        indexeddb_cap_bytes (int): Maximum bytes to keep per IndexedDB origin.
+            Defaults to 52428800 (50 MB).
+        source_dir (Optional[str]): Explicit path to user data directory if not
+            using standard system locations.
+
+    Returns:
+        Dict[str, Any]: Summary of the refresh operation (status, counts, bytes).
+    """
+    if _HTTP_MODE and not parse_bool_env("STEALTH_ALLOW_SEED_REFRESH", default=False):
+        return {
+            "status": "error",
+            "error": (
+                "refresh_seed from a real browser profile is off by default in HTTP mode. "
+                "Set STEALTH_ALLOW_SEED_REFRESH=1 on a loopback bind. This flag is refused "
+                "off loopback and behind a proxy."
+            ),
+        }
+    if _HTTP_MODE and parse_bool_env("STEALTH_ALLOW_SEED_REFRESH", default=False):
+        from .http_auth import request_appears_proxied
+        if request_appears_proxied() or (
+            _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST)
+        ):
+            return {
+                "status": "error",
+                "error": "refresh_seed is not allowed on an exposed or proxied HTTP bind.",
+            }
+    if include_passwords or include_cards:
+        if not parse_bool_env("STEALTH_ALLOW_SEED_PASSWORDS", default=False):
+            return {
+                "status": "error",
+                "error": (
+                    "include_passwords and include_cards are off by default. "
+                    "Set STEALTH_ALLOW_SEED_PASSWORDS=1 to enable them."
+                ),
+            }
+        sid = get_current_mcp_session_id()
+        if _HTTP_MODE:
+            from .http_auth import request_appears_proxied
+            if request_appears_proxied() or (
+                _HTTP_BIND_HOST and not is_loopback_host(_HTTP_BIND_HOST)
+            ):
+                return {
+                    "status": "error",
+                    "error": "include_passwords is not allowed on an exposed or proxied HTTP bind.",
+                }
+            if not sid or not mcp_session_manager.list_instance_ids_for_session(sid):
+                return {
+                    "status": "error",
+                    "error": (
+                        "include_passwords is owner-only: the calling session must own "
+                        "a browser instance."
+                    ),
+                }
+    if _HTTP_MODE:
+        candidate = source_dir
+        looks_like_path = (
+            source_browser
+            and (
+                os.path.sep in source_browser
+                or (os.path.altsep and os.path.altsep in source_browser)
+                or os.path.isdir(source_browser)
+            )
+        )
+        if candidate is None and looks_like_path:
+            candidate = source_browser
+        if candidate is not None and not seed_tools.is_allowed_seed_source_dir(candidate):
+            return {
+                "status": "error",
+                "error": "source_dir must stay under a known browser profile root",
+            }
+        if profile is not None:
+            if not seed_tools.is_safe_profile_arg(profile):
+                return {
+                    "status": "error",
+                    "error": seed_tools.GENERIC_PROFILE_ERROR,
+                }
+            resolved_source = seed_tools.resolve_source_root(source_browser, source_dir)
+            if resolved_source is not None and os.path.isdir(resolved_source):
+                p_dir = os.path.join(resolved_source, profile)
+                resolved_root = os.path.realpath(resolved_source)
+                resolved_p = os.path.realpath(p_dir)
+                if (
+                    not seed_tools.is_under_dir(resolved_p, resolved_root)
+                    or not seed_tools.is_allowed_seed_source_dir(resolved_p)
+                    or not os.path.isdir(p_dir)
+                ):
+                    return {
+                        "status": "error",
+                        "error": seed_tools.GENERIC_PROFILE_ERROR,
+                    }
+    return seed_tools.refresh_seed(
+        name=name,
+        source_browser=source_browser,
+        profile=profile,
+        include_passwords=include_passwords,
+        include_cards=include_cards,
+        indexeddb_cap_bytes=indexeddb_cap_bytes,
+        source_dir=source_dir,
+    )
+
+
+@section_tool("browser-management")
+async def profile_policy_report(instance_id: str) -> Dict[str, Any]:
+    """Inspect chrome://policy to report enterprise policies, blockers, and warnings.
+
+    Returns whether the profile is managed and classifies policies that affect automation.
+    """
+    browser = await browser_manager.get_browser(instance_id)
+    if not browser:
+        raise instance_not_found_error(instance_id)
+
+    tab = None
+    try:
+        try:
+            tab = await open_background_tab(browser, url="chrome://policy")
+        except Exception:
+            tab = await browser.get("chrome://policy", new_tab=True)
+
+        await asyncio.sleep(0.3)
+
+        raw_rows = await dom_handler.execute_script(tab, SCRAPE_POLICY_JS)
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+
+        report = classify_policies(raw_rows)
+        report["policy_count"] = len(raw_rows)
+        report["raw_policy_count"] = len(raw_rows)
+        return report
+    except Exception as e:
+        raise Exception(f"Failed to inspect profile policies: {e}") from e
+    finally:
+        if tab is not None:
+            try:
+                await tab.close()
+            except Exception:
+                pass
+
+
+@section_tool("browser-management")
+async def expand_tools(category: str, ctx: Context) -> Dict[str, Any]:
+    """Expand a tool category for the current session to make its tools visible in tools/list."""
+    return await tool_surface.expand_tools_impl(mcp, category, ctx)
+
+
+@section_tool("browser-management")
+async def list_tool_categories() -> Dict[str, Any]:
+    """List all tool categories and their tool names, counts, and current mode."""
+    return await tool_surface.list_tool_categories_impl(mcp)
+
+
+@mcp.resource("stealth://tools/reference", mime_type="text/markdown")
+async def tools_reference() -> str:
+    """Tool reference by category with one-line descriptions."""
+    return await tool_surface.tools_reference_impl(mcp)
+
+
+@mcp.resource("stealth://guide/input", mime_type="text/markdown")
+async def input_guide_resource() -> str:
+    """Input playbook with recipes and verification guidance for agents."""
+    return agent_guide.build_input_playbook()
+
+
+@mcp.prompt("how_to_input")
+def how_to_input(field_type: Optional[str] = None) -> str:
+    """Input recipe recommendations for a field type (text, textarea, rich_text, number, select, dropdown, chips, file)."""
+    return agent_guide.how_to_input_prompt(field_type=field_type)
+
+
+def _init_tool_surface() -> None:
+    tool_surface.init_tool_surface(mcp)
+
+
+_init_tool_surface()
 
 
 if parse_bool_env("XPOOL_SAFE_MODE", default=False):
     DISABLED_SECTIONS.add("cdp-functions")
     apply_disabled_sections()
+
+
+def create_http_middleware(
+    token: Optional[str] = None,
+    allowed_hosts: Optional[List[str]] = None,
+    allowed_origins: Optional[List[str]] = None,
+) -> List[ASGIMiddleware]:
+    """Create ASGI middleware stack for HTTP transport with Host/Origin, auth, and path normalization.
+
+    HostOriginMiddleware is outermost so DNS-rebinding Host/Origin values are
+    rejected on every route before the bearer token is considered.
+    """
+    return [
+        ASGIMiddleware(
+            HostOriginMiddleware,
+            allowed_hosts=allowed_hosts or [],
+            allowed_origins=allowed_origins or [],
+        ),
+        ASGIMiddleware(BearerAuthMiddleware, expected_token=token),
+        ASGIMiddleware(McpPathRewriteMiddleware),
+        ASGIMiddleware(SessionLifecycleMiddleware, session_manager=mcp_session_manager),
+    ]
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -3015,6 +4597,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     Returns:
         None
     """
+    global _HTTP_MODE, _HTTP_BIND_HOST
     parser = argparse.ArgumentParser(
         description=f"Stealth Browser MCP Server with {sum(len(tools) for tools in SECTION_TOOLS.values())} tools"
     )
@@ -3024,6 +4607,20 @@ def main(argv: Optional[List[str]] = None) -> None:
                       help="Port for HTTP transport")
     parser.add_argument("--host", default="127.0.0.1",
                       help="Host for HTTP transport (use 0.0.0.0 only with an auth token on trusted networks)")
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        dest="allowed_host",
+        help="Extra Host header values to accept (repeatable). Also STEALTH_MCP_ALLOWED_HOSTS (comma-separated). Default: loopback only.",
+    )
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        dest="allowed_origin",
+        help="Origin values to accept (repeatable). Default: none (any Origin is rejected). Also STEALTH_MCP_ALLOWED_ORIGINS.",
+    )
     
     parser.add_argument("--disable-browser-management", action="store_true",
                       help="Disable browser management tools (spawn, navigate, close, etc.)")
@@ -3063,6 +4660,18 @@ def main(argv: Optional[List[str]] = None) -> None:
         action="store_true",
         default=parse_bool_env("XPOOL_SAFE_MODE", default=False),
         help="Enable xpool-safe surface (disables cdp-functions tools that trigger Runtime.enable)",
+    )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        default=False,
+        help="deprecated alias of the default --tools core",
+    )
+    parser.add_argument(
+        "--tools",
+        choices=["core", "full", "core+cdp-functions"],
+        default=None,
+        help="Tool visibility profile: 'core' (default), 'core+cdp-functions', or 'full'. Visibility (--tools core|core+cdp-functions|full) vs availability (--minimal, --xpool-safe, --disable-*). Also set via STEALTH_MCP_TOOLS.",
     )
     
     args = parser.parse_args(argv)
@@ -3112,22 +4721,96 @@ def main(argv: Optional[List[str]] = None) -> None:
         DISABLED_SECTIONS.add("cdp-functions")
 
     apply_disabled_sections()
-    
+
     if DISABLED_SECTIONS:
         debug_logger.log_info(
             "server",
             "startup",
             f"Disabled tool sections: {', '.join(sorted(DISABLED_SECTIONS))}",
         )
-    
+
+    # Tool visibility profile: 'core' (default) or 'full'.
+    # Selected by --tools core|full or env STEALTH_MCP_TOOLS (flag wins).
+    # --agent and STEALTH_MCP_PROFILE=agent are deprecated aliases of the default core profile.
+    tools_mode = args.tools
+    if not tools_mode:
+        env_mode = os.getenv("STEALTH_MCP_TOOLS", "").strip().lower()
+        if env_mode in {"core", "full", "core+cdp-functions"}:
+            tools_mode = env_mode
+        else:
+            tools_mode = "core"
+
+    tool_surface.register_tool_surface_middleware(mcp, mode=tools_mode)
+
+    # Make instance_id optional everywhere and inject the session's only browser
+    # when a call omits it. This runs for both transports, after section processing,
+    # just before the server starts accepting calls.
+    _instance_default.register_default_instance_middleware(mcp)
+    _instance_default.make_instance_id_optional(mcp)
+
+    # Compact tool descriptions and schemas to cut connect-time token cost.
+    # Runs for both transports after sections/preset/make_instance_id_optional.
+    try:
+        tool_compact.compact_tools(mcp)
+    except Exception:
+        pass
+
     if args.transport == "http":
-        if HTTP_AUTH_TOKEN is None and not is_loopback_host(args.host):
-            print(
-                f"WARNING: HTTP transport is listening on {args.host} without an auth token. "
-                "Set STEALTH_BROWSER_MCP_AUTH_TOKEN before exposing the server beyond localhost.",
-                file=sys.stderr,
+        _HTTP_MODE = True
+        _HTTP_BIND_HOST = args.host
+        if _TOKEN_CONFIG_ERROR is not None:
+            sys.stderr.write(f"Error: {_TOKEN_CONFIG_ERROR}\n")
+            sys.exit(1)
+        try:
+            configured = get_http_auth_token()
+            token = ensure_http_token(announce=True)
+            generated = configured is None
+            if generated and not is_loopback_host(args.host):
+                raise ValueError(
+                    "Refusing to bind HTTP on non-loopback host {!r} with an auto-generated "
+                    "token. Set STEALTH_MCP_TOKEN or STEALTH_MCP_TOKEN_FILE first.".format(args.host)
+                )
+            validate_bind(args.host, token)
+            allowed_hosts = parse_csv_list(args.allowed_host, [os.getenv("STEALTH_MCP_ALLOWED_HOSTS", "")])
+            allowed_origins = parse_csv_list(args.allowed_origin, [os.getenv("STEALTH_MCP_ALLOWED_ORIGINS", "")])
+            refuse_code_hooks_off_loopback(args.host, allowed_hosts, allowed_origins)
+            refuse_raw_cdp_off_loopback(args.host, allowed_hosts, allowed_origins)
+            if (
+                parse_bool_env("STEALTH_ALLOW_REMOTE_ATTACH", default=False)
+                or parse_bool_env("STEALTH_ALLOW_ATTACH", default=False)
+                or parse_bool_env("STEALTH_ALLOW_SEED_PASSWORDS", default=False)
+                or parse_bool_env("STEALTH_ALLOW_SEED_REFRESH", default=False)
+            ) and ((not is_loopback_host(args.host)) or allowed_hosts or allowed_origins):
+                raise ValueError(
+                    "STEALTH_ALLOW_ATTACH, STEALTH_ALLOW_REMOTE_ATTACH, "
+                    "STEALTH_ALLOW_SEED_PASSWORDS, and STEALTH_ALLOW_SEED_REFRESH are not "
+                    "allowed when HTTP is bound off "
+                    "loopback or when --allowed-host / --allowed-origin is set (a reverse "
+                    "proxy in front of a loopback bind counts as off loopback)."
+                )
+        except (ValueError, TokenConfigError) as e:
+            sys.stderr.write(f"Error: {e}\n")
+            sys.exit(1)
+
+        if token and mcp.auth is None:
+            mcp.auth = create_http_auth_provider(token)
+
+        http_middleware = create_http_middleware(
+            token,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
+        )
+        logging.getLogger("mcp.server.streamable_http").addFilter(_ClosedResourceNoiseFilter())
+        try:
+            mcp.run(
+                transport="http",
+                host=args.host,
+                port=args.port,
+                middleware=http_middleware,
+                uvicorn_config={"access_log": False},
             )
-        mcp.run(transport="http", host=args.host, port=args.port)
+        finally:
+            run_shutdown_sync()
     else:
         install_stdio_guard()
         mcp.run(transport="stdio")

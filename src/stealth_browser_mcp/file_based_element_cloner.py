@@ -9,6 +9,7 @@ from .comprehensive_element_cloner import comprehensive_element_cloner
 from .debug_logger import debug_logger
 from .element_cloner import element_cloner
 from .paths import clone_output_dir
+from .path_policy import write_mode_0600
 
 
 class FileBasedElementCloner:
@@ -24,11 +25,14 @@ class FileBasedElementCloner:
                 path that avoids startup failures when the host process uses a
                 read-only cwd.
         """
-        if output_dir is None:
-            self.output_dir = clone_output_dir()
-        else:
-            self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._output_dir_override = Path(output_dir) if output_dir is not None else None
+
+    @property
+    def output_dir(self) -> Path:
+        """Directory for this caller's clone files (per MCP session when set)."""
+        path = self._output_dir_override if self._output_dir_override is not None else clone_output_dir()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _safe_process_framework_handlers(self, framework_handlers):
         """Safely process framework handlers that might be dict or list."""
@@ -66,8 +70,7 @@ class FileBasedElementCloner:
             str: Absolute path to the saved file.
         """
         file_path = self.output_dir / filename
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        write_mode_0600(file_path, json.dumps(data, indent=2, ensure_ascii=False, default=str))
         return str(file_path.absolute())
 
     def _save_extraction(

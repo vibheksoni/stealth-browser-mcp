@@ -13,6 +13,7 @@ from nodriver import Tab
 
 from . import cdp_raw
 from .debug_logger import debug_logger
+from .path_policy import read_managed_text, write_private_text
 from .models import NetworkRequest, NetworkResponse
 
 MAX_REQUESTS_PER_INSTANCE = 1000
@@ -21,6 +22,29 @@ MAX_STORED_BODY_BYTES = 64 * 1024 * 1024
 TEXT_RESOURCE_TYPES = {"document", "xhr", "fetch", "script", "eventsource"}
 BINARY_RESOURCE_TYPES = {"image", "media", "font", "websocket", "manifest"}
 INTERNAL_URL_PREFIXES = ("chrome://", "chrome-untrusted://", "chrome-extension://", "devtools://")
+BROWSER_BACKGROUND_DOMAINS = (
+    "assets.msn.com",
+    "ntp.msn.com",
+    "edge.microsoft.com",
+    "activity.windows.com",
+    "data.msn.com",
+    "config.edge.skype.com",
+    "browser.pipe.aria.microsoft.com",
+    "web.vortex.data.microsoft.com",
+    "clients2.google.com",
+    "optimizationguide-pa.googleapis.com",
+    "safebrowsing.googleapis.com",
+    "update.googleapis.com",
+)
+NON_PAGE_TARGET_TYPES = {
+    "service_worker",
+    "worker",
+    "shared_worker",
+    "background_page",
+    "browser",
+    "other",
+    "worklet",
+}
 TEXT_MIME_MARKERS = ("json", "text/", "javascript", "xml", "x-www-form-urlencoded", "graphql")
 
 
@@ -119,6 +143,42 @@ class NetworkInterceptor:
             debug_logger.log_error("network_interceptor", "setup_interception", e)
             raise Exception(f"Failed to setup network interception: {str(e)}")
 
+    @staticmethod
+    def _is_page_target(event: Any, request: Any = None) -> bool:
+        """Check if request event originates from a page target rather than browser background or worker."""
+        if getattr(event, "is_page_target", None) is False:
+            return False
+
+        target_type = getattr(event, "target_type", None)
+        if target_type is not None:
+            tt_str = str(target_type).strip().lower()
+            if tt_str in NON_PAGE_TARGET_TYPES or tt_str not in ("page", "iframe"):
+                return False
+
+        target = getattr(event, "target", None) or getattr(event, "target_info", None)
+        if target is not None:
+            t_type = getattr(target, "type_", getattr(target, "type", None))
+            if t_type is not None:
+                tt_str = str(t_type).strip().lower()
+                if tt_str in NON_PAGE_TARGET_TYPES or tt_str not in ("page", "iframe"):
+                    return False
+
+        req = request or getattr(event, "request", None)
+        url = getattr(req, "url", "")
+        if url.startswith(INTERNAL_URL_PREFIXES):
+            return False
+
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if any(host == bg or host.endswith("." + bg) for bg in BROWSER_BACKGROUND_DOMAINS):
+                return False
+        except Exception:
+            pass
+
+        return True
+
     async def _on_request(self, event, instance_id: str):
         """
         Handle request event.
@@ -129,7 +189,7 @@ class NetworkInterceptor:
         try:
             request_id = event.request_id
             request = event.request
-            if request.url.startswith(INTERNAL_URL_PREFIXES):
+            if not self._is_page_target(event, request):
                 return
             resource_type = event.type_.value if getattr(event, "type_", None) else None
 
@@ -416,6 +476,30 @@ class NetworkInterceptor:
         async with self._lock:
             return self._responses.get(request_id)
 
+    def _caller_can_access_instance(self, instance_id: Optional[str]) -> bool:
+        if not instance_id:
+            return False
+        from .mcp_sessions import mcp_session_manager
+        try:
+            mcp_session_manager.check_access(instance_id)
+            return True
+        except Exception:
+            return False
+
+    async def get_request_for_caller(self, request_id: str) -> Optional[NetworkRequest]:
+        """Return a request only if the current session owns its instance."""
+        request = await self.get_request(request_id)
+        if request is None or not self._caller_can_access_instance(request.instance_id):
+            return None
+        return request
+
+    async def get_response_for_caller(self, request_id: str) -> Optional[NetworkResponse]:
+        """Return a response only if the current session owns the request's instance."""
+        request = await self.get_request_for_caller(request_id)
+        if request is None:
+            return None
+        return await self.get_response(request_id)
+
     async def get_response_body(self, tab: Tab, request_id: str) -> Optional[bytes]:
         """
         Get response body content, from the capture store or the browser.
@@ -516,7 +600,7 @@ class NetworkInterceptor:
                         "timestamp": resp.timestamp.isoformat(),
                     })
 
-            Path(filepath).write_text(json.dumps(data, indent=2))
+            write_private_text(filepath, json.dumps(data, indent=2))
             return True
 
     async def import_from_json(self, instance_id: str, filepath: str) -> bool:
@@ -527,7 +611,7 @@ class NetworkInterceptor:
         filepath: str - Path to JSON file.
         Returns: bool - True if successful.
         """
-        data = json.loads(Path(filepath).read_text())
+        data = json.loads(read_managed_text(filepath))
 
         async with self._lock:
             if instance_id not in self._instance_requests:

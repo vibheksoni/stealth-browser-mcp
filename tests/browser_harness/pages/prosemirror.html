@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ProseMirror-like Editor Fixture</title>
+  <style>
+    .ProseMirror {
+      border: 1px solid #777;
+      padding: 12px;
+      min-height: 120px;
+      font-family: Georgia, serif;
+      font-size: 16px;
+      line-height: 1.5;
+      outline: none;
+    }
+    .ProseMirror p {
+      margin: 0 0 8px 0;
+    }
+    .ProseMirror-focused {
+      border-color: #2288ee;
+    }
+  </style>
+</head>
+<body>
+  <h1>ProseMirror-like Editor Fixture</h1>
+  <p>Self-contained ProseMirror-like rich text editor stand-in (no CDN or external dependencies).</p>
+
+  <div class="ProseMirror" id="prosemirror-editor" contenteditable="true" role="textbox" aria-multiline="true" translate="no">
+    <p>First paragraph in ProseMirror editor.</p>
+    <p>Second paragraph with sample content.</p>
+  </div>
+
+  <div id="pm-status" style="margin-top: 15px;">
+    <p>Paragraph Count: <span id="pm-para-count">2</span></p>
+    <p>Transaction Count: <span id="pm-tx-count">0</span></p>
+    <p>Last Action: <span id="pm-last-action">initialized</span></p>
+    <pre id="pm-doc-json" style="background: #f0f0f0; padding: 8px; font-size: 12px;"></pre>
+  </div>
+
+  <script>
+    (function() {
+      const editor = document.getElementById("prosemirror-editor");
+      const paraCountDisplay = document.getElementById("pm-para-count");
+      const txCountDisplay = document.getElementById("pm-tx-count");
+      const lastActionDisplay = document.getElementById("pm-last-action");
+      const docJsonDisplay = document.getElementById("pm-doc-json");
+
+      let txCount = 0;
+
+      function updateDocModel(action) {
+        txCount++;
+        txCountDisplay.textContent = String(txCount);
+        lastActionDisplay.textContent = action;
+
+        const paras = editor.querySelectorAll("p");
+        paraCountDisplay.textContent = String(paras.length);
+
+        const docModel = {
+          type: "doc",
+          content: Array.from(paras).map(function(p) {
+            return {
+              type: "paragraph",
+              content: [{ type: "text", text: p.textContent }]
+            };
+          })
+        };
+        docJsonDisplay.textContent = JSON.stringify(docModel, null, 2);
+      }
+
+      // Initial model render
+      updateDocModel("initialized");
+
+      editor.addEventListener("focus", function() {
+        editor.classList.add("ProseMirror-focused");
+      });
+
+      editor.addEventListener("blur", function() {
+        editor.classList.remove("ProseMirror-focused");
+      });
+
+      editor.addEventListener("input", function(e) {
+        updateDocModel("input: " + (e.inputType || "text"));
+      });
+
+      editor.addEventListener("keydown", function(e) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const p = document.createElement("p");
+          p.textContent = "";
+          editor.appendChild(p);
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.setStart(p, 0);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          updateDocModel("split-paragraph");
+        }
+      });
+
+      editor.addEventListener("paste", function(e) {
+        updateDocModel("paste");
+      });
+    })();
+  </script>
+</body>
+</html>

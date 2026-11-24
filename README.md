@@ -52,9 +52,12 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - [Features](#features)
 - [Quickstart](#quickstart)
 - [Agent Skill](#agent-skill)
+- [Agent Guide](#agent-guide)
 - [Trust Model](#trust-model)
 - [Modular Architecture](#modular-architecture)
+  - [Tool Surface](#tool-surface)
 - [Server Configuration](#server-configuration)
+- [Security](#security)
 - [Toolbox](#toolbox)
 - [Stealth vs Playwright MCP](#stealth-vs-playwright-mcp)
 - [Troubleshooting](#troubleshooting)
@@ -84,8 +87,8 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 ## Features
 
 - **Anti-bot resistance** - Has passed Cloudflare and Queue-It style challenges in testing; results vary by site, region, browser version, and detector version.
-- **101 tools across 11 sections** - From basic navigation to advanced CDP function execution.
-- **Modular loading** - Run the full 101-tool surface or a minimal 21-tool core; disable sections you do not need.
+- **123 tools across 11 sections** - From basic navigation to advanced CDP function execution.
+- **Modular loading** - Run the 33-tool core surface (default) or the full 123-tool suite; disable sections you do not need.
 - **Pixel-accurate element cloning** - Extract complete elements with CSS, DOM structure, events, animations, and assets via CDP.
 - **Network inspection** - Inspect requests, responses, headers, payloads, and captured bodies through your AI agent.
 - **Dynamic hook system** - Restricted Python hooks can intercept, block, redirect, fulfill, or modify request/response flows.
@@ -93,6 +96,9 @@ Navigate Cloudflare challenges, anti-bot checks, and login walls with real Chrom
 - **Instant text input** - Paste large content via CDP, type with human-like keystrokes, or press real keys with trusted CDP key events.
 - **Cross-platform** - Windows, macOS, Linux, Docker, and CI environments with automatic browser/platform detection.
 - **Browser support** - Chrome, Chromium, and Microsoft Edge with automatic executable discovery.
+- **Non-intrusive window modes** - Background automation with `offscreen`, `minimized`, `headless`, or `normal` windows that never steal OS focus ([docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md)).
+- **Enterprise and managed profiles** - Guide for corporate Google Workspace profiles, policy checks, and CDP restrictions ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)).
+- **Attach to running Chrome** - Connect to an already running Chrome browser via remote debugging port to automate within corporate or managed profiles ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)).
 - **Clean MCP integration** - Works through standard MCP clients without custom brokers.
 
 Want the story behind it? Read [How I built stealth-browser-mcp](https://opendoors.wtf/blog/stealth-browser-mcp/) on my blog.
@@ -222,7 +228,42 @@ fastmcp install cursor src/server.py --with-requirements requirements.txt
 
 </details>
 
-### 3. Test it
+### 3. HTTP on loopback (token required)
+
+HTTP is the multi-client transport. It always requires a bearer token and binds to `127.0.0.1` by default. Do not put a reverse proxy in front of a loopback bind, and do not bind off loopback unless you understand [docs/SECURITY.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/SECURITY.md).
+
+Write a token file yourself (mode 0600). The commands below print only the path, never the token:
+
+```bash
+mkdir -p ~/.config/stealth-browser-mcp
+python3 -c 'import os, secrets; p=os.path.expanduser("~/.config/stealth-browser-mcp/token"); open(p,"w").write(secrets.token_urlsafe(32)+"\n"); os.chmod(p,0o600); print(p)'
+```
+
+Start the server:
+
+```bash
+export STEALTH_MCP_TOKEN_FILE="$HOME/.config/stealth-browser-mcp/token"
+stealth-browser-mcp --transport http --host 127.0.0.1 --port 8000
+```
+
+From a clone, use `PYTHONPATH=src python -m stealth_browser_mcp --transport http --host 127.0.0.1 --port 8000` instead of the `stealth-browser-mcp` command.
+
+Call it with a Bearer token (read the file in your client; do not paste the value into a shell history or a ticket):
+
+```python
+from pathlib import Path
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+
+token = Path.home().joinpath(".config/stealth-browser-mcp/token").read_text().strip()
+client = Client("http://127.0.0.1:8000/mcp/", auth=BearerAuth(token))
+```
+
+`GET /healthz` is unauthenticated after the Host check and returns `{"ok":true}`.
+
+If no token is configured on a loopback bind, the server writes a 0600 file and prints only that path to stderr. A non-loopback bind will not auto-generate a token.
+
+### 4. Test it
 
 Restart your MCP client and ask your agent:
 
@@ -238,24 +279,58 @@ Use the skill when an LLM struggles to choose the right MCP tool or forgets to v
 
 ---
 
+## Agent Guide
+
+Stealth Browser MCP provides built-in agent instructions at connect, an input playbook resource, and an interactive prompt to guide AI agents on reliable form input and verification:
+
+- **Instructions at connect**: Delivered during client initialization, summarizing background offscreen execution (`window="offscreen"`), focus guarantees ([docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md)), enterprise managed profiles ([docs/MANAGED_PROFILES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/MANAGED_PROFILES.md)), input primitives, verification rules, and tool surface categories.
+- **Input playbook resource (`stealth://guide/input`)**: A comprehensive Markdown resource documenting exact recipes for single-line text, multiline textareas, contenteditable rich text, numeric validation, native and custom dropdowns, tag chips, and file uploads.
+- **Interactive recipe prompt (`how_to_input`)**: An MCP prompt that returns recommended tool calls, argument examples, verification methods, and pitfalls for a specific `field_type` (e.g. `text`, `textarea`, `rich_text`, `number`, `select`, `dropdown`, `chips`, `file`), or the full summary when omitted.
+
+---
+
 ## Trust Model
 
 This server exposes powerful local browser-control primitives: CDP execution, page JavaScript execution, cookie/storage access, network interception, dynamic hooks, header mutation, navigation, and file uploads from allowlisted local paths.
 
-Treat the MCP client or agent as the security principal. The recommended deployment is local `stdio` transport with a trusted desktop MCP client. If you use HTTP transport, set `STEALTH_BROWSER_MCP_AUTH_TOKEN` and do not expose unauthenticated HTTP outside trusted local or private networks.
+Treat the MCP client or agent as the security principal. The recommended deployment is local `stdio` transport with a trusted desktop MCP client. HTTP transport always requires a bearer token, binds to loopback by default, and rejects unexpected Host and Origin values. Do not bind HTTP off loopback. See [docs/SECURITY.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/SECURITY.md).
 
 ---
 
 ## Modular Architecture
 
-Choose exactly what functionality you need. Run the full 101-tool suite or strip it down to the 21-tool core.
+Choose exactly what functionality you need. Run the 33-tool core surface (default) or the full 123-tool suite.
 
-| Mode | Tools | Use Case |
-|------|-------|----------|
-| **Full** (default) | 101 | Complete browser automation and debugging |
-| **Minimal** (`--minimal`) | 21 | Core browser automation and interaction |
-| **Custom** (`--disable-*`) | Your choice | Disable specific sections |
-| **Xpool safe** (`--xpool-safe`) | 84 | Disable CDP function tools that trigger `Runtime.enable` |
+Stealth Browser MCP separates tool visibility (--tools core|full) vs availability (--minimal, --xpool-safe, --disable-*):
+- **Visibility (`--tools core|full`)**: Governs which tools are advertised in `tools/list`. In `core` mode (the default), 33 essential tools are listed while extended tools remain callable by name and expandable on demand. In `full` mode, all registered tools are listed.
+- **Availability (`--minimal`, `--xpool-safe`, `--disable-*`)**: Governs which tools exist at all. Availability flags unregister tools so they are completely removed.
+
+| Mode / Flag | Tools | Type | Description |
+|-------------|-------|------|-------------|
+| **Core** (default) | 33 | Visibility | Essential navigation, attach/spawn (`attach_browser`, `spawn_browser`), input, tabs, cookies, and screenshots (extended tools remain callable by name) |
+| **Full** (`--tools full`) | 123 | Visibility | Advertises all 123 tools in `tools/list` |
+| **Minimal** (`--minimal`) | 38 | Availability | Keeps only browser management and element interaction (disables other sections) |
+| **Xpool safe** (`--xpool-safe`) | 105 | Availability | Disables CDP function tools that trigger `Runtime.enable` |
+| **Custom** (`--disable-*`) | Variable | Availability | Disables specific sections entirely |
+
+> Note: `--agent` and `STEALTH_MCP_PROFILE=agent` are deprecated aliases of the default `--tools core` visibility profile. They are accepted without error and remove nothing.
+
+### Tool Surface
+
+By default, Stealth Browser MCP operates in **core mode** to minimize connect handshake overhead. At connect time, MCP clients fetch parameter schemas and descriptions for all visible tools:
+- **Full surface (123 tools, uncompacted)**: ~105K characters (~26K tokens)
+- **Compacted surface**: ~80K characters (~20K tokens)
+- **Core surface (default, 33 tools)**: <40K characters (<10K tokens)
+
+In core mode, 33 essential tools (including `attach_browser` and `spawn_browser`) are listed. Extended tools remain fully functional and callable by name at any time without blocking.
+
+- **Dynamic expansion**: Call `expand_tools(category="input")` to add a specific category's tools to `tools/list` for the current session, or `expand_tools(category="all")` to reveal all tools.
+- **Catalog resource**: Read `stealth://tools/reference` to view a complete Markdown catalog of all tools grouped by category with one-line descriptions.
+- **Category discovery**: Call `list_tool_categories()` to get tool counts, category memberships, and the active mode.
+- **Mode selection**: Run with `--tools full` or set `STEALTH_MCP_TOOLS=full` (CLI flag takes precedence) to disable filtering and list all 123 tools by default.
+- **Deprecated aliases**: `--agent` and `STEALTH_MCP_PROFILE=agent` are deprecated aliases of the default `--tools core` visibility profile; they accept without error and remove nothing.
+- **Compacted tool descriptions**: Tool descriptions and parameter schemas are compacted in place to minimize connect-time token overhead. Verbose docstring sections, redundant schema titles, and default-null entries are stripped while preserving nullable types, argument defaults, and validation.
+- **Optional `instance_id`**: For single-browser sessions, `instance_id` is optional across all tools in both visibility profiles. When omitted, server middleware automatically resolves and injects the session's active browser.
 
 ```bash
 stealth-browser-mcp --minimal
@@ -273,16 +348,16 @@ Use `--debug` or set `STEALTH_BROWSER_DEBUG=1` to enable verbose server diagnost
 
 | Section | Tools | Description |
 |---------|-------|-------------|
-| `browser-management` | 8 | Core browser operations |
-| `element-interaction` | 13 | Page interaction and manipulation |
+| `browser-management` | 20 | Core browser operations |
+| `element-interaction` | 19 | Page interaction and manipulation |
 | `element-extraction` | 9 | Element cloning and extraction |
 | `file-extraction` | 9 | File-based extraction tools |
-| `network-debugging` | 10 | Network monitoring and capture |
+| `network-debugging` | 11 | Network monitoring and capture |
 | `cdp-functions` | 17 | Chrome DevTools Protocol execution |
 | `progressive-cloning` | 10 | Advanced element cloning |
-| `cookies-storage` | 3 | Cookie management |
+| `cookies-storage` | 5 | Cookie management |
 | `tabs` | 5 | Tab management |
-| `debugging` | 7 | Debug and system tools |
+| `debugging` | 8 | Debug and system tools |
 | `dynamic-hooks` | 10 | AI-assisted network hooks |
 
 ---
@@ -293,8 +368,12 @@ These are environment variables for the MCP server process. Set them in your she
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `STEALTH_BROWSER_MCP_AUTH_TOKEN` | unset | Optional bearer token for HTTP transport. When set, HTTP clients must send `Authorization: Bearer <token>`. |
-| `MCP_AUTH_TOKEN` | unset | Backward-compatible alias for `STEALTH_BROWSER_MCP_AUTH_TOKEN`. |
+| `STEALTH_MCP_TOKEN` | unset | Bearer token for HTTP transport. HTTP always requires a token; clients must send `Authorization: Bearer <token>`. If no token is configured, the server writes one to a 0600 file and prints only the path (never the value) to stderr. |
+| `STEALTH_MCP_TOKEN_FILE` | unset | Path to a 0600 token file. If this variable is set and the file is missing, empty, unreadable, group/world-readable, or a symlink not owned by the current user, the server exits. |
+| `STEALTH_MCP_ALLOWED_HOSTS` | loopback only | Extra `Host` values accepted by HTTP (comma-separated). Also `--allowed-host`. |
+| `STEALTH_MCP_ALLOWED_ORIGINS` | empty | `Origin` values accepted by HTTP (comma-separated). Default: any `Origin` is rejected. Also `--allowed-origin`. |
+| `STEALTH_BROWSER_MCP_AUTH_TOKEN` | unset | Legacy alias for `STEALTH_MCP_TOKEN`. |
+| `MCP_AUTH_TOKEN` | unset | Legacy alias for `STEALTH_MCP_TOKEN`. |
 | `BROWSER_IDLE_TIMEOUT` | `600` | Global idle timeout in seconds before an unused browser instance is auto-closed. Set `0` to disable idle reaping globally. |
 | `BROWSER_IDLE_REAPER_INTERVAL` | `60` | Background reaper check interval in seconds. |
 | `BROWSER_TAB_RECYCLE_NAVIGATIONS` | `0` | Replace the main tab with a fresh one after this many navigations. `0` keeps the same tab, which preserves history and session storage. |
@@ -306,11 +385,21 @@ These are environment variables for the MCP server process. Set them in your she
 | `DEBUG` | `0` | Legacy alias for `STEALTH_BROWSER_DEBUG`. |
 | `XPOOL_SAFE_MODE` | `0` | Disable the `cdp-functions` section at startup. |
 | `PORT` | `8000` | Default HTTP port when `--port` is not provided. |
+| `STEALTH_ALLOW_CODE_HOOKS` | unset | Allow `create_dynamic_hook` / `validate_hook_function` to compile caller Python on the server. Off by default. The server refuses to start if this is set and HTTP is bound off loopback. Use `create_simple_dynamic_hook` instead. |
+| `STEALTH_MANAGED_PROFILES_ROOT` | `data_dir()` | Directory that `spawn_browser(user_data_dir=...)` must stay under. Paths outside this root, including symlink escapes, are rejected. Also used as the default when a relative `user_data_dir` is given. |
+| `STEALTH_ALLOW_FILE_URLS` | unset | Allow `navigate` / `new_tab` to open `file:`, `chrome:`, or `devtools:` URLs. Off by default because those schemes can read host files or browser internals. |
+| `STEALTH_ALLOW_RAW_CDP` | unset | Allow `execute_cdp_command` to call methods outside the allowlist. Off by default. Navigation URLs still go through the file:/chrome: block. `setDownloadBehavior` still requires a `download_path` under the caller's session workspace (or `data_dir()` in stdio). The server refuses to start if this is set and HTTP is bound off loopback. |
+| `STEALTH_ALLOW_ATTACH` | unset | Allow `attach_browser` in HTTP mode. Off by default. When on, attach is limited to a Chrome this server spawned for the calling session, or to an external browser this server does not already own. stdio mode does not need this flag. |
+| `STEALTH_ALLOW_REMOTE_ATTACH` | unset | Allow `attach_browser` to a non-loopback host. Off by default. Ignored when HTTP is bound off loopback. In HTTP mode, `STEALTH_ALLOW_ATTACH=1` is also required. |
+| `STEALTH_EXPORT_DIRS` | unset | Extra directories `write` paths may use (screenshots, exports). `BROWSER_FILE_UPLOAD_ALLOWED_DIRS` is read-only and does not widen writes. |
+| `STEALTH_MCP_SESSION_TTL` | `600` | Seconds of HTTP inactivity before a session's browsers are closed. `0` disables this expiry. |
+| `STEALTH_ALLOW_SEED_REFRESH` | unset | Allow `refresh_seed` in HTTP mode to copy from a real browser profile or `source_dir`. Off by default. Refused off loopback and behind a proxy. `source_dir` must stay under a known browser profile root. stdio does not need this flag. |
+| `STEALTH_ALLOW_SEED_PASSWORDS` | unset | Allow `refresh_seed(include_passwords=true)` or `include_cards=true`. Off by default. Also requires `STEALTH_ALLOW_SEED_REFRESH=1` in HTTP mode. Refused off loopback and behind a proxy. |
 
 **PowerShell example:**
 
 ```powershell
-$env:STEALTH_BROWSER_MCP_AUTH_TOKEN='replace-with-a-long-random-token'
+$env:STEALTH_MCP_TOKEN='replace-with-a-long-random-token'
 $env:BROWSER_IDLE_TIMEOUT='900'
 $env:BROWSER_IDLE_REAPER_INTERVAL='30'
 $env:BROWSER_ORPHAN_PROFILE_MAX_AGE='43200'
@@ -327,7 +416,7 @@ python src/server.py
       "command": "C:\\path\\to\\stealth-browser-mcp\\venv\\Scripts\\python.exe",
       "args": ["C:\\path\\to\\stealth-browser-mcp\\src\\server.py"],
       "env": {
-        "STEALTH_BROWSER_MCP_AUTH_TOKEN": "replace-with-a-long-random-token",
+        "STEALTH_MCP_TOKEN": "replace-with-a-long-random-token",
         "BROWSER_IDLE_TIMEOUT": "900",
         "BROWSER_FILE_UPLOAD_ALLOWED_DIRS": "C:\\Users\\me\\uploads;C:\\Users\\me\\Documents"
       }
@@ -335,6 +424,8 @@ python src/server.py
   }
 }
 ```
+
+HTTP binds to `127.0.0.1` by default. Requests whose `Host` is not loopback are rejected unless listed in `--allowed-host`. Requests that include an `Origin` header are rejected unless listed in `--allowed-origin` (agent clients typically send no `Origin`). `GET /healthz` is unauthenticated after the Host check.
 
 **HTTP client example:**
 
@@ -352,17 +443,25 @@ client = Client(
 
 - `spawn_browser(idle_timeout_seconds=1800)` keeps that instance for 30 minutes of inactivity.
 - `spawn_browser(idle_timeout_seconds=0)` disables idle reaping for that one instance.
+- `spawn_browser(window="offscreen")` configures window mode (`offscreen`, `minimized`, `headless`, `normal`); see [docs/WINDOW_MODES.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/WINDOW_MODES.md).
+
+---
+
+## Security
+
+This server is for a single-user host. Spawned Chrome exposes a loopback DevTools port with no DevTools authentication, so other local users can attach to it. Do not run it on a shared login or a shared netns. See [docs/SECURITY.md](https://github.com/arpeake/stealth-browser-mcp/blob/master/docs/SECURITY.md).
 
 ---
 
 ## Toolbox
 
 <details>
-<summary><strong>Browser Management (8)</strong></summary>
+<summary><strong>Browser Management (9)</strong></summary>
 
 | Tool | Description |
 |------|-------------|
 | `spawn_browser()` | Create a stealth browser instance |
+| `attach_browser()` | Attach to an already running Chrome browser via remote debugging port |
 | `list_instances()` | List active browser sessions |
 | `close_instance()` | Clean shutdown of a browser |
 | `get_instance_state()` | Full browser state information |
@@ -392,7 +491,7 @@ client = Client(
 | `get_page_content()` | Read page HTML and text |
 | `take_screenshot()` | Capture screenshots |
 
-`take_screenshot` returns an MCP image with metadata (format, size, scale, quality, byte count, SHA-256), so remote clients can show it without reading the server's disk. Large captures, such as long full-page screenshots, are scaled down to fit client limits (8000 px per side, about 5 MB), and the metadata reports the original size. Pass `format="jpeg"` with a lower `quality`, or `max_width`, for smaller images, or `file_path` to save the full-resolution image on the server.
+`take_screenshot` returns an MCP image with metadata (format, size, scale, quality, byte count, SHA-256), so remote clients can show it without reading the server's disk. Large captures, such as long full-page screenshots, are scaled down to fit client limits (8000 px per side, about 5 MB), and the metadata reports the original size. Pass `format="jpeg"` with a lower `quality`, or `max_width`, for smaller images, `selector` to capture an element, `clip` for a page region, or `file_path` to save the full-resolution image on the server.
 
 </details>
 
@@ -563,8 +662,8 @@ Detection results are point-in-time and depend on site policy, region, browser v
 | Network debugging | Full request/response inspection through AI tools | Basic |
 | API reverse engineering | Payload inspection through chat | Manual tools only |
 | Dynamic hook system | Restricted Python hooks for real-time interception | Not available |
-| Modular architecture | 11 sections, 21-101 tools | Fixed tool surface |
-| Total tools | 101 customizable tools | About 20 |
+| Modular architecture | 11 sections, 33-123 tools | Fixed tool surface |
+| Total tools | 123 customizable tools | About 20 |
 
 ---
 
@@ -589,7 +688,7 @@ The server reaps idle browser instances automatically and performs startup clean
 Older versions let Chrome copy its app bundle into `com.google.Chrome.code_sign_clone` at every launch, and the copy stayed behind when an instance crashed or was killed. The server now launches Chrome with `MacAppCodeSignClone` turned off, so no new copies are made. To remove copies left by older versions, quit Chrome and run `rm -rf /private/var/folders/*/*/X/com.google.Chrome.code_sign_clone` (use `com.microsoft.edgemac.code_sign_clone` for Edge).
 
 **Too many tools cluttering the AI chat**
-Use `--minimal` for 20 core tools, `--xpool-safe` for xpool-compatible operation, or selectively disable sections:
+Use core mode (default, 33 tools), `--minimal` for 38 tools, `--xpool-safe` for xpool-compatible operation, or selectively disable sections:
 
 ```bash
 python src/server.py --disable-cdp-functions --disable-dynamic-hooks --disable-progressive-cloning
@@ -636,7 +735,7 @@ See the live plan in [ROADMAP.md](https://github.com/vibheksoni/stealth-browser-
 
 ## Contributing
 
-Read [CONTRIBUTING.md](https://github.com/vibheksoni/stealth-browser-mcp/blob/master/CONTRIBUTING.md) and open a PR. First-time contributors welcome.
+Read [CONTRIBUTING.md](https://github.com/vibheksoni/stealth-browser-mcp/blob/master/CONTRIBUTING.md) and open a PR. See [docs/TESTING.md](https://github.com/vibheksoni/stealth-browser-mcp/blob/master/docs/TESTING.md) for the test matrix and gated suite instructions. First-time contributors welcome.
 
 If this project saves you time, star the repo. It helps more than you think.
 

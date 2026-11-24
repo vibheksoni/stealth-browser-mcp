@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>React-Controlled Input Fixture</title>
+</head>
+<body>
+  <h1>React-Controlled Input Fixture</h1>
+  <p>Simulates React controlled component: value is tracked by an input event handler that resets programmatic .value.</p>
+
+  <div>
+    <label for="controlled-input">Controlled Input:</label>
+    <input type="text" id="controlled-input" value="initial">
+  </div>
+
+  <div id="status-panel" style="margin-top: 15px;">
+    <p>Tracked State: <span id="tracked-state">initial</span></p>
+    <p>Input Event Count: <span id="event-count">0</span></p>
+    <p>Last Action: <span id="last-action">initialized</span></p>
+  </div>
+
+  <script>
+    (function() {
+      const input = document.getElementById("controlled-input");
+      const stateDisplay = document.getElementById("tracked-state");
+      const eventCountDisplay = document.getElementById("event-count");
+      const lastActionDisplay = document.getElementById("last-action");
+
+      let trackedValue = "initial";
+      let eventCount = 0;
+
+      const proto = HTMLInputElement.prototype;
+      const protoDesc = Object.getOwnPropertyDescriptor(proto, "value");
+
+      // Initialize the input value
+      protoDesc.set.call(input, trackedValue);
+
+      // Input event handler updates tracked state
+      input.addEventListener("input", function(e) {
+        trackedValue = protoDesc.get.call(input);
+        eventCount++;
+        stateDisplay.textContent = trackedValue;
+        eventCountDisplay.textContent = String(eventCount);
+        lastActionDisplay.textContent = "input event updated state to: " + trackedValue;
+      });
+
+      // Intercept direct programmatic property assignment to .value on this instance
+      Object.defineProperty(input, "value", {
+        get: function() {
+          return protoDesc.get.call(this);
+        },
+        set: function(val) {
+          // Reset programmatic assignment back to trackedValue
+          protoDesc.set.call(this, trackedValue);
+          lastActionDisplay.textContent = "programmatic .value reset to tracked state: " + trackedValue;
+        },
+        configurable: true
+      });
+    })();
+  </script>
+</body>
+</html>

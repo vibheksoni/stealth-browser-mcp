@@ -24,8 +24,13 @@ class BrowserInstance(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     last_activity: datetime = Field(default_factory=datetime.now)
     headless: bool = Field(default=False)
+    window: Optional[str] = Field(default=None, description="Window mode: normal, minimized, offscreen, or headless")
+    window_note: Optional[str] = Field(default=None, description="Window fallback diagnostic note")
+    window_bounds: Optional[Dict[str, Any]] = Field(default=None, description="Window bounds: left, top, width, height, windowState")
     user_agent: Optional[str] = None
     viewport: Dict[str, int] = Field(default_factory=lambda: {"width": 1920, "height": 1080})
+    session_id: Optional[str] = None
+    attached: bool = Field(default=False, description="Whether this instance attached to an existing browser")
     
     def update_activity(self):
         """Update last activity timestamp."""
@@ -80,11 +85,17 @@ class PageState(BaseModel):
     console_logs: List[Dict[str, Any]] = Field(default_factory=list)
     viewport: Dict[str, Union[int, float]] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
+    headless: Optional[bool] = None
+    window: Optional[str] = None
+    window_note: Optional[str] = None
+    window_bounds: Optional[Dict[str, Any]] = None
+    attached: Optional[bool] = None
 
 
 class BrowserOptions(BaseModel):
     """Options for spawning a new browser instance."""
     headless: bool = Field(default=False, description="Run browser in headless mode")
+    window: Optional[str] = Field(default=None, description="Window mode: normal, minimized, offscreen or headless (default from STEALTH_WINDOW_MODE or offscreen)")
     user_agent: Optional[str] = Field(default=None, description="Custom user agent string")
     viewport_width: int = Field(default=1920, description="Viewport width in pixels")
     viewport_height: int = Field(default=1080, description="Viewport height in pixels")
@@ -96,6 +107,11 @@ class BrowserOptions(BaseModel):
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     user_data_dir: Optional[str] = Field(default=None, description="Path to user data directory")
     sandbox: bool = Field(default=True, description="Enable browser sandbox mode")
+    seed: Optional[str] = Field(default=None, description="Seed name to clone session from")
+    check_url: Optional[str] = Field(default=None, description="Optional URL to verify cookie carryover")
+    keep: bool = Field(default=False, description="Keep session directory on close")
+    cap: Optional[int] = Field(default=None, description="Maximum concurrent sessions cap")
+    spawn_timeout: Optional[float] = Field(default=None, description="Maximum timeout in seconds for spawning browser")
 
 
 class NavigationOptions(BaseModel):

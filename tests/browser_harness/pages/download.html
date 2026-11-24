@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Download and Drop Fixture</title>
+  <style>
+    #dropzone {
+      width: 300px;
+      height: 120px;
+      border: 2px dashed #666;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 16px;
+      background: #fafafa;
+      cursor: pointer;
+    }
+    #dropzone.dragover {
+      border-color: #000;
+      background: #e0e0e0;
+    }
+    #drop-result {
+      margin-top: 12px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Download and Drop Fixture</h1>
+  <p>Fixture page for verifying browser file downloads and drag-and-drop file zones.</p>
+
+  <div>
+    <a id="download-link" href="/download?filename=fixture_test.txt" download="fixture_test.txt">Download Fixture File</a>
+  </div>
+  <div style="margin-top: 10px;">
+    <button id="download-btn" onclick="window.location.href='/download?filename=button_download.txt'">Download via Button</button>
+  </div>
+
+  <h2>Drag and Drop Zone</h2>
+  <div id="dropzone">Drop files here</div>
+  <div id="drop-result">No files dropped</div>
+
+  <script>
+    const zone = document.getElementById('dropzone');
+    const result = document.getElementById('drop-result');
+
+    zone.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      zone.classList.add('dragover');
+    });
+
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      zone.classList.add('dragover');
+    });
+
+    zone.addEventListener('dragleave', (e) => {
+      zone.classList.remove('dragover');
+    });
+
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
+      if (files.length > 0) {
+        result.textContent = 'Dropped: ' + files.map(f => f.name).join(', ');
+        result.dataset.count = String(files.length);
+        result.dataset.filenames = files.map(f => f.name).join(',');
+      } else {
+        result.textContent = 'Drop event fired with 0 files';
+        result.dataset.count = '0';
+      }
+    });
+  </script>
+</body>
+</html>

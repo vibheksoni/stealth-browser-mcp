@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shadow DOM Fixture</title>
+</head>
+<body>
+  <h1>Shadow DOM Fixture</h1>
+  <p>Contains elements in both the light DOM and an open shadow DOM tree.</p>
+
+  <div id="light-container">
+    <label for="light-input">Light DOM Input:</label>
+    <input type="text" id="light-input" placeholder="Light DOM input" value="light-initial">
+  </div>
+
+  <div id="shadow-host" style="margin-top: 15px;"></div>
+
+  <script>
+    (function() {
+      const host = document.getElementById("shadow-host");
+      const shadowRoot = host.attachShadow({ mode: "open" });
+
+      shadowRoot.innerHTML = `
+        <div id="shadow-container" style="border: 1px dashed #666; padding: 10px;">
+          <h3>Inside Open Shadow Root</h3>
+          <div>
+            <label for="shadow-input">Shadow Input:</label>
+            <input type="text" id="shadow-input" name="shadow-input" placeholder="Shadow input" value="shadow-initial">
+          </div>
+          <div style="margin-top: 8px;">
+            <button type="button" id="shadow-button">Shadow Submit</button>
+          </div>
+          <div style="margin-top: 8px;">
+            <p>Shadow Value: <span id="shadow-status">shadow-initial</span></p>
+            <p>Shadow Events: <span id="shadow-event-count">0</span></p>
+          </div>
+        </div>
+      `;
+
+      const shadowInput = shadowRoot.getElementById("shadow-input");
+      const shadowStatus = shadowRoot.getElementById("shadow-status");
+      const shadowEventCount = shadowRoot.getElementById("shadow-event-count");
+      let count = 0;
+
+      shadowInput.addEventListener("input", function(e) {
+        count++;
+        shadowStatus.textContent = e.target.value;
+        shadowEventCount.textContent = String(count);
+      });
+    })();
+  </script>
+</body>
+</html>

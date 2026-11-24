@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Paste-Only Fixture Editor</title>
+  <style>
+    #paste-editor {
+      border: 1px solid #666;
+      padding: 12px;
+      min-height: 100px;
+      font-family: sans-serif;
+      outline: none;
+    }
+    #paste-editor:focus {
+      border-color: #0066cc;
+    }
+  </style>
+</head>
+<body>
+  <h1>Paste-Only Fixture Editor</h1>
+  <p>Editor that rejects direct typing and only accepts paste operations.</p>
+
+  <div id="paste-editor" contenteditable="true" role="textbox" aria-multiline="true">
+  </div>
+
+  <div id="status-panel" style="margin-top: 15px;">
+    <p>Editor Content: <span id="editor-content"></span></p>
+    <p>Paste Event Count: <span id="paste-count">0</span></p>
+    <p>Last Action: <span id="last-action">initialized</span></p>
+  </div>
+
+  <script>
+    (function() {
+      const editor = document.getElementById("paste-editor");
+      const contentDisplay = document.getElementById("editor-content");
+      const pasteCountDisplay = document.getElementById("paste-count");
+      const lastActionDisplay = document.getElementById("last-action");
+      let pasteCount = 0;
+
+      // Reject non-paste keystrokes
+      editor.addEventListener("keydown", function(e) {
+        // Allow Ctrl+V or Cmd+V
+        if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+          return;
+        }
+        // Block other typing
+        e.preventDefault();
+      });
+
+      editor.addEventListener("beforeinput", function(e) {
+        if (e.inputType && e.inputType.startsWith("insertFromPaste")) {
+          return;
+        }
+        if (e.inputType && !e.inputType.includes("Paste")) {
+          e.preventDefault();
+        }
+      });
+
+      editor.addEventListener("paste", function(e) {
+        pasteCount++;
+        pasteCountDisplay.textContent = String(pasteCount);
+        lastActionDisplay.textContent = "paste";
+        let text = "";
+        if (e.clipboardData) {
+          text = e.clipboardData.getData("text/plain");
+        }
+        if (text) {
+          e.preventDefault();
+          editor.textContent = text;
+          contentDisplay.textContent = text;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

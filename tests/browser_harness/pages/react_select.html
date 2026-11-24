@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>React-Select-like Combobox Fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .select-container { width: 300px; margin-bottom: 20px; }
+    .select__control {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 6px 10px;
+      cursor: pointer;
+      background: #fff;
+    }
+    .select__value-container {
+      display: flex;
+      align-items: center;
+      flex-grow: 1;
+      position: relative;
+    }
+    .select__placeholder { color: #888; }
+    .select__single-value { color: #333; font-weight: bold; }
+    .select__input-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .select__input {
+      width: 100%;
+      height: 100%;
+      border: none;
+      outline: none;
+      background: transparent;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .select__control.focused .select__input {
+      opacity: 1;
+      cursor: text;
+    }
+    .select__menu {
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin-top: 4px;
+      background: #fff;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .select__option {
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    .select__option:hover {
+      background: #f0f0f0;
+    }
+    .select__option.select__option--is-selected {
+      background: #007bff;
+      color: #fff;
+    }
+    /* Emotion-style class names for second widget */
+    .css-control {
+      display: flex;
+      align-items: center;
+      border: 1px solid #aaa;
+      padding: 6px;
+      cursor: pointer;
+    }
+    .css-menu {
+      border: 1px solid #aaa;
+      margin-top: 4px;
+    }
+    .css-option {
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .css-option.is-selected {
+      background: #28a745;
+      color: #fff;
+    }
+    .css-single-value {
+      font-weight: bold;
+      color: #155724;
+    }
+  </style>
+</head>
+<body>
+  <h1>React-Select-like Combobox Fixture</h1>
+  <p>Simulates React-Select div widgets with control, menu, and option elements.</p>
+
+  <!-- Widget 1: Standard react-select class names with filter input -->
+  <div class="select-container" id="color-select-container">
+    <label id="color-label">Choose Color:</label>
+    <div class="select__control" id="color-select" tabindex="0">
+      <div class="select__value-container">
+        <div class="select__placeholder" id="color-placeholder">Select a color...</div>
+        <div class="select__input-container">
+          <input class="select__input" id="color-input" type="text" autocomplete="off" value="" />
+        </div>
+      </div>
+      <div class="select__indicators">
+        <span class="select__indicator">&#x25BC;</span>
+      </div>
+    </div>
+    <div class="select__menu" id="color-menu" style="display: none;">
+      <div class="select__menu-list" role="listbox">
+        <div class="select__option" role="option" id="opt-red">Red</div>
+        <div class="select__option" role="option" id="opt-green">Green</div>
+        <div class="select__option" role="option" id="opt-blue">Blue</div>
+        <div class="select__option" role="option" id="opt-yellow">Yellow</div>
+        <div class="select__option" role="option" id="opt-purple">Purple</div>
+      </div>
+    </div>
+    <div id="color-result" style="margin-top: 5px;">Selected color: none</div>
+  </div>
+
+  <!-- Widget 2: Emotion-styled classes (e.g. css-*-control, css-*-option) -->
+  <div class="select-container" id="flavor-select-container">
+    <label id="flavor-label">Choose Flavor:</label>
+    <div class="css-control select__control" id="flavor-select" tabindex="0">
+      <div class="select__value-container">
+        <div class="select__placeholder" id="flavor-placeholder">Select a flavor...</div>
+      </div>
+      <span class="select__indicator">&#x25BC;</span>
+    </div>
+    <div class="css-menu select__menu" id="flavor-menu" style="display: none;">
+      <div class="select__menu-list" role="listbox">
+        <div class="css-option select__option" role="option" id="flavor-vanilla">Vanilla</div>
+        <div class="css-option select__option" role="option" id="flavor-chocolate">Chocolate</div>
+        <div class="css-option select__option" role="option" id="flavor-strawberry">Strawberry</div>
+      </div>
+    </div>
+    <div id="flavor-result" style="margin-top: 5px;">Selected flavor: none</div>
+  </div>
+
+  <script>
+    (function() {
+      // Setup Widget 1 (color-select)
+      const colorControl = document.getElementById("color-select");
+      const colorMenu = document.getElementById("color-menu");
+      const colorInput = document.getElementById("color-input");
+      const colorPlaceholder = document.getElementById("color-placeholder");
+      const colorResult = document.getElementById("color-result");
+      const colorValContainer = colorControl.querySelector(".select__value-container");
+      const colorOptions = colorMenu.querySelectorAll(".select__option");
+
+      colorControl.addEventListener("click", function(e) {
+        const isHidden = colorMenu.style.display === "none";
+        colorMenu.style.display = isHidden ? "block" : "none";
+        if (isHidden) {
+          colorControl.classList.add("focused");
+          colorInput.focus();
+        } else {
+          colorControl.classList.remove("focused");
+        }
+      });
+
+      colorInput.addEventListener("input", function(e) {
+        const q = colorInput.value.trim().toLowerCase();
+        colorMenu.style.display = "block";
+        colorOptions.forEach(function(opt) {
+          const txt = opt.textContent.trim().toLowerCase();
+          opt.style.display = (!q || txt.includes(q)) ? "block" : "none";
+        });
+      });
+
+      colorOptions.forEach(function(opt) {
+        opt.addEventListener("click", function(e) {
+          e.stopPropagation();
+          const chosen = opt.textContent.trim();
+          colorOptions.forEach(o => o.classList.remove("select__option--is-selected"));
+          opt.classList.add("select__option--is-selected");
+
+          if (colorPlaceholder) colorPlaceholder.style.display = "none";
+          let singleVal = colorValContainer.querySelector(".select__single-value");
+          if (!singleVal) {
+            singleVal = document.createElement("div");
+            singleVal.className = "select__single-value";
+            colorValContainer.insertBefore(singleVal, colorValContainer.querySelector(".select__input-container"));
+          }
+          singleVal.textContent = chosen;
+          colorInput.value = "";
+          colorResult.textContent = "Selected color: " + chosen;
+          colorMenu.style.display = "none";
+          colorControl.classList.remove("focused");
+        });
+      });
+
+      // Setup Widget 2 (flavor-select)
+      const flavorControl = document.getElementById("flavor-select");
+      const flavorMenu = document.getElementById("flavor-menu");
+      const flavorPlaceholder = document.getElementById("flavor-placeholder");
+      const flavorResult = document.getElementById("flavor-result");
+      const flavorValContainer = flavorControl.querySelector(".select__value-container");
+      const flavorOptions = flavorMenu.querySelectorAll(".css-option");
+
+      flavorControl.addEventListener("click", function(e) {
+        flavorMenu.style.display = (flavorMenu.style.display === "none") ? "block" : "none";
+      });
+
+      flavorOptions.forEach(function(opt) {
+        opt.addEventListener("click", function(e) {
+          e.stopPropagation();
+          const chosen = opt.textContent.trim();
+          flavorOptions.forEach(o => o.classList.remove("is-selected"));
+          opt.classList.add("is-selected");
+
+          if (flavorPlaceholder) flavorPlaceholder.style.display = "none";
+          let singleVal = flavorValContainer.querySelector(".css-single-value");
+          if (!singleVal) {
+            singleVal = document.createElement("div");
+            singleVal.className = "css-single-value select__single-value";
+            flavorValContainer.appendChild(singleVal);
+          }
+          singleVal.textContent = chosen;
+          flavorResult.textContent = "Selected flavor: " + chosen;
+          flavorMenu.style.display = "none";
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -247,6 +247,8 @@ $RECYCLE.BIN/
 !COMPARISON.md
 !CONTRIBUTING.md
 !SECURITY.md
+!docs/SECURITY.md
+!docs/RELEASE-NOTES-v1.md
 ![Aa][Gg][Ee][Nn][Tt][Ss].md
 # Tool output written by clone and large-response tools
 element_clones/

@@ -40,13 +40,11 @@ USER mcpuser
 EXPOSE 8000
 ENV PORT=8000
 
-# Health check for FastMCP HTTP server
+# Health check hits unauthenticated /healthz (Host must be localhost/loopback).
+# Do not put a token on the curl command line.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD if [ -n "$STEALTH_BROWSER_MCP_AUTH_TOKEN" ]; then \
-        curl -fsS -H "Authorization: Bearer $STEALTH_BROWSER_MCP_AUTH_TOKEN" http://localhost:$PORT/mcp -o /dev/null || exit 1; \
-    else \
-        curl -fsS http://localhost:$PORT/mcp -o /dev/null || exit 1; \
-    fi
+    CMD curl -fsS http://localhost:$PORT/healthz -o /dev/null || exit 1
 
-# Start HTTP transport. Set STEALTH_BROWSER_MCP_AUTH_TOKEN to enable bearer auth.
+# HTTP always requires a token. Set STEALTH_MCP_TOKEN or STEALTH_MCP_TOKEN_FILE,
+# or let the process write a 0600 token file and print only its path.
 CMD ["python", "src/server.py", "--transport", "http", "--host", "0.0.0.0"]

@@ -10,6 +10,11 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+try:
+    from .secrets_env import redact
+except ImportError:
+    from secrets_env import redact
+
 MAX_LOG_ENTRIES = 2000
 MAX_SEEN_ERROR_SIGNATURES = 10000
 
@@ -47,6 +52,30 @@ def _append_capped(items: List[Dict[str, Any]], entry: Dict[str, Any]) -> None:
     overflow = len(items) - MAX_LOG_ENTRIES
     if overflow > 0:
         del items[:overflow]
+
+
+
+def _current_session_id() -> Optional[str]:
+    """Return the calling MCP session id, or None for stdio / no session."""
+    try:
+        from .mcp_sessions import get_current_mcp_session_id
+        return get_current_mcp_session_id()
+    except Exception:
+        return None
+
+
+def _entries_for_session(items: List[Dict[str, Any]], session_id: Optional[str]) -> List[Dict[str, Any]]:
+    """Return all entries when there is no session, else those tagged for it."""
+    if not session_id:
+        return list(items)
+    return [entry for entry in items if entry.get("session_id") == session_id]
+
+
+def _tag_session(entry: Dict[str, Any]) -> Dict[str, Any]:
+    session_id = _current_session_id()
+    if session_id:
+        entry["session_id"] = session_id
+    return entry
 
 
 class DebugLogger:
@@ -104,16 +133,6 @@ class DebugLogger:
             return
 
         with self._lock:
-            error_signature = f"{component}.{method}.{type(error).__name__}.{str(error)}"
-
-            if error_signature in self._seen_errors:
-                self._stats[f'{component}.{method}.errors'] += 1
-                return
-
-            if len(self._seen_errors) >= MAX_SEEN_ERROR_SIGNATURES:
-                self._seen_errors.clear()
-            self._seen_errors.add(error_signature)
-
             error_entry = {
                 'timestamp': datetime.now().isoformat(),
                 'component': component,
@@ -123,9 +142,21 @@ class DebugLogger:
                 'traceback': traceback.format_exc(),
                 'context': context or {}
             }
+            error_entry = redact(_tag_session(error_entry))
+
+            error_signature = f"{component}.{method}.{error_entry['error_type']}.{error_entry['error_message']}"
+
+            if error_signature in self._seen_errors:
+                self._stats[f'{component}.{method}.errors'] += 1
+                return
+
+            if len(self._seen_errors) >= MAX_SEEN_ERROR_SIGNATURES:
+                self._seen_errors.clear()
+            self._seen_errors.add(error_signature)
+
             _append_capped(self._errors, error_entry)
             self._stats[f'{component}.{method}.errors'] += 1
-            self._emit_stderr(f"[DEBUG ERROR] {component}.{method}: {error}")
+            self._emit_stderr(f"[DEBUG ERROR] {component}.{method}: {error_entry['error_message']}")
 
     def log_warning(self, component: str, method: str, message: str, context: Optional[Dict[str, Any]] = None):
         """
@@ -148,9 +179,10 @@ class DebugLogger:
                 'message': message,
                 'context': context or {}
             }
+            warning_entry = redact(_tag_session(warning_entry))
             _append_capped(self._warnings, warning_entry)
             self._stats[f'{component}.{method}.warnings'] += 1
-            self._emit_stderr(f"[DEBUG WARN] {component}.{method}: {message}")
+            self._emit_stderr(f"[DEBUG WARN] {component}.{method}: {warning_entry['message']}")
 
     def log_info(self, component: str, method: str, message: str, data: Optional[Any] = None):
         """
@@ -173,11 +205,12 @@ class DebugLogger:
                 'message': message,
                 'data': data
             }
+            info_entry = redact(_tag_session(info_entry))
             _append_capped(self._info, info_entry)
             self._stats[f'{component}.{method}.calls'] += 1
-            self._emit_stderr(f"[DEBUG INFO] {component}.{method}: {message}")
-            if data:
-                self._emit_stderr(f"  Data: {data}")
+            self._emit_stderr(f"[DEBUG INFO] {component}.{method}: {info_entry['message']}")
+            if info_entry['data']:
+                self._emit_stderr(f"  Data: {info_entry['data']}")
 
     def get_debug_view(self) -> Dict[str, Any]:
         """
@@ -206,23 +239,38 @@ class DebugLogger:
             Dict[str, Any]: Dictionary containing summary, recent errors/warnings, limited errors/warnings, and component breakdown.
         """
         with self._lock:
-            all_errors = _tail(self._errors, max_errors)
-            all_warnings = _tail(self._warnings, max_warnings)
-            all_info = _tail(self._info, max_info)
-            limited_errors = all_errors if max_errors is not None else _tail(self._errors, 10)
-            limited_warnings = all_warnings if max_warnings is not None else _tail(self._warnings, 10)
-            limited_info = all_info if max_info is not None else _tail(self._info, 10)
+            session_id = _current_session_id()
+            errors = _entries_for_session(self._errors, session_id)
+            warnings = _entries_for_session(self._warnings, session_id)
+            info = _entries_for_session(self._info, session_id)
+            all_errors = _tail(errors, max_errors)
+            all_warnings = _tail(warnings, max_warnings)
+            all_info = _tail(info, max_info)
+            limited_errors = all_errors if max_errors is not None else _tail(errors, 10)
+            limited_warnings = all_warnings if max_warnings is not None else _tail(warnings, 10)
+            limited_info = all_info if max_info is not None else _tail(info, 10)
+            error_types = defaultdict(int)
+            for error in errors:
+                error_types[error['error_type']] += 1
+            breakdown = defaultdict(lambda: {'errors': 0, 'warnings': 0, 'calls': 0})
+            for error in errors:
+                breakdown[error['component']]['errors'] += 1
+            for warning in warnings:
+                breakdown[warning['component']]['warnings'] += 1
+            for item in info:
+                breakdown[item['component']]['calls'] += 1
+            stats = dict(self._stats) if not session_id else {}
 
             return {
                 'summary': {
-                    'total_errors': len(self._errors),
-                    'total_warnings': len(self._warnings),
-                    'total_info': len(self._info),
+                    'total_errors': len(errors),
+                    'total_warnings': len(warnings),
+                    'total_info': len(info),
                     'returned_errors': len(all_errors),
                     'returned_warnings': len(all_warnings),
                     'returned_info': len(all_info),
-                    'error_types': self._get_error_summary(),
-                    'stats': dict(self._stats)
+                    'error_types': dict(error_types),
+                    'stats': stats
                 },
                 'recent_errors': limited_errors,
                 'recent_warnings': limited_warnings,
@@ -230,7 +278,7 @@ class DebugLogger:
                 'all_errors': all_errors,
                 'all_warnings': all_warnings,
                 'all_info': all_info,
-                'component_breakdown': self._get_component_breakdown()
+                'component_breakdown': dict(breakdown)
             }
 
     def _get_error_summary(self) -> Dict[str, int]:
@@ -278,11 +326,17 @@ class DebugLogger:
         try:
             if self._lock.acquire(timeout=5.0):
                 try:
-                    self._errors.clear()
-                    self._warnings.clear()
-                    self._info.clear()
-                    self._stats.clear()
-                    self._seen_errors.clear()
+                    session_id = _current_session_id()
+                    if session_id:
+                        self._errors[:] = [e for e in self._errors if e.get("session_id") != session_id]
+                        self._warnings[:] = [e for e in self._warnings if e.get("session_id") != session_id]
+                        self._info[:] = [e for e in self._info if e.get("session_id") != session_id]
+                    else:
+                        self._errors.clear()
+                        self._warnings.clear()
+                        self._info.clear()
+                        self._stats.clear()
+                        self._seen_errors.clear()
                     self._emit_stderr("[DEBUG] Debug logs cleared")
                 finally:
                     self._lock.release()
@@ -478,6 +532,53 @@ class DebugLogger:
             f"({file_size} bytes, JSON format)"
         )
         return filepath
+
+
+
+    def choose_export_format(self, debug_data: Dict[str, Any], format: str = "auto") -> str:
+        """Resolve 'auto' to json, pickle, or gzip-pickle from the data size."""
+        if format != "auto":
+            return format
+        summary = debug_data.get("summary") or {}
+        total_items = (
+            int(summary.get("returned_errors") or 0)
+            + int(summary.get("returned_warnings") or 0)
+            + int(summary.get("returned_info") or 0)
+        )
+        if total_items > 1000:
+            return "gzip-pickle"
+        if total_items > 100:
+            return "pickle"
+        return "json"
+
+    def rewrite_export_filename(self, filepath: str, format: str) -> str:
+        """Apply the export suffix before a path is resolved for writing."""
+        if format == "gzip-pickle":
+            if filepath.endswith(".pkl.gz"):
+                return filepath
+            if filepath.endswith(".json"):
+                return filepath[:-5] + ".pkl.gz"
+            return filepath + ".pkl.gz"
+        if format == "pickle":
+            if filepath.endswith(".pkl"):
+                return filepath
+            if filepath.endswith(".json"):
+                return filepath[:-5] + ".pkl"
+            return filepath + ".pkl"
+        return filepath
+
+    def serialize_export(self, debug_data: Dict[str, Any], format: str) -> bytes:
+        """Return the export payload without writing it."""
+        if format == "gzip-pickle":
+            import io
+            buf = io.BytesIO()
+            with gzip.GzipFile(fileobj=buf, mode="wb") as handle:
+                pickle.dump(debug_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            return buf.getvalue()
+        if format == "pickle":
+            return pickle.dumps(debug_data, protocol=pickle.HIGHEST_PROTOCOL)
+        return json.dumps(debug_data, separators=(",", ":"), default=str).encode("utf-8")
+
 
 
 debug_logger = DebugLogger()

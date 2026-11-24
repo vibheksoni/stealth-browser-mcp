@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ARIA Combobox and Listbox Fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .combobox-container { width: 320px; margin-bottom: 25px; }
+    .combobox-wrapper { display: flex; position: relative; }
+    input[role="combobox"] {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #999;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    button.combo-toggle {
+      padding: 8px 12px;
+      border: 1px solid #999;
+      border-left: none;
+      border-radius: 0 4px 4px 0;
+      background: #eee;
+      cursor: pointer;
+    }
+    ul[role="listbox"] {
+      list-style: none;
+      padding: 0;
+      margin: 4px 0 0 0;
+      border: 1px solid #999;
+      border-radius: 4px;
+      max-height: 180px;
+      overflow-y: auto;
+      background: #fff;
+    }
+    li[role="option"] {
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    li[role="option"]:hover {
+      background: #eef;
+    }
+    li[role="option"][aria-selected="true"] {
+      background: #0066cc;
+      color: #fff;
+      font-weight: bold;
+    }
+    /* Div-based ARIA combobox (no input) */
+    div[role="combobox"] {
+      padding: 8px 12px;
+      border: 1px solid #999;
+      border-radius: 4px;
+      cursor: pointer;
+      background: #fff;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>ARIA Combobox and Listbox Fixture</h1>
+  <p>W3C ARIA 1.2 compliant combobox widgets (with input and div-based trigger).</p>
+
+  <!-- ARIA Combobox 1: with input element and filterable listbox -->
+  <div class="combobox-container" id="fruit-container">
+    <label id="fruit-label" for="fruit-combobox">Select Fruit:</label>
+    <div class="combobox-wrapper">
+      <input
+        id="fruit-combobox"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded="false"
+        aria-haspopup="listbox"
+        aria-controls="fruit-listbox"
+        aria-labelledby="fruit-label"
+        placeholder="Type or select fruit..."
+        autocomplete="off"
+      />
+      <button type="button" class="combo-toggle" id="fruit-toggle" aria-label="Toggle list">&#x25BC;</button>
+    </div>
+    <ul id="fruit-listbox" role="listbox" aria-labelledby="fruit-label" style="display: none;">
+      <li id="opt-apple" role="option" aria-selected="false">Apple</li>
+      <li id="opt-banana" role="option" aria-selected="false">Banana</li>
+      <li id="opt-blueberry" role="option" aria-selected="false">Blueberry</li>
+      <li id="opt-cherry" role="option" aria-selected="false">Cherry</li>
+      <li id="opt-date" role="option" aria-selected="false">Date</li>
+      <li id="opt-elderberry" role="option" aria-selected="false">Elderberry</li>
+    </ul>
+    <div id="fruit-result" style="margin-top: 5px;">Selected fruit: none</div>
+  </div>
+
+  <!-- ARIA Combobox 2: div-based combobox without input -->
+  <div class="combobox-container" id="size-container">
+    <label id="size-label">Select Size:</label>
+    <div
+      id="size-combobox"
+      role="combobox"
+      aria-haspopup="listbox"
+      aria-expanded="false"
+      aria-labelledby="size-label"
+      aria-controls="size-listbox"
+      tabindex="0"
+    >
+      <span id="size-display">Select size...</span>
+    </div>
+    <ul id="size-listbox" role="listbox" aria-labelledby="size-label" style="display: none;">
+      <li id="size-opt-small" role="option" aria-selected="false">Small</li>
+      <li id="size-opt-medium" role="option" aria-selected="false">Medium</li>
+      <li id="size-opt-large" role="option" aria-selected="false">Large</li>
+      <li id="size-opt-xlarge" role="option" aria-selected="false">X-Large</li>
+    </ul>
+    <div id="size-result" style="margin-top: 5px;">Selected size: none</div>
+  </div>
+
+  <script>
+    (function() {
+      // Widget 1: fruit-combobox
+      const fruitInput = document.getElementById("fruit-combobox");
+      const fruitToggle = document.getElementById("fruit-toggle");
+      const fruitListbox = document.getElementById("fruit-listbox");
+      const fruitResult = document.getElementById("fruit-result");
+      const fruitOptions = fruitListbox.querySelectorAll('li[role="option"]');
+
+      function openFruitList() {
+        fruitListbox.style.display = "block";
+        fruitInput.setAttribute("aria-expanded", "true");
+      }
+
+      function closeFruitList() {
+        fruitListbox.style.display = "none";
+        fruitInput.setAttribute("aria-expanded", "false");
+      }
+
+      function toggleFruitList() {
+        const isOpen = fruitInput.getAttribute("aria-expanded") === "true";
+        if (isOpen) closeFruitList();
+        else openFruitList();
+      }
+
+      fruitInput.addEventListener("click", openFruitList);
+      fruitToggle.addEventListener("click", toggleFruitList);
+
+      fruitInput.addEventListener("input", function() {
+        const query = fruitInput.value.trim().toLowerCase();
+        openFruitList();
+        fruitOptions.forEach(function(opt) {
+          const txt = opt.textContent.trim().toLowerCase();
+          opt.style.display = (!query || txt.includes(query)) ? "block" : "none";
+        });
+      });
+
+      fruitOptions.forEach(function(opt) {
+        opt.addEventListener("click", function(e) {
+          e.stopPropagation();
+          const chosen = opt.textContent.trim();
+          fruitOptions.forEach(o => o.setAttribute("aria-selected", "false"));
+          opt.setAttribute("aria-selected", "true");
+          fruitInput.value = chosen;
+          fruitResult.textContent = "Selected fruit: " + chosen;
+          closeFruitList();
+        });
+      });
+
+      // Widget 2: size-combobox (div-based)
+      const sizeCombo = document.getElementById("size-combobox");
+      const sizeListbox = document.getElementById("size-listbox");
+      const sizeDisplay = document.getElementById("size-display");
+      const sizeResult = document.getElementById("size-result");
+      const sizeOptions = sizeListbox.querySelectorAll('li[role="option"]');
+
+      sizeCombo.addEventListener("click", function() {
+        const isOpen = sizeCombo.getAttribute("aria-expanded") === "true";
+        if (isOpen) {
+          sizeListbox.style.display = "none";
+          sizeCombo.setAttribute("aria-expanded", "false");
+        } else {
+          sizeListbox.style.display = "block";
+          sizeCombo.setAttribute("aria-expanded", "true");
+        }
+      });
+
+      sizeOptions.forEach(function(opt) {
+        opt.addEventListener("click", function(e) {
+          e.stopPropagation();
+          const chosen = opt.textContent.trim();
+          sizeOptions.forEach(o => o.setAttribute("aria-selected", "false"));
+          opt.setAttribute("aria-selected", "true");
+          sizeDisplay.textContent = chosen;
+          sizeResult.textContent = "Selected size: " + chosen;
+          sizeListbox.style.display = "none";
+          sizeCombo.setAttribute("aria-expanded", "false");
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
