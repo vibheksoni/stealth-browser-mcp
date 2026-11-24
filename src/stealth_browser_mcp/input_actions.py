@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from nodriver import Tab, cdp
 
 from .a11y_snapshot import a11y_manager, extract_ref_id, is_ref_selector
+from . import oopif
 from .cdp_raw import raw_command
 from .key_definitions import resolve_key_descriptor
 
@@ -859,6 +860,20 @@ async def resolve_frame_context(tab: Tab, frame: str) -> Optional[FrameContext]:
             frame_id = _find_frame_id_in_tree(tree, frame)
         except Exception:
             pass
+
+    if frame_id:
+        session_tab = await oopif.attach_iframe_target(tab, frame_id)
+        if session_tab is not None:
+            ctx = FrameContext(
+                frame_id=frame_id,
+                context_id=None,
+                target_tab=session_tab,
+                is_cross_origin=True,
+            )
+            _frame_contexts[cache_key] = ctx
+            while len(_frame_contexts) > MAX_TRACKED_NODES:
+                _frame_contexts.pop(next(iter(_frame_contexts)), None)
+            return ctx
 
     target_tab = tab
     candidates = []

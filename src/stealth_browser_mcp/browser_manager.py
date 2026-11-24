@@ -12,6 +12,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from datetime import datetime
 
 import nodriver as uc
+from . import nodriver_compat
+
+nodriver_compat.apply()
 from nodriver import Browser, Tab
 
 from . import cdp_raw, nodriver_registry
@@ -1659,6 +1662,46 @@ class BrowserManager:
                 f"Page did not reach '{wait_until}' within {wait_budget:.1f}s, returning current state",
             )
 
+    @staticmethod
+    async def _send_within(tab: Any, command: Any, timeout: float) -> Any:
+        """Send a CDP command and wait at most `timeout` seconds for the reply.
+
+        The send is never cancelled on timeout. Cancelling a pending nodriver
+        transaction makes the connection listener fail when the browser later
+        answers, which leaves the tab unresponsive. On timeout the reply is
+        discarded when it arrives and asyncio.TimeoutError is raised.
+        """
+        task = asyncio.ensure_future(tab.send(command))
+        done, _pending = await asyncio.wait({task}, timeout=max(timeout, 0.0))
+        if task in done:
+            return task.result()
+
+        def _discard(t: "asyncio.Future") -> None:
+            if not t.cancelled():
+                t.exception()
+
+        task.add_done_callback(_discard)
+        raise asyncio.TimeoutError("CDP command timed out")
+
+    @staticmethod
+    def _pick_main_frame_status(responses, frame_id, loader_id):
+        """Return the HTTP status of the main-frame document response.
+
+        Only Document responses count. When the navigation frame id is known,
+        responses from other frames (iframes) are ignored. The last match wins,
+        so redirects report the final status.
+        """
+        if not responses:
+            return None
+        same_frame = [r for r in responses if r[0] == frame_id] if frame_id else list(responses)
+        if not same_frame:
+            return None
+        if loader_id:
+            by_loader = [r for r in same_frame if r[1] == loader_id]
+            if by_loader:
+                return by_loader[-1][2]
+        return same_frame[-1][2]
+
     async def navigate(
         self,
         instance_id: str,
@@ -1707,35 +1750,29 @@ class BrowserManager:
             handler = lambda _event, *args: fired.set()
             tab.add_handler(event_type, handler)
 
-            main_frame_status: Optional[int] = None
             nav_loader_id: Optional[str] = None
             nav_frame_id: Optional[str] = None
+            document_responses: List[Tuple[str, str, int]] = []
 
             def on_response(event: Any, *args: Any) -> None:
-                nonlocal main_frame_status
                 try:
                     resp = getattr(event, "response", None)
                     if resp is None:
                         return
-                    ev_loader = str(getattr(event, "loader_id", "") or "")
-                    ev_frame = str(getattr(event, "frame_id", "") or "")
                     ev_type = getattr(event, "type_", None)
                     type_str = str(getattr(ev_type, "value", ev_type) or "").lower()
-
-                    matched = False
-                    if nav_loader_id and ev_loader and ev_loader == nav_loader_id:
-                        matched = True
-                    elif nav_frame_id and ev_frame and ev_frame == nav_frame_id and (type_str == "document" or not type_str):
-                        matched = True
-                    elif type_str == "document" and main_frame_status is None:
-                        matched = True
-
-                    if matched or (main_frame_status is None and getattr(resp, "status", None)):
-                        code = getattr(resp, "status", None)
-                        if isinstance(code, int):
-                            main_frame_status = code
+                    code = getattr(resp, "status", None)
+                    if type_str == "document" and isinstance(code, int):
+                        document_responses.append((
+                            str(getattr(event, "frame_id", "") or ""),
+                            str(getattr(event, "loader_id", "") or ""),
+                            code,
+                        ))
                 except Exception:
                     pass
+
+            def pick_main_frame_status() -> Optional[int]:
+                return self._pick_main_frame_status(document_responses, nav_frame_id, nav_loader_id)
 
             if hasattr(tab, "add_handler"):
                 try:
@@ -1753,9 +1790,8 @@ class BrowserManager:
                 if remaining <= 0:
                     raise asyncio.TimeoutError("Navigation deadline exhausted")
 
-                nav_result = await asyncio.wait_for(
-                    tab.send(uc.cdp.page.navigate(url, referrer=referrer)),
-                    timeout=remaining,
+                nav_result = await self._send_within(
+                    tab, uc.cdp.page.navigate(url, referrer=referrer), remaining
                 )
 
                 error_text: Optional[str] = None
@@ -1785,8 +1821,9 @@ class BrowserManager:
                         "error": error_text,
                         "error_text": error_text,
                     }
-                    if main_frame_status is not None:
-                        fail_result["status"] = main_frame_status
+                    _st = pick_main_frame_status()
+                    if _st is not None:
+                        fail_result["status"] = _st
                     return fail_result
 
                 remaining = deadline - time.monotonic()
@@ -1833,8 +1870,9 @@ class BrowserManager:
                         "error": err_msg,
                         "error_text": err_msg,
                     }
-                    if main_frame_status is not None:
-                        fail_result["status"] = main_frame_status
+                    _st = pick_main_frame_status()
+                    if _st is not None:
+                        fail_result["status"] = _st
                     return fail_result
 
                 await self.update_instance_state(instance_id, final_url, title)
@@ -1851,8 +1889,9 @@ class BrowserManager:
                     "title": title,
                     "success": True,
                 }
-                if main_frame_status is not None:
-                    succ_result["status"] = main_frame_status
+                _st = pick_main_frame_status()
+                if _st is not None:
+                    succ_result["status"] = _st
                 return succ_result
             except Exception as error:
                 last_error = error
@@ -1860,7 +1899,7 @@ class BrowserManager:
                     try:
                         stop_cmd = getattr(uc.cdp.page, "stop_loading", None) or getattr(uc.cdp.page, "stopLoading", None)
                         if stop_cmd and hasattr(tab, "send"):
-                            await asyncio.wait_for(tab.send(stop_cmd()), timeout=0.5)
+                            await self._send_within(tab, stop_cmd(), 0.5)
                     except Exception:
                         pass
                     raise Exception(
